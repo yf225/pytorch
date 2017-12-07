@@ -487,9 +487,8 @@ option(CUDA_HOST_COMPILATION_CPP "Generated file extension" ON)
 # Extra user settable flags
 set(CUDA_NVCC_FLAGS "" CACHE STRING "Semi-colon delimit multiple arguments.")
 
-if(MSVC AND NOT "${CMAKE_C_COMPILER}" MATCHES "/cl.exe")
-  find_program(REAL_MSVC_COMPILER cl.exe)
-  set(CUDA_HOST_COMPILER "${REAL_MSVC_COMPILER}" CACHE FILEPATH "Host side compiler used by NVCC")
+if(CMAKE_GENERATOR MATCHES "Visual Studio")
+  set(CUDA_HOST_COMPILER "C:/Program Files (x86)/Microsoft Visual Studio 14.0/VC/bin/x86_amd64/cl.exe" CACHE FILEPATH "Host side compiler used by NVCC")
 else()
   if(APPLE
       AND "${CMAKE_C_COMPILER_ID}" MATCHES "Clang"
