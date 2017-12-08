@@ -212,7 +212,7 @@ const char * scalarTypeName(at::ScalarType type) {
     AT_FORALL_SCALAR_TYPES(DEFINE_CASE)
     #undef DEFINE_CASE
     default:
-      throw new std::runtime_error("unknown scalar type");
+      throw std::runtime_error("unknown scalar type");
   }
 }
 

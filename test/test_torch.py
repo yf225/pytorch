@@ -525,7 +525,8 @@ class TestTorch(TestCase):
     @staticmethod
     def _test_neg(self, cast):
         float_types = ['torch.DoubleTensor', 'torch.FloatTensor', 'torch.LongTensor']
-        int_types = ['torch.IntTensor', 'torch.ShortTensor']
+        int_types = ['torch.IntTensor', 'torch.ShortTensor', 'torch.ByteTensor',
+                     'torch.CharTensor']
 
         for t in float_types + int_types:
             if t in float_types:
@@ -552,8 +553,6 @@ class TestTorch(TestCase):
 
     def test_reciprocal(self):
         a = torch.randn(100, 89)
-        zeros = torch.Tensor().resize_as_(a).zero_()
-
         res_div = 1 / a
         res_reciprocal = a.clone()
         res_reciprocal.reciprocal_()
@@ -4825,7 +4824,7 @@ class TestTorch(TestCase):
         for idx in iter_indices(x):
             self.assertIs(x[idx] >= y[idx], ge[idx] == 1)
 
-    def test_logical_ops(self):
+    def test_bitwise_ops(self):
         x = torch.randn(5, 5).gt(0)
         y = torch.randn(5, 5).gt(0)
 
@@ -4866,11 +4865,36 @@ class TestTorch(TestCase):
         x_clone ^= y
         self.assertEqual(x_clone, xor_result)
 
+    def test_invert(self):
+        # TODO remove this once we merge tensor and variable
+        x = torch.autograd.Variable(torch.ByteTensor([0, 1, 1]))
+        self.assertEqual((~x).tolist(), [1, 0, 0])
+
     def test_apply(self):
         x = torch.arange(1, 6)
         res = x.clone().apply_(lambda k: k + k)
         self.assertEqual(res, x * 2)
         self.assertRaises(RuntimeError, lambda: x.apply_(lambda k: "str"))
+
+    def test_map(self):
+        x = torch.autograd.Variable(torch.randn(3, 3))
+        y = torch.autograd.Variable(torch.randn(3))
+        res = x.clone()
+        res.map_(y, lambda a, b: a + b)
+        self.assertEqual(res, x + y)
+        self.assertRaisesRegex(TypeError, "not callable", lambda: res.map_(y, "str"))
+
+    def test_map2(self):
+        x = torch.autograd.Variable(torch.randn(3, 3))
+        y = torch.autograd.Variable(torch.randn(3))
+        z = torch.autograd.Variable(torch.randn(1, 3))
+        res = x.clone()
+        res.map2_(y, z, lambda a, b, c: a + b * c)
+        self.assertEqual(res, x + y * z)
+        z.requires_grad = True
+        self.assertRaisesRegex(
+            RuntimeError, "requires grad",
+            lambda: res.map2_(y, z, lambda a, b, c: a + b * c))
 
     def test_Size(self):
         x = torch.Size([1, 2, 3])
