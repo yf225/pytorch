@@ -252,6 +252,7 @@ class TestJit(TestCase):
         self.assertEqual(z, torch.sigmoid(torch.tanh(x * (x + y))))
         self.assertEqual(z, z2)
 
+    @unittest.skipIf(IS_WINDOWS, "NYI: fuser support for Windows")
     @unittest.skipIf(not RUN_CUDA, "fuser requires CUDA")
     def test_compile_addc(self):
         x = Variable(torch.Tensor([0.4]), requires_grad=True).float().cuda()
@@ -726,6 +727,7 @@ class TestJit(TestCase):
         assert(torch.equal(torch.ones([2, 2]), t_node.t("a")))
         self.assertExpected(str(g2))
 
+    @unittest.skipIf(IS_WINDOWS, "NYI: fuser support for Windows")
     @unittest.skipIf(not RUN_CUDA, "cpp tests require CUDA")
     def test_cpp(self):
         torch._C._jit_run_cpp_tests()
