@@ -230,6 +230,12 @@ class NewCriterionTest(InputVariableMixin, CriterionTest):
 
 
 class TestNN(NNTestCase):
+    def setUp(self):
+        print(unittest.TestCase.id(self) + " begins")
+
+    def tearDown(self):
+        print(unittest.TestCase.id(self) + " ends")
+
     def _forward(self, module, input):
         with freeze_rng_state():
             return module(input)
@@ -3624,6 +3630,10 @@ class TestNNInit(TestCase):
     def setUp(self):
         super(TestNNInit, self).setUp()
         random.seed(123)
+        print(unittest.TestCase.id(self) + " begins")
+
+    def tearDown(self):
+        print(unittest.TestCase.id(self) + " ends")
 
     def _is_normal(self, tensor, mean, std):
         if isinstance(tensor, Variable):
