@@ -38,8 +38,8 @@ set LIB=%cd%\\mkl;%LIB%
 aws s3 cp s3://ossci-windows/magma_cuda90_release.7z magma_cuda90_release.7z --quiet && 7z x -aoa magma_cuda90_release.7z -omagma_cuda90_release
 set MAGMA_HOME=%cd%\\magma_cuda90_release
 
-:: Install clcache
-aws s3 cp s3://ossci-windows/clcache.7z clcache.7z --quiet && 7z x -aoa clcache.7z -oclcache
+:: Install sccache
+aws s3 cp s3://ossci-windows/sccache.exe sccache.exe --quiet
 
 :: Install Miniconda3
 IF EXIST C:\\Jenkins\\Miniconda3 ( rd /s /q C:\\Jenkins\\Miniconda3 )
@@ -65,10 +65,8 @@ set CUDNN_ROOT_DIR=C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v9.0
 
 set TORCH_CUDA_ARCH_LIST=5.2
 
-set USE_CLCACHE=1
-set CLCACHE_DIR=%cd%\\clcache_tmp
-set CC=%cd%\\clcache\\clcache_main.exe
-set CXX=%cd%\\clcache\\clcache_main.exe
+set "CC=sccache.exe\ cl.exe"
+set "CXX=sccache.exe\ cl.exe"
 
 set DISTUTILS_USE_SDK=1
 
