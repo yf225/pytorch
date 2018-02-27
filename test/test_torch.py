@@ -4678,7 +4678,7 @@ class TestTorch(TestCase):
             xh2 = torch.load(f)
             self.assertEqual(xh.float(), xh2.float())
 
-    @unittest.skipIf(IS_WINDOWS, 'NYI: CUDA HalfTensor support on Windows')
+    # @unittest.skipIf(IS_WINDOWS, 'NYI: CUDA HalfTensor support on Windows')
     @unittest.skipIf(not torch.cuda.is_available(), 'no CUDA')
     def test_half_tensor_cuda(self):
         x = torch.randn(5, 5).half()
