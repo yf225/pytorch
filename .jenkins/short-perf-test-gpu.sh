@@ -20,7 +20,8 @@ fi
 
 # Find the master commit to test against
 IFS=$'\n'
-master_commit_ids=($(git rev-list HEAD))
+git fetch
+master_commit_ids=($(git rev-list master))
 for commit_id in "${master_commit_ids[@]}"; do
     if aws s3 ls s3://ossci-perf-test/pytorch/gpu_runtime/${commit_id}.json; then
         LATEST_TESTED_COMMIT=${commit_id}
