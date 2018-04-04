@@ -6,7 +6,7 @@ test_cpu_speed_torch () {
   export OMP_NUM_THREADS=4
   export MKL_NUM_THREADS=4
 
-  git clone https://github.com/yf225/perf-tests.git
+  git clone https://github.com/yf225/perf-tests.git -b dev
 
   if [ "$1" == "compare_with_baseline" ]; then
     export ARGS="--compare ../cpu_runtime.json"
