@@ -9,7 +9,6 @@ run_test () {
 get_runtime_of_command () {
   TIMEFORMAT=%R
 
-  echo "test_token"
   # runtime=$( { time ($@ &> /dev/null); } 2>&1 1>/dev/null)
   runtime=$( { time $@; } )
   if [[ $runtime == *"Warning"* ]] || [[ $runtime == *"Error"* ]]; then
