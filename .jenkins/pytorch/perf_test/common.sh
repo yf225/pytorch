@@ -9,11 +9,9 @@ run_test () {
 get_runtime_of_command () {
   TIMEFORMAT=%R
 
-  echo $@
+  echo "command: " $@
 
   time $@
-
-  perf stat $@
 
   # runtime=$( { time ($@ &> /dev/null); } 2>&1 1>/dev/null)
   runtime=$( { perf stat $@; } )
