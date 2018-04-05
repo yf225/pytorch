@@ -5,7 +5,7 @@
 test_cpu_speed_mnist () {
   echo "Testing: MNIST, CPU"
 
-  git clone https://github.com/pytorch/examples.git -b perftests
+  git clone https://github.com/yf225/examples.git -b perftests
 
   cd examples/mnist
 
@@ -18,7 +18,7 @@ test_cpu_speed_mnist () {
   NUM_RUNS=$1
 
   for (( i=1; i<=$NUM_RUNS; i++ )) do
-    runtime=$(get_runtime_of_command python main.py --epochs 1 --no-log)
+    runtime=$(get_runtime_of_command python main.py --epochs 1 --max-batches-per-epoch 1 --no-log)
     echo $runtime
     SAMPLE_ARRAY+=(${runtime})
   done
