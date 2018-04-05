@@ -10,7 +10,7 @@ get_runtime_of_command () {
   TIMEFORMAT=%R
 
   # runtime=$( { time ($@ &> /dev/null); } 2>&1 1>/dev/null)
-  runtime=$( { time $@; } )
+  runtime=$( { perf stat $@; } )
   if [[ $runtime == *"Warning"* ]] || [[ $runtime == *"Error"* ]]; then
     exit 1
   fi
