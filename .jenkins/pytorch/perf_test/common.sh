@@ -9,6 +9,12 @@ run_test () {
 get_runtime_of_command () {
   TIMEFORMAT=%R
 
+  echo $@
+
+  time $@
+
+  perf stat $@
+
   # runtime=$( { time ($@ &> /dev/null); } 2>&1 1>/dev/null)
   runtime=$( { perf stat $@; } )
   if [[ $runtime == *"Warning"* ]] || [[ $runtime == *"Error"* ]]; then
