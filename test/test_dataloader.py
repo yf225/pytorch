@@ -28,7 +28,7 @@ if __name__ in ['test_dataloader', '__main__']:
             pass
 
 
-JOIN_TIMEOUT = 17.0 if IS_WINDOWS else 4.5
+JOIN_TIMEOUT = 17.0 if IS_WINDOWS else 6.5
 
 
 class TestDatasetRandomSplit(TestCase):
