@@ -44,22 +44,22 @@ if IS_WINDOWS:
         def __init__(self):
             self.manager_pid = os.getppid()
 
-            kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
-            kernel32.OpenProcess.argtypes = (DWORD, BOOL, DWORD)
-            kernel32.OpenProcess.restype = HANDLE
-            kernel32.WaitForSingleObject.argtypes = (HANDLE, DWORD)
-            kernel32.WaitForSingleObject.restype = DWORD
+            self.kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+            self.kernel32.OpenProcess.argtypes = (DWORD, BOOL, DWORD)
+            self.kernel32.OpenProcess.restype = HANDLE
+            self.kernel32.WaitForSingleObject.argtypes = (HANDLE, DWORD)
+            self.kernel32.WaitForSingleObject.restype = DWORD
 
             # Value obtained from https://msdn.microsoft.com/en-us/library/ms684880.aspx
             SYNCHRONIZE = 0x00100000
-            self.manager_handle = kernel32.OpenProcess(SYNCHRONIZE, 0, self.manager_pid)
+            self.manager_handle = self.kernel32.OpenProcess(SYNCHRONIZE, 0, self.manager_pid)
 
             if not self.manager_handle:
                 raise ctypes.WinError(ctypes.get_last_error())
 
         def is_alive(self):
             # Value obtained from https://msdn.microsoft.com/en-us/library/windows/desktop/ms687032.aspx
-            return kernel32.WaitForSingleObject(self.manager_handle, 0) != 0
+            return self.kernel32.WaitForSingleObject(self.manager_handle, 0) != 0
 else:
     class ManagerWatchdog(object):
         def __init__(self):
