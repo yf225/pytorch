@@ -17,10 +17,15 @@ from common import TestCase, run_tests, TEST_NUMPY, IS_WINDOWS
 
 # We only import the actual values when in __main__, to get around
 # duplicated import issue when using multiprocessing on Windows.
-if __name__ == '__main__':
+TEST_CUDA = False
+if __name__ == 'test_dataloader':
     from common_nn import TEST_CUDA
-else:
-    TEST_CUDA = False
+    # We need spawn start method for test_manager_unclean_exit
+    if sys.version_info[0] == 3:
+        try:
+            multiprocessing.set_start_method('spawn')
+        except RuntimeError:
+            pass
 
 
 JOIN_TIMEOUT = 17.0 if IS_WINDOWS else 4.5
@@ -530,6 +535,7 @@ class TestDataLoader(TestCase):
 but they are all safe to ignore'''
         worker_pids = multiprocessing.Array('i', [0] * 4)
 
+        multiprocessing.set_start_method('spawn')
         mp = multiprocessing.Process(target=TestDataLoader._manager_process, args=(self.dataset, worker_pids, ))
         mp.start()
 
@@ -717,7 +723,4 @@ class TestIndividualWorkerQueue(TestCase):
 
 
 if __name__ == '__main__':
-    if sys.version_info[0] == 3:
-        # We need spawn start method for test_manager_unclean_exit
-        multiprocessing.set_start_method('spawn')
     run_tests()
