@@ -564,6 +564,8 @@ else()
     #
     # FYI: clcache works as the match, but clcache.exe does NOT.
     set(CUDA_HOST_COMPILER "cl.exe" CACHE FILEPATH "Host side compiler used by NVCC")
+  elseif((NOT MSVC) AND "${CMAKE_C_COMPILER}" MATCHES "sccache")
+    set(CUDA_HOST_COMPILER "/usr/bin/gcc" CACHE FILEPATH "Host side compiler used by NVCC")
   else()
     set(CUDA_HOST_COMPILER "${CMAKE_C_COMPILER}"
       CACHE FILEPATH "Host side compiler used by NVCC")
