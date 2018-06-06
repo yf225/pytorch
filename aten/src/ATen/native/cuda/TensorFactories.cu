@@ -45,7 +45,7 @@ Tensor& randperm_out_cuda(Tensor& result, int64_t n, Generator* generator) {
 
   AT_DISPATCH_ALL_TYPES_AND_HALF(
     result.type(), "randperm_out_cuda", [&] {
-      AT_CHECK(Scalar(n).to<scalar_t>(), 
+      AT_CHECK(Scalar(n).to<scalar_t>(),
         "n is too large for result tensor type: '", result.type().toString(), "'");
     }
   );
