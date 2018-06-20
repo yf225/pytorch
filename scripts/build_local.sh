@@ -16,13 +16,22 @@ if [ -x "$(command -v ninja)" ]; then
   CMAKE_ARGS+=("-GNinja")
 fi
 
-# Use ccache if available (this path is where Homebrew installs ccache symlinks)
-if [ "$(uname)" == 'Darwin' ]; then
-  CCACHE_WRAPPER_PATH=/usr/local/opt/ccache/libexec
-  if [ -d "$CCACHE_WRAPPER_PATH" ]; then
-    CMAKE_ARGS+=("-DCMAKE_C_COMPILER=$CCACHE_WRAPPER_PATH/gcc")
-    CMAKE_ARGS+=("-DCMAKE_CXX_COMPILER=$CCACHE_WRAPPER_PATH/g++")
-  fi
+# Use sccache if available
+if [ "$(uname)" == 'Darwin' ] && which sccache > /dev/null; then
+  for compiler in cc c++ gcc g++ clang clang++; do
+    (
+      echo "#!/bin/sh"
+      echo "exec sccache $(which $compiler) \"\$@\""
+    ) > "./sccache/$compiler"
+    chmod +x "./sccache/$compiler"
+  done
+  export CACHE_WRAPPER_DIR="$PWD/sccache"
+
+  CMAKE_ARGS+=("-DCMAKE_C_COMPILER=$CACHE_WRAPPER_DIR/gcc")
+  CMAKE_ARGS+=("-DCMAKE_CXX_COMPILER=$CACHE_WRAPPER_DIR/g++")
+
+  sccache --zero-stats
+  sccache --show-stats
 fi
 
 # Use special install script with Anaconda
@@ -63,4 +72,8 @@ else
 
   # Now, actually build the target.
   cmake --build . -- "-j$CAFFE_MAKE_NCPUS"
+fi
+
+if [ "$(uname)" == 'Darwin' ] && which sccache > /dev/null; then
+  sccache --show-stats
 fi
