@@ -201,16 +201,6 @@ function path_remove {
   PATH=${PATH/%":$1"/} # delete any instance in the at the end
 }
 
-function remove_ubsan_flags {
-  USER_CFLAGS_SAVED=$USER_CFLAGS
-  USER_CFLAGS=$(echo $USER_CFLAGS | sed -e 's:-fsanitize=undefined::g')
-  USER_CFLAGS=$(echo $USER_CFLAGS | sed -e 's:-fno-sanitize-recover=all::g')
-}
-
-function restore_ubsan_flags {
-  USER_CFLAGS=$USER_CFLAGS_SAVED
-}
-
 function build_nccl() {
   # FIXME: sccache doesn't work when building NCCL
   path_remove /opt/cache/bin
@@ -301,15 +291,11 @@ mkdir -p torch/lib/tmp_install
 for arg in "$@"; do
     if [[ "$arg" == "nccl" ]]; then
         pushd $THIRD_PARTY_DIR
-        remove_ubsan_flags
         build_nccl
-        restore_ubsan_flags
         popd
     elif [[ "$arg" == "gloo" ]]; then
         pushd "$THIRD_PARTY_DIR"
-        remove_ubsan_flags
         build gloo $GLOO_FLAGS
-        restore_ubsan_flags
         popd
     elif [[ "$arg" == "caffe2" ]]; then
         pushd $BASE_DIR
@@ -329,9 +315,7 @@ for arg in "$@"; do
         popd
     else
         pushd "$THIRD_PARTY_DIR"
-        remove_ubsan_flags
         build $arg
-        restore_ubsan_flags
         popd
     fi
 done
