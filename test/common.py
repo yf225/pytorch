@@ -70,6 +70,8 @@ except ImportError:
 
 TEST_MKL = torch.backends.mkl.is_available()
 
+TEST_WITH_ASAN = os.getenv('PYTORCH_TEST_WITH_ASAN', False)
+
 
 def skipIfNoLapack(fn):
     @wraps(fn)
