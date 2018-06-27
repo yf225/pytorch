@@ -33,6 +33,8 @@ if sys.version_info < (3, 3):
     from .queue import Queue, SimpleQueue
     from .pool import Pool
 
+from .connection import Pipe
+
 
 if sys.platform == 'darwin' or sys.platform == 'win32':
     _sharing_strategy = 'file_system'
