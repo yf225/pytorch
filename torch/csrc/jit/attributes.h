@@ -196,7 +196,7 @@ struct Attributes {
   }
 
 private:
-  Derived* This() __ubsan_ignore_vptr__ {
+  Derived* This() {
     return static_cast<Derived*>(this);
   }
   template<typename T>

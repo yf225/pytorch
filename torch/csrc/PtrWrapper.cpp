@@ -45,7 +45,7 @@ static PyObject * THPWrapper_pynew(PyTypeObject *type, PyObject *args, PyObject 
   return self;
 }
 
-static void THPWrapper_dealloc(THPWrapper* self) __ubsan_ignore_function__
+static void THPWrapper_dealloc(THPWrapper* self)
 {
   self->destructor(self->data);
   Py_TYPE(self)->tp_free((PyObject*)self);
