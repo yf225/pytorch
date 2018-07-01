@@ -32,8 +32,7 @@ if sys.version_info < (3, 3):
     for serialization. Later versions of Python already use ForkingPickler."""
     from .queue import Queue, SimpleQueue
     from .pool import Pool
-
-from .connection import Pipe
+    from .connection import Pipe
 
 
 if sys.platform == 'darwin' or sys.platform == 'win32':
