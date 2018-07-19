@@ -289,7 +289,7 @@ class Tensor(torch._C._TensorBase):
             split_sizes = []
             prev_index = 0
             for index in indices_or_sections:
-                chunk_size = max(index - prev_index, 0)
+                chunk_size = max(min(index, self.shape[dim] - 1) - prev_index, 0)
                 split_sizes.append(chunk_size)
                 prev_index = index
             split_sizes.append(max(self.shape[dim] - prev_index, 0))
