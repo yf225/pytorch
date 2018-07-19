@@ -277,6 +277,29 @@ class Tensor(torch._C._TensorBase):
         else:
             return super(Tensor, self).split_with_sizes(split_size, dim)
 
+    def np_split(self, indices_or_sections, dim=0):
+        if isinstance(indices_or_sections, int):
+            if self.shape[dim] % indices_or_sections == 0:
+                split_size = self.shape[dim] // indices_or_sections
+                return super(Tensor, self).split(split_size, dim)
+            else:
+                raise ValueError("tensor split does not result in an equal division")
+        else:
+            split_sizes = []
+            prev_index = 0
+            for index in indices_or_sections:
+                chunk_size = max(index - prev_index, 0)
+                split_sizes.append(chunk_size)
+                prev_index = index
+            split_sizes.append(max(self.shape[dim] - prev_index, 0))
+            return super(Tensor, self).split_with_sizes(split_sizes, dim)
+
+    def array_split(self, indices_or_sections, dim=0):
+        if isinstance(indices_or_sections, int):
+            return super(Tensor, self).split(split_size, dim)
+        else:
+            return self.np_split(indices_or_sections, dim)
+
     def index_add(self, dim, index, tensor):
         return self.clone().index_add_(dim, index, tensor)
 
