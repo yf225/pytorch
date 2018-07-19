@@ -293,6 +293,7 @@ class Tensor(torch._C._TensorBase):
                 split_sizes.append(chunk_size)
                 prev_index = index
             split_sizes.append(max(self.shape[dim] - prev_index, 0))
+            print(split_sizes)
             return super(Tensor, self).split_with_sizes(split_sizes, dim)
 
     def array_split(self, indices_or_sections, dim=0):
