@@ -296,7 +296,8 @@ class Tensor(torch._C._TensorBase):
 
     def array_split(self, indices_or_sections, dim=0):
         if isinstance(indices_or_sections, int):
-            return super(Tensor, self).split(indices_or_sections, dim)
+            max_chunk_size = round(self.shape[dim] / indices_or_sections)
+            return super(Tensor, self).split(max_chunk_size, dim)
         else:
             return self.np_split(indices_or_sections, dim)
 
