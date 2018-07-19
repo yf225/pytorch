@@ -300,7 +300,7 @@ class Tensor(torch._C._TensorBase):
             split_sizes = []
             num_larger_chunks = self.shape[dim] % indices_or_sections
             size_smaller_chunk = self.shape[dim] // indices_or_sections
-            split_sizes = [size_smaller_chunk+1] * num_larger_chunks 
+            split_sizes = [size_smaller_chunk+1] * num_larger_chunks \
                           + [size_smaller_chunk] * (indices_or_sections - num_larger_chunks)
             return super(Tensor, self).split_with_sizes(split_sizes, dim)
         else:
