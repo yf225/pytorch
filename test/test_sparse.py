@@ -74,8 +74,9 @@ class TestSparse(TestCase):
             # rest the dimensions with_size[d:] are dense.
             v_size = [nnz] + list(with_size[d:])
             v = torch.randn(*v_size)
-            i = torch.rand(d, nnz) * \
-                torch.Tensor(with_size[:d]).repeat(nnz, 1).transpose(0, 1)
+            i = torch.rand(d, nnz)
+            if nnz > 0:
+                i *= torch.Tensor(with_size[:d]).repeat(nnz, 1).transpose(0, 1)
             i = i.type(torch.LongTensor)
             x = torch.sparse.DoubleTensor(i, v, torch.Size(with_size))
 
@@ -729,20 +730,8 @@ class TestSparse(TestCase):
             self.assertEqual(out._sparseDims(), len(shape))
             self.assertEqual(out._denseDims(), 0)
 
-    @skipIfRocm
-    def test_log1p(self):
-        if self.is_cuda:
-            input = torch.cuda.sparse.DoubleTensor(
-                torch.LongTensor([[0], [1], [2]]).transpose(1, 0).cuda(),
-                torch.FloatTensor([3, 4, 5]).cuda(),
-                torch.Size([3]))
-        else:
-            input = torch.sparse.DoubleTensor(
-                torch.LongTensor([[0], [1], [2]]).transpose(1, 0),
-                torch.FloatTensor([3, 4, 5]),
-                torch.Size([3]))
-
-        expected_output = torch.tensor([3., 4., 5.]).log1p_()
+    def _test_log1p_tensor(self, input, dense_tensor):
+        expected_output = torch.tensor(dense_tensor).log1p_()
         self.assertEqual(expected_output, input.log1p().to_dense())
         self.assertEqual(expected_output, input.coalesce().log1p_().to_dense())
 
@@ -757,13 +746,38 @@ class TestSparse(TestCase):
         y = input.log1p()
         self.assertExpectedRaises(RuntimeError, lambda: y.backward(x), subname="backward")
 
+    @skipIfRocm
+    def test_log1p(self):
+        input = torch.sparse_coo_tensor(
+                torch.LongTensor([[0], [1], [2]]).transpose(1, 0).cuda(),
+                torch.FloatTensor([3, 4, 5]).cuda(),
+                torch.Size([3]),
+                device=self.device)
+        self._test_log1p_tensor(input, [3., 4., 5.])
+
         # test uncoalesced input
-        input_uncoalesced = torch.sparse.DoubleTensor(
+        input_uncoalesced = torch.sparse_coo_tensor(
             torch.LongTensor([[0], [1], [2], [0], [1], [2]]).transpose(1, 0),
             torch.FloatTensor([2, 3, 4, 1, 1, 1]),
-            torch.Size([3]))
-        self.assertEqual(expected_output, input_uncoalesced.log1p().to_dense())
-        self.assertEqual(expected_output, input_uncoalesced.coalesce().log1p_().to_dense())
+            torch.Size([3]),
+            device=self.device)
+        self._test_log1p_tensor(input_uncoalesced, [3., 4., 5.])
+
+    @skipIfRocm
+    def test_log1p_empty_tensor(self):
+        input = torch.sparse_coo_tensor(
+                torch.zeros([2, 0]),
+                torch.zeros([0, 5, 5, 5, 5, 5, 5, 0]),
+                torch.Size([0, 0, 5, 5, 5, 5, 5, 5, 0]),
+                device=self.device)
+        self._test_log1p_tensor(input, torch.zeros([0, 0, 5, 5, 5, 5, 5, 5, 0]))
+
+        input = torch.sparse_coo_tensor(
+                torch.zeros([1, 5]),
+                torch.zeros([5, 6, 0]),
+                torch.Size([5, 6, 0]),
+                device=self.device)
+        self._test_log1p_tensor(input, torch.zeros([5, 6, 0]))
 
     def test_zeros(self):
         i_shapes = [2, 3, 4]
