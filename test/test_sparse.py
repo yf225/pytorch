@@ -1014,47 +1014,25 @@ class TestSparse(TestCase):
         with self.assertRaisesRegex(RuntimeError, "indices and values must have same nnz"):
             torch.sparse_coo_tensor(indices, values, sizes)
 
-    def test_factory_zero_nnz(self):
+    def _test_factory_tensor_shape(i_shape, v_shape, size, expected_size):
         device = 'cuda' if self.is_cuda else 'cpu'
-        t = torch.sparse_coo_tensor(torch.empty(1, 0), torch.empty(0, 2, 4, 0), device=device)
-        expected_indices = torch.empty((1, 0), dtype=torch.long, device=device)
-        expected_values = torch.empty((0, 2, 4, 0), dtype=torch.long, device=device)
-        expected_size = torch.Size([0, 2, 4, 0])
+        if size:
+            t = torch.sparse_coo_tensor(torch.empty(i_shape), torch.empty(v_shape), torch.Size(size), device=device)
+        else:
+            t = torch.sparse_coo_tensor(torch.empty(i_shape), torch.empty(v_shape), device=device)
+        expected_indices = torch.empty(i_shape, device=device)
+        expected_values = torch.empty(v_shape, device=device)
+        expected_size = torch.Size(size)
         self.assertEqual(t._indices(), expected_indices)
         self.assertEqual(t._values(), expected_values)
         self.assertEqual(t.size(), expected_size)
 
-        t = torch.sparse_coo_tensor(torch.empty(3, 0), torch.empty(0, 2, 4, 0), device=device)
-        expected_indices = torch.empty((3, 0), dtype=torch.long, device=device)
-        expected_values = torch.empty((0, 2, 4, 0), dtype=torch.long, device=device)
-        expected_size = torch.Size([0, 0, 0, 2, 4, 0])
-        self.assertEqual(t._indices(), expected_indices)
-        self.assertEqual(t._values(), expected_values)
-        self.assertEqual(t.size(), expected_size)
-
-        t = torch.sparse_coo_tensor(torch.empty(1, 0), torch.empty(0, 2, 4, 0), size=(0, 2, 4, 0), device=device)
-        expected_indices = torch.empty((1, 0), dtype=torch.long, device=device)
-        expected_values = torch.empty((0, 2, 4, 0), dtype=torch.long, device=device)
-        expected_size = torch.Size([0, 2, 4, 0])
-        self.assertEqual(t._indices(), expected_indices)
-        self.assertEqual(t._values(), expected_values)
-        self.assertEqual(t.size(), expected_size)
-
-        t = torch.sparse_coo_tensor(torch.empty(3, 0), torch.empty(0, 2, 4, 0), size=(0, 0, 0, 2, 4, 0), device=device)
-        expected_indices = torch.empty((3, 0), dtype=torch.long, device=device)
-        expected_values = torch.empty((0, 2, 4, 0), dtype=torch.long, device=device)
-        expected_size = torch.Size([0, 0, 0, 2, 4, 0])
-        self.assertEqual(t._indices(), expected_indices)
-        self.assertEqual(t._values(), expected_values)
-        self.assertEqual(t.size(), expected_size)
-
-        t = torch.sparse_coo_tensor(torch.empty(3, 0), torch.empty(0, 2, 4, 0), size=(1, 2, 3, 2, 4, 0), device=device)
-        expected_indices = torch.empty((3, 0), dtype=torch.long, device=device)
-        expected_values = torch.empty((0, 2, 4, 0), dtype=torch.long, device=device)
-        expected_size = torch.Size([1, 2, 3, 2, 4, 0])
-        self.assertEqual(t._indices(), expected_indices)
-        self.assertEqual(t._values(), expected_values)
-        self.assertEqual(t.size(), expected_size)
+    def test_factory_nnz_zero(self):
+        _test_factory_tensor_shape([1, 0], [0, 2, 4, 0], None, [0, 2, 4, 0])
+        _test_factory_tensor_shape([3, 0], [0, 2, 4, 0], None, [0, 0, 0, 2, 4, 0])
+        _test_factory_tensor_shape([1, 0], [0, 2, 4, 0], [0, 2, 4, 0], [0, 2, 4, 0])
+        _test_factory_tensor_shape([3, 0], [0, 2, 4, 0], [0, 0, 0, 2, 4, 0], [0, 0, 0, 2, 4, 0])
+        _test_factory_tensor_shape([3, 0], [0, 2, 4, 0], [1, 2, 3, 2, 4, 0], [1, 2, 3, 2, 4, 0])
 
     def test_factory_dense_dims(self):
         indices = self.IndexTensor([[0]])
