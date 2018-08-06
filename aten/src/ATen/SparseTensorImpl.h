@@ -54,7 +54,7 @@ public:
 
   // WARNING: This function does NOT preserve invariants of sparseDims/denseDims with
   // respect to indices and values
-  void raw_resize_(int64_t sparseDims, int64_t denseDims, ArrayRef<int64_t> size) {
+  void raw_resize_(int64_t sparseDims, int64_t denseDims, IntList size) {
     size_ = size.vec();
     sparseDims_ = sparseDims;
     denseDims_ = denseDims;
@@ -62,7 +62,7 @@ public:
 
   // NOTE: This function preserves invariants of sparseDims/denseDims with respect to
   // indices and values.
-  void resize_(int64_t sparseDims, int64_t denseDims, ArrayRef<int64_t> size) {
+  void resize_(int64_t sparseDims, int64_t denseDims, IntList size) {
     AT_CHECK(sparseDims + denseDims == size.size(), "number of dimensions must be sparseDims (", sparseDims, ") + denseDims (", denseDims, "), but got ", size.size());
     AT_CHECK((sparseDims == sparseDims_) || (nnz() == 0), "resizing a non-empty sparse tensor with a different sparseDims will invalidate its indices, please use an empty sparse tensor instead");
 
@@ -83,7 +83,7 @@ public:
   }
 
   // NOTE: this function will resize the sparse tensor and also set `indices` and `values` to empty.
-  void resize_and_clear_(int64_t sparseDims, int64_t denseDims, ArrayRef<int64_t> size) {
+  void resize_and_clear_(int64_t sparseDims, int64_t denseDims, IntList size) {
     AT_CHECK(sparseDims + denseDims == size.size(), "number of dimensions must be sparseDims (", sparseDims, ") + denseDims (", denseDims, "), but got ", size.size());
 
     size_ = size.vec();
