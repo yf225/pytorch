@@ -470,7 +470,7 @@ SparseTensor& mul_out_sparse_cuda(SparseTensor& r_, const SparseTensor& t_, cons
   // sync!  (surely there is a more idiomatic way to do this...)
   LongTensor cpu_resultNnz = at::empty({1}, CPU(kLong));
   cpu_resultNnz.copy_(resultNnz);
-  _get_sparse_impl(r_)->set_nnz(cpu_resultNnz.accessor<int64_t, 1>()[0]);
+  _get_sparse_impl(r_)->set_nnz_and_narrow(cpu_resultNnz.accessor<int64_t, 1>()[0]);
   _get_sparse_impl(r_)->set_coalesced(true);
 
   return r_;

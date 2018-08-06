@@ -101,7 +101,7 @@ public:
   void set_coalesced(bool coalesced) { coalesced_ = coalesced; }
 
   // NOTE: this function is only used internally and not exposed to Python frontend
-  void set_nnz(int64_t nnz) {
+  void set_nnz_and_narrow(int64_t nnz) {
     indices_ = indices_.narrow(1, 0, nnz);
     values_ = values_.narrow(0, 0, nnz);
   }

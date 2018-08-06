@@ -71,7 +71,7 @@ SparseTensor& mul_out_sparse_scalar(SparseTensor& r, const SparseTensor& t, Scal
     r._indices().copy_(t._indices());
     Tensor r_values = r._values(); // Sigh... needed because mul_out takes Tensor&
     at::mul_out(r_values, t._values(), scalar_tensor(value));
-    _get_sparse_impl(r)->set_nnz(t._nnz());
+    _get_sparse_impl(r)->set_nnz_and_narrow(t._nnz());
     _get_sparse_impl(r)->set_coalesced(t.is_coalesced());
   }
   return r;
@@ -123,7 +123,7 @@ SparseTensor& pow_out_sparse_scalar(SparseTensor& r, const SparseTensor& t_, Sca
   r._indices().copy_(t._indices());
   Tensor r_values = r._values(); // Sigh... needed because pow_out takes Tensor&
   at::pow_out(r_values, t._values(), value);
-  _get_sparse_impl(r)->set_nnz(t._nnz());
+  _get_sparse_impl(r)->set_nnz_and_narrow(t._nnz());
   _get_sparse_impl(r)->set_coalesced(t.is_coalesced());
 
   return r;
@@ -151,7 +151,7 @@ SparseTensor& div_out_sparse_scalar(SparseTensor& r, const SparseTensor& t, Scal
     r._indices().copy_(t._indices());
     Tensor r_values = r._values(); // Sigh... needed because div_out takes Tensor&
     at::div_out(r_values, t._values(), scalar_tensor(value));
-    _get_sparse_impl(r)->set_nnz(t._nnz());
+    _get_sparse_impl(r)->set_nnz_and_narrow(t._nnz());
     _get_sparse_impl(r)->set_coalesced(t.is_coalesced());
   }
   return r;
@@ -259,7 +259,7 @@ SparseTensor& add_out_sparse_cpu(SparseTensor& r, const SparseTensor& t, const S
       }
   );
 
-  _get_sparse_impl(r)->set_nnz(r_i);
+  _get_sparse_impl(r)->set_nnz_and_narrow(r_i);
   // TODO: I think it may be possible to track inside the loop and
   // detect when we are uncoalesced (e.g., by observing that an
   // index goes backwards) which may be more precise than using the
@@ -435,7 +435,7 @@ SparseTensor& mul_out_sparse_cpu(SparseTensor& r, const Tensor& t_, const Tensor
     );
   }
 
-  _get_sparse_impl(r)->set_nnz(r_i);
+  _get_sparse_impl(r)->set_nnz_and_narrow(r_i);
   _get_sparse_impl(r)->set_coalesced(true);
 
   return r;
@@ -760,7 +760,7 @@ SparseTensor& _sspaddmm_out_cpu(
 
   // to avoid a clone
   _get_sparse_impl(r)->set_indices_and_values_unsafe(newi, newv);
-  _get_sparse_impl(r)->set_nnz(p);
+  _get_sparse_impl(r)->set_nnz_and_narrow(p);
 
   return r;
 }
