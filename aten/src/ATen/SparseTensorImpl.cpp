@@ -73,7 +73,6 @@ void SparseTensorImpl::set_indices_and_values_unsafe(const Tensor& indices, cons
   indices_ = indices;
   values_ = values;
 
-  nnz_ = values.size(0);
   coalesced_ = false;
 }
 

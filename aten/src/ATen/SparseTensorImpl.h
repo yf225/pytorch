@@ -19,10 +19,6 @@ struct AT_API SparseTensorImpl : public TensorImpl {
   // should move to the parent class.
   std::vector<int64_t> size_;
 
-  // The number of non-zero elements, which is guaranteed to match the
-  // corresponding nnz dimensions of indices/values.
-  int64_t nnz_ = 0;
-
   int64_t sparseDims_ = 0; // number of sparse dimensions
   int64_t denseDims_ = 0; // number of dense dimensions
 
@@ -42,7 +38,7 @@ public:
   // Public for now...
   explicit SparseTensorImpl(at::Backend, at::ScalarType);
 
-  int64_t nnz() const { return nnz_; }
+  int64_t nnz() const { return values_.size(0); }
   int64_t sparseDims() const { return sparseDims_; }
   int64_t denseDims() const { return denseDims_; }
   bool coalesced() const { return coalesced_; }
@@ -68,7 +64,7 @@ public:
   // indices and values.
   void resize_(int64_t sparseDims, int64_t denseDims, ArrayRef<int64_t> size) {
     AT_CHECK(sparseDims + denseDims == size.size(), "number of dimensions must be sparseDims (", sparseDims, ") + denseDims (", denseDims, "), but got ", size.size());
-    AT_CHECK((sparseDims == sparseDims_) || (nnz_ == 0), "resizing a non-empty sparse tensor with a different sparseDims will invalidate its indices, please use an empty sparse tensor instead");
+    AT_CHECK((sparseDims == sparseDims_) || (nnz() == 0), "resizing a non-empty sparse tensor with a different sparseDims will invalidate its indices, please use an empty sparse tensor instead");
 
     if ((!size.equals(size_)) || (sparseDims != sparseDims_) || (denseDims != denseDims_)) {
       std::vector<int64_t> values_size = {values().size(0)};
@@ -108,7 +104,6 @@ public:
   void set_nnz(int64_t nnz) {
     indices_ = indices_.narrow(1, 0, nnz);
     values_ = values_.narrow(0, 0, nnz);
-    nnz_ = nnz;
   }
 
   // Takes indices and values and directly puts them into the sparse tensor, no copy.
