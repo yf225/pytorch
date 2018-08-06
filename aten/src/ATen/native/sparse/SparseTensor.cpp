@@ -118,7 +118,9 @@ SparseTensor new_with_tensor_sparse(const LongTensor& indices, const Tensor& val
 
 SparseTensor new_with_dims_and_size_sparse(const SparseType& dtype, int64_t sparseDims, int64_t denseDims, ArrayRef<int64_t> size) {
   SparseTensor self = new_sparse(dtype);
-  AT_CHECK(size.size() != 0, "cannot construct sparse tensor with empty size and no values; use the nullary constructor instead");
+  AT_CHECK(size.size() != 0,
+    "cannot construct sparse tensor with empty size and no values; you must specify a non-empty size if you want to create an empty sparse tensor, \
+or you must provide a single-element `values` tensor (e.g. x=torch.sparse_coo_tensor(torch.zeros(0,1), 12.3, [])) if you want to create a scalar sparse tensor");
   _get_sparse_impl(self)->resize_and_clear_(sparseDims, denseDims, size);
   return self;
 }
