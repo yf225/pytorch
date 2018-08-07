@@ -1125,6 +1125,45 @@ class TestSparse(TestCase):
 
         do_test(self.SparseTensor())
 
+    def _test_resize_shape(x_i, x_v, x_size, y_i, y_v, y_size):
+        x = torch.sparse_coo_tensor(torch.zeros(x_i), torch.ones(x_v), torch.Size(x_size))
+        y = torch.sparse_coo_tensor(torch.zeros(y_i), torch.ones(y_v), torch.Size(y_size))
+        x.resize_as_(y)
+        self.assertEqual(x.shape, y.shape)
+        self.assertEqual(x._sparseDims(), y._sparseDims())
+        self.assertEqual(x._denseDims(), y._denseDims())
+
+    def test_resize(self):
+        # 1. Add dims to dense dimensions [Supported]
+        _test_resize_shape([1, 1], [1, 2, 3], [2, 2, 3],
+                           [1, 1], [1, 2, 3, 4], [2, 2, 3, 4])
+
+        # 2. Remove dims from dense dimensions [Supported]
+        _test_resize_shape([1, 1], [1, 2, 3], [2, 2, 3],
+                           [1, 1], [1, 2], [2, 2])
+
+        # 3. Change the size of some dense dimensions [Supported]
+        _test_resize_shape([1, 1], [1, 2, 3], [2, 2, 3],
+                           [1, 1], [1, 2, 2], [2, 2, 2])
+
+        # 4. Expand the size of some sparse dimensions [Supported]
+        _test_resize_shape([1, 1], [1, 2, 3], [2, 2, 3],
+                           [1, 1], [1, 2, 3], [4, 2, 3])
+
+        # 5. Change the shapes of both sparse and dense dimensions when nnz is zero [Supported]
+        _test_resize_shape([1, 0], [0, 2, 3], [2, 2, 3],
+                           [2, 1], [1, 2, 4, 5], [1, 1, 2, 4, 5])
+
+        # 6. Change the number of sparse dimensions on a non-empty sparse tensor [Not Supported]
+        with self.assertRaisesRegex(RuntimeError, "changing the number of sparse dimensions"):
+            _test_resize_shape([1, 1], [1, 2, 3], [2, 2, 3],
+                               [2, 1], [1, 2, 3], [1, 2, 2, 3])
+
+        # 7. Shrink the size of some sparse dimensions on a non-empty sparse tensor [Not Supported]
+        with self.assertRaisesRegex(RuntimeError, "shrinking the size of sparse dimensions"):
+            _test_resize_shape([1, 1], [1, 2, 3], [2, 2, 3],
+                               [1, 1], [1, 2, 3], [1, 2, 3])
+
     def test_is_nonzero(self):
         self.assertTrue(torch.sparse_coo_tensor(([0],), 1., (1,)).is_nonzero())
         self.assertFalse(torch.sparse_coo_tensor(([0],), 0., (1,)).is_nonzero())
