@@ -62,9 +62,39 @@ public:
 
   // NOTE: This function preserves invariants of sparseDims/denseDims with respect to
   // indices and values.
+  //
+  // NOTE: This function is safe to call in the following cases:
+  // 1. When we only change the shape of dense dimensions (adding/removing dims, or changing
+  // the size of some dims) and keeping the shape of sparse dimensions unchanged.
+  // 2. When we keep the number of sparse dimensions unchanged, and NOT shrinking the size of
+  // any of the sparse dimensions.
+  // 3. When the sparse tensor has zero nnz, in which case we are free to change the shapes of
+  // both its sparse and dense dimensions.
+  //
+  // This function is NOT safe to call (and will throw an error) in the following cases:
+  // 1. When we attempt to change the number of sparse dimensions on a non-empty sparse tensor
+  // (such an operation will invalidate the indices stored).
+  // 2. When we attempt to shrink the size of any of the sparse dimensions (this could make
+  // some of the stored indices out-of-bound and thus unsafe).
   void resize_(int64_t sparseDims, int64_t denseDims, IntList size) {
     AT_CHECK(sparseDims + denseDims == size.size(), "number of dimensions must be sparseDims (", sparseDims, ") + denseDims (", denseDims, "), but got ", size.size());
-    AT_CHECK((sparseDims == sparseDims_) || (nnz() == 0), "resizing a non-empty sparse tensor with a different sparseDims will invalidate its indices, please use an empty sparse tensor instead");
+    if (nnz() > 0) {
+      bool shrinking_sparse_dims = false;
+      auto sparse_size_original = sizes().slice(0, sparseDims);
+      auto sparse_size_new = size.slice(0, sparseDims);
+      for (int i = 0; i < sparseDims; i++) {
+        if (sparse_size_new[i] < sparse_size_original[i]) {
+          shrinking_sparse_dims = true;
+          break;
+        }
+      }
+
+      AT_CHECK(sparseDims == sparseDims_ && !shrinking_sparse_dims,
+        "changing the number of sparse dimensions or shrinking the size of sparse dimensions on a non-empty sparse tensor is not supported. \
+If you need an empty sparse tensor of this size, call `x=torch.sparse_coo_tensor(size)`; if you need to resize this tensor, either keep the \
+number of sparse dimensions constant and the size of them non-shrinking, or create a new sparse tensor with this tensor's `values` and the \
+correct indices.");
+    }
 
     if ((!size.equals(size_)) || (sparseDims != sparseDims_) || (denseDims != denseDims_)) {
       std::vector<int64_t> values_size = {values().size(0)};
