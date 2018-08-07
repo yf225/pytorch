@@ -1136,33 +1136,33 @@ class TestSparse(TestCase):
     def test_resize(self):
         # 1. Add dims to dense dimensions [Supported]
         self._test_resize_shape([1, 1], [1, 2, 3], [2, 2, 3],
-                           [1, 1], [1, 2, 3, 4], [2, 2, 3, 4])
+                                [1, 1], [1, 2, 3, 4], [2, 2, 3, 4])
 
         # 2. Remove dims from dense dimensions [Supported]
         self._test_resize_shape([1, 1], [1, 2, 3], [2, 2, 3],
-                           [1, 1], [1, 2], [2, 2])
+                                [1, 1], [1, 2], [2, 2])
 
         # 3. Change the size of some dense dimensions [Supported]
         self._test_resize_shape([1, 1], [1, 2, 3], [2, 2, 3],
-                           [1, 1], [1, 2, 2], [2, 2, 2])
+                                [1, 1], [1, 2, 2], [2, 2, 2])
 
         # 4. Expand the size of some sparse dimensions [Supported]
         self._test_resize_shape([1, 1], [1, 2, 3], [2, 2, 3],
-                           [1, 1], [1, 2, 3], [4, 2, 3])
+                                [1, 1], [1, 2, 3], [4, 2, 3])
 
         # 5. Change the shapes of both sparse and dense dimensions when nnz is zero [Supported]
         self._test_resize_shape([1, 0], [0, 2, 3], [2, 2, 3],
-                           [2, 1], [1, 2, 4, 5], [1, 1, 2, 4, 5])
+                                [2, 1], [1, 2, 4, 5], [1, 1, 2, 4, 5])
 
         # 6. Change the number of sparse dimensions on a non-empty sparse tensor [Not Supported]
         with self.assertRaisesRegex(RuntimeError, "changing the number of sparse dimensions"):
             self._test_resize_shape([1, 1], [1, 2, 3], [2, 2, 3],
-                               [2, 1], [1, 2, 3], [1, 2, 2, 3])
+                                    [2, 1], [1, 2, 3], [1, 2, 2, 3])
 
         # 7. Shrink the size of some sparse dimensions on a non-empty sparse tensor [Not Supported]
         with self.assertRaisesRegex(RuntimeError, "shrinking the size of sparse dimensions"):
             self._test_resize_shape([1, 1], [1, 2, 3], [2, 2, 3],
-                               [1, 1], [1, 2, 3], [1, 2, 3])
+                                    [1, 1], [1, 2, 3], [1, 2, 3])
 
     def test_is_nonzero(self):
         self.assertTrue(torch.sparse_coo_tensor(([0],), 1., (1,)).is_nonzero())
