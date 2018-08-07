@@ -636,7 +636,7 @@ SparseTensor& hspmm_out_sparse_cpu(SparseTensor& r, const SparseTensor& sparse_,
 
   std::vector<int64_t> new_size = _get_sparse_impl(newSparse)->sizes().vec();
   new_size[0] = outNnz;
-  _get_sparse_impl(newSparse)->resize_(_get_sparse_impl(newSparse)->sparseDims(), _get_sparse_impl(newSparse)->denseDims(), new_size);
+  _get_sparse_impl(newSparse)->raw_resize_(_get_sparse_impl(newSparse)->sparseDims(), _get_sparse_impl(newSparse)->denseDims(), new_size);
 
   // Compute output values tensor with sparse * dense multiplication
   s_addmm_out_sparse_dense_cpu(values, values, newSparse, dense, 0, alpha);

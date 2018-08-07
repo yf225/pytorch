@@ -225,7 +225,7 @@ SparseTensor& hspmm_out_sparse_cuda(SparseTensor& r_, const SparseTensor& sparse
 
   std::vector<int64_t> new_size = _get_sparse_impl(newSparse)->sizes().vec();
   new_size[0] = nnz;
-  _get_sparse_impl(newSparse)->resize_(_get_sparse_impl(newSparse)->sparseDims(), _get_sparse_impl(newSparse)->denseDims(), new_size);
+  _get_sparse_impl(newSparse)->raw_resize_(_get_sparse_impl(newSparse)->sparseDims(), _get_sparse_impl(newSparse)->denseDims(), new_size);
 
   s_addmm_out_sparse_dense_cuda(values, values, newSparse, dense, 0, /*alpha*/ 1);
   _get_sparse_impl(r_)->set_indices_and_values_unsafe(indices, values);
