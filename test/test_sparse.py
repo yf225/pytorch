@@ -1135,6 +1135,8 @@ class TestSparse(TestCase):
         self.assertEqual(x.shape, y.shape)
         self.assertEqual(x._sparseDims(), y._sparseDims())
         self.assertEqual(x._denseDims(), y._denseDims())
+        print("x.to_dense(): ", x.to_dense())
+        print("x_dense: ", x_dense)
         self.assertEqual(x.to_dense(), x_dense)
 
     def test_resize(self):
