@@ -168,8 +168,8 @@ endif()
 
 # ---[ List of libraries to link with
 if (BUILD_CAFFE2)
-  add_library(caffe2_protos STATIC $<TARGET_OBJECTS:Caffe_PROTO> $<TARGET_OBJECTS:Caffe2_PROTO>)
-  add_dependencies(caffe2_protos Caffe_PROTO Caffe2_PROTO)
+  add_library(caffe2_protos STATIC $<TARGET_OBJECTS:Caffe2_PROTO>)
+  add_dependencies(caffe2_protos Caffe2_PROTO)
 else()
   # Do not include caffe2 or caffe protos, but rather have it only be
   # a library to attach local protobuf.
@@ -223,7 +223,13 @@ target_include_directories(caffe2 PRIVATE ${Caffe2_CPU_INCLUDE})
 target_include_directories(caffe2 SYSTEM PRIVATE "${Caffe2_DEPENDENCY_INCLUDE}")
 # Set standard properties on the target
 aten_set_target_props(caffe2)
+
+if (MSVC)
 target_compile_options(caffe2 INTERFACE "-std=c++11")
+else()
+target_compile_options(caffe2 INTERFACE "$<$<COMPILE_LANGUAGE:CXX>:-std=c++11>")
+endif()
+
 target_compile_options(caffe2 PRIVATE "-DCAFFE2_BUILD_MAIN_LIB")
 if (MSVC AND NOT BUILD_SHARED_LIBS)
   # Note [Supporting both static and dynamic libraries on Window]
@@ -309,11 +315,7 @@ if(USE_CUDA)
   # it. We will then manually add the cudart library as interface libs.
   set(__tmp ${CUDA_LIBRARIES})
   set(CUDA_LIBRARIES PRIVATE ${CUDA_LIBRARIES})
-  if(CAFFE2_STATIC_LINK_CUDA)
-    torch_cuda_based_add_library(caffe2_gpu STATIC ${Caffe2_GPU_SRCS})
-  else()
-    torch_cuda_based_add_library(caffe2_gpu ${Caffe2_GPU_SRCS})
-  endif()
+  torch_cuda_based_add_library(caffe2_gpu ${Caffe2_GPU_SRCS})
   set(CUDA_LIBRARIES ${__tmp})
   target_link_libraries(caffe2_gpu INTERFACE caffe2::cudart)
 
@@ -330,6 +332,14 @@ if(USE_CUDA)
   target_link_libraries(
       caffe2_gpu PUBLIC caffe2 ${Caffe2_PUBLIC_CUDA_DEPENDENCY_LIBS})
 
+  # See Note [Supporting both static and dynamic libraries on Window]
+  # TODO: I'm actually not sure why this is necessary, because caffe2_gpu
+  # should depend on caffe2 (which itself would give us the necessary
+  # macro definition).
+  if (MSVC AND NOT BUILD_SHARED_LIBS)
+      target_compile_options(caffe2_gpu PUBLIC "-DAT_CORE_STATIC_WINDOWS=1")
+  endif()
+
   # Set standard properties on the target
   aten_set_target_props(caffe2_gpu)
 
@@ -341,13 +351,24 @@ endif()
 # ---[ Caffe2 HIP sources.
 if(USE_ROCM)
   # Call again since Caffe2_HIP_INCLUDES is extended with ATen include dirs.
-  IF(BUILD_ATEN)
-     HIP_INCLUDE_DIRECTORIES(${Caffe2_HIP_INCLUDES})
-  ENDIF()
+  if(BUILD_ATEN)
+    # Get Compile Definitions from the directory (FindHIP.CMake bug)
+    get_directory_property(MY_DEFINITIONS COMPILE_DEFINITIONS)
+    if(MY_DEFINITIONS)
+      foreach(_item ${MY_DEFINITIONS})
+        LIST(APPEND HIP_HCC_FLAGS "-D${_item}")
+      endforeach()
+    endif()
+
+    # Call again since Caffe2_HIP_INCLUDES is extended with ATen include dirs.
+    hip_include_directories(${Caffe2_HIP_INCLUDES})
+  endif()
   IF(BUILD_CAFFE2)
      set_source_files_properties(${Caffe2_HIP_SRCS} PROPERTIES HIP_SOURCE_PROPERTY_FORMAT 1)
   ENDIF()
-  hip_add_library(caffe2_hip ${Caffe2_HIP_SRCS})
+
+  # FindHIP.CMake checks if the SHARED flag is set and adds extra logic accordingly.
+  hip_add_library(caffe2_hip SHARED ${Caffe2_HIP_SRCS})
 
   # Since PyTorch files contain HIP headers, these flags are required for the necessary definitions to be added.
   set_target_properties(caffe2_hip PROPERTIES COMPILE_FLAGS ${HIP_HIPCC_FLAGS})
