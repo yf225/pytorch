@@ -93,13 +93,13 @@ public:
 1. If you need an empty sparse tensor of this size, call `x=torch.sparse_coo_tensor(size)`.\n\
 2. If you need to resize this tensor, you have the following options:\n\
     1. Keep the number of sparse dimensions constant and the size of them non-shrinking, and try the same call again.\n\
-    2. Or, create a new sparse tensor with this tensor's `values` and the correct indices."
+    2. Or, create a new sparse tensor with this tensor's `values` and the correct indices.";
 
       AT_CHECK(sparseDims == sparseDims_,
-        "changing the number of sparse dimensions (from ", sparseDims_, " to ", sparseDims, ") on a non-empty sparse tensor is not supported.\n\", alt_options_msg);
+        "changing the number of sparse dimensions (from ", sparseDims_, " to ", sparseDims, ") on a non-empty sparse tensor is not supported.\n", alt_options_msg);
 
       AT_CHECK(!shrinking_sparse_dims,
-        "shrinking the size of sparse dimensions (from ", sparse_size_original, " to ", sparse_size_new, ") on a non-empty sparse tensor is not supported.\n\", alt_options_msg);
+        "shrinking the size of sparse dimensions (from ", sparse_size_original, " to ", sparse_size_new, ") on a non-empty sparse tensor is not supported.\n", alt_options_msg);
     }
 
     if ((!size.equals(size_)) || (sparseDims != sparseDims_) || (denseDims != denseDims_)) {
