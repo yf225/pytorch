@@ -63,7 +63,7 @@ public:
   // NOTE: This function preserves invariants of sparseDims/denseDims with respect to
   // indices and values.
   //
-  // NOTE: This function is safe to call in the following cases:
+  // NOTE: This function supports the following cases:
   // 1. When we only change the shape of dense dimensions (adding/removing dims, or changing
   // the size of some dims) and keeping the shape of sparse dimensions unchanged.
   // 2. When we keep the number of sparse dimensions unchanged, and NOT shrinking the size of
@@ -71,7 +71,7 @@ public:
   // 3. When the sparse tensor has zero nnz, in which case we are free to change the shapes of
   // both its sparse and dense dimensions.
   //
-  // This function is NOT safe to call (and will throw an error) in the following cases:
+  // This function DOESN'T support (and will throw an error) the following cases:
   // 1. When we attempt to change the number of sparse dimensions on a non-empty sparse tensor
   // (such an operation will invalidate the indices stored).
   // 2. When we attempt to shrink the size of any of the sparse dimensions (this could make
