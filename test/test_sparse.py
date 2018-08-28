@@ -44,7 +44,7 @@ class TestSparse(TestCase):
         self.SparseTensor = torch.sparse.DoubleTensor
         super(TestSparse, self).setUp()
 
-    def _gen_sparse(self, d, nnz, with_size):
+    def _gen_sparse(self, sparse_dims, nnz, with_size):
         # TODO: Consider implementing this in the CUDA case by directly
         # performing the operations on the GPU.  You won't be able to
         # use torch.rand/torch.randn in this case because they are
@@ -54,29 +54,29 @@ class TestSparse(TestCase):
         # If you do this, be sure to update assert_uncoalesced too
 
         if isinstance(with_size, Number):
-            with_size = [with_size] * d
+            with_size = [with_size] * sparse_dims
 
         if self.is_uncoalesced:
             # We want to generate a tensor with a lot of uncoalesced
             # entries to stress test whether or not we handle this
             # (subtle) case correctly
-            v_size = [nnz * 2] + list(with_size[d:])
+            v_size = [nnz * 2] + list(with_size[sparse_dims:])
             v = torch.randn(*v_size)
-            r = torch.rand(d, nnz)
+            r = torch.rand(sparse_dims, nnz)
             # Repeat the indexes, so every position shows up twice
             i = torch.cat([r, r], dim=1) * \
-                torch.Tensor(with_size[:d]).repeat(nnz * 2, 1).transpose(0, 1)
+                torch.Tensor(with_size[:sparse_dims]).repeat(nnz * 2, 1).transpose(0, 1)
             i = i.type(torch.LongTensor)
             x = torch.sparse.DoubleTensor(i, v, torch.Size(with_size))
             self.assert_uncoalesced(x)
         else:
-            # Generate a sparse tensor with d sparse dimensions; the
-            # rest the dimensions with_size[d:] are dense.
-            v_size = [nnz] + list(with_size[d:])
+            # Generate a sparse tensor with sparse_dims sparse dimensions; the
+            # rest the dimensions with_size[sparse_dims:] are dense.
+            v_size = [nnz] + list(with_size[sparse_dims:])
             v = torch.randn(*v_size)
-            i = torch.rand(d, nnz)
+            i = torch.rand(sparse_dims, nnz)
             if nnz > 0:
-                i *= torch.Tensor(with_size[:d]).repeat(nnz, 1).transpose(0, 1)
+                i *= torch.Tensor(with_size[:sparse_dims]).repeat(nnz, 1).transpose(0, 1)
             i = i.type(torch.LongTensor)
             x = torch.sparse.DoubleTensor(i, v, torch.Size(with_size))
 
