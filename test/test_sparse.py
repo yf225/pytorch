@@ -110,18 +110,20 @@ class TestSparse(TestCase):
 
     @skipIfRocm
     def test_basic(self):
-        x, i, v = self._gen_sparse(3, 10, 100)
+        def _check_sparse_tensor(sparse_dims, nnz, with_size):
+            if isinstance(with_size, Number):
+                with_size = [with_size] * sparse_dims
+            x, i, v = self._gen_sparse(sparse_dims, nnz, with_size)
+            self.assertEqual(i, x._indices())
+            self.assertEqual(v, x._values())
+            self.assertEqual(x.ndimension(), len(with_size))
+            self.assertEqual(self.safeCoalesce(x)._nnz(), nnz)
+            self.assertEqual(list(x.size()), with_size)
 
-        self.assertEqual(i, x._indices())
-        self.assertEqual(v, x._values())
-
-        x, i, v = self._gen_sparse(3, 10, [100, 100, 100])
-        self.assertEqual(i, x._indices())
-        self.assertEqual(v, x._values())
-        self.assertEqual(x.ndimension(), 3)
-        self.assertEqual(self.safeCoalesce(x)._nnz(), 10)
-        for i in range(3):
-            self.assertEqual(x.size(i), 100)
+        _check_sparse_tensor(3, 10, 100)
+        _check_sparse_tensor(3, 10, [100, 100, 100])
+        _check_sparse_tensor(3, 10, [100, 100, 100, 5, 5, 5, 0])
+        _check_sparse_tensor(3, 0, [0, 0, 100, 5, 5, 5, 0])
 
         # Make sure that coalesce handles duplicate indices correctly
         i = self.IndexTensor([[9, 0, 0, 0, 8, 1, 1, 1, 2, 7, 2, 2, 3, 4, 6, 9]])
