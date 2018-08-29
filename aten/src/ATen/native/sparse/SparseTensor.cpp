@@ -308,7 +308,25 @@ SparseTensor coalesce_sparse_cpu(const SparseTensor& self) {
             for (int64_t d = 0; d < sparseDims; d++) {
               newIndicesAccessor[d][i] = indicesAccessor[d][pos];
             }
-            THBlas_copy<scalar_t>(blockSize, values_ptr + pos * blockSize, 1, newValues_ptr + i * blockSize, 1);
+            // yf225 TODO:
+            /*
+            repro script:
+# NOTE: this error only happens on CPU
+
+import torch
+
+# torch.set_default_tensor_type('torch.FloatTensor')  # Works fine
+torch.set_default_tensor_type('torch.DoubleTensor')  # This is the default setting in test/common.py, but it causes segfault in this test
+
+sparse_dims, nnz, with_size = 2, 5, [100, 100, 100]
+v = torch.randn(nnz, 100)
+i = torch.floor(torch.rand(sparse_dims, nnz).uniform_(0, 99)).to(torch.int64)
+x = torch.sparse.DoubleTensor(i, v, torch.Size(with_size))
+
+xc = x.coalesce()
+            */
+            newValues[i] = values[pos].clone();  // yf225 TODO: temporary workaround to THBlas_copy bug
+            // THBlas_copy<scalar_t>(blockSize, values_ptr + pos * blockSize, 1, newValues_ptr + i * blockSize, 1);
           }
           prev = curr;
         }
