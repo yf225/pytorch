@@ -1031,15 +1031,31 @@ class TestSparse(TestCase):
 
     @skipIfRocm
     def test_factory_size_check(self):
-        indices = self.IndexTensor([[1, 2], [0, 2]])
+        indices = self.IndexTensor([[1, 2],
+                                    [0, 2]])
         values = self.ValueTensor([.5, .5])
         sizes = torch.Size([2, 3])
         with self.assertRaisesRegex(RuntimeError, "sizes is inconsistent with indices"):
             torch.sparse_coo_tensor(indices, values, sizes)
 
-        indices = self.IndexTensor([[1, 2], [0, 2]])
+        indices = self.IndexTensor([[1, 2],
+                                    [0, 2]])
+        values = self.ValueTensor(2, 1, 0)
+        sizes = torch.Size([2, 3, 1, 0])
+        with self.assertRaisesRegex(RuntimeError, "sizes is inconsistent with indices"):
+            torch.sparse_coo_tensor(indices, values, sizes)
+
+        indices = self.IndexTensor([[1, 2],
+                                    [0, 2]])
         values = self.ValueTensor([[1, 1, 1], [1, 1, 1]])
         sizes = torch.Size([3, 3, 2])
+        with self.assertRaisesRegex(RuntimeError, "values has incorrect size"):
+            torch.sparse_coo_tensor(indices, values, sizes)
+
+        indices = self.IndexTensor([[1, 2],
+                                    [0, 2]])
+        values = self.ValueTensor(2, 1, 0)
+        sizes = torch.Size([3, 3, 2, 0])
         with self.assertRaisesRegex(RuntimeError, "values has incorrect size"):
             torch.sparse_coo_tensor(indices, values, sizes)
 
