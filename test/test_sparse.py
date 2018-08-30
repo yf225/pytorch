@@ -64,8 +64,9 @@ class TestSparse(TestCase):
             v = torch.randn(*v_size)
             r = torch.rand(sparse_dims, nnz)
             # Repeat the indexes, so every position shows up twice
-            i = torch.cat([r, r], dim=1) * \
-                torch.Tensor(with_size[:sparse_dims]).repeat(nnz * 2, 1).transpose(0, 1)
+            i = torch.cat([r, r], dim=1)
+            if nnz > 0:
+                i *= torch.Tensor(with_size[:sparse_dims]).repeat(nnz * 2, 1).transpose(0, 1)
             i = i.type(torch.LongTensor)
             x = torch.sparse.DoubleTensor(i, v, torch.Size(with_size))
             self.assert_uncoalesced(x)
