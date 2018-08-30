@@ -281,6 +281,10 @@ Tensor& add_out_dense_sparse_cuda(Tensor& r_, const Tensor& dense, SparseTensorR
   int64_t nDim = dense.dim();
   int64_t nDimI = sparse._sparseDims();
 
+  if (sparse._values().numel() == 0) {
+    return r_;
+  }
+
   if (sparse.is_coalesced()) {
     // TODO benchmark to decide whether to remove this special case
     const dim3 block = cuda::getApplyBlock();

@@ -1343,7 +1343,7 @@ def load_tests(loader, tests, pattern):
         test_suite = unittest.TestSuite()
         for test_group in tests:
             for test in test_group:
-                if 'test_basic' in str(test):
+                if 'test_shared' in str(test):
                     test_suite.addTest(test)
         return test_suite
 
