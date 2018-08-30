@@ -211,6 +211,12 @@ class TestSparse(TestCase):
         i[0][0] = 0
         self.assertEqual(self.ValueTensor([6, 0, 0]), self.safeToDense(x))
 
+        i = self.IndexTensor([[2]])
+        v = self.ValueTensor(1, 0)
+        x = self.SparseTensor(i, v, torch.Size([3, 0]))
+        i[0][0] = 0
+        self.assertEqual(self.ValueTensor(3, 0), self.safeToDense(x))
+
     @skipIfRocm
     def test_to_dense_hybrid(self):
         i = self.IndexTensor([
