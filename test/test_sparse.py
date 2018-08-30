@@ -91,15 +91,13 @@ class TestSparse(TestCase):
         correctness of the uncoalesced tensor generation algorithm.
         """
         assert not x.is_coalesced()
-        # Strategy: construct a new sparse tensor with the raw value
-        # field overwritten to a tensor of ones, coalesce it, and then
-        # check if any value entries are > 1 (which indicates that the
-        # original was uncoalesced.)
-        i = x._indices().clone()
-        v = x._values().clone().fill_(1)
-        y = torch.sparse.DoubleTensor(i, v, x.size())
-        z = self.safeCoalesce(y)
-        assert (z._values() > 1).sum() > 0
+        existing_indices = set()
+        for i in range(x._nnz()):
+            index = str(x._indices()[:, i])
+            if index in existing_indices:
+                return True
+            else:
+                existing_indices.add(index)
 
     def randn(self, *args, **kwargs):
         """
