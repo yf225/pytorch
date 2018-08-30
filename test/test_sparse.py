@@ -218,6 +218,13 @@ class TestSparse(TestCase):
 
     @skipIfRocm
     def test_to_dense_hybrid(self):
+        def _test_to_dense_hybrid(x, res):
+            x.to_dense()  # Tests double to_dense for memory corruption
+            x.to_dense()
+            x.to_dense()
+            self.assertEqual(res, x.to_dense())
+            self.assertEqual(res, self.safeToDense(x))
+
         i = self.IndexTensor([
             [0, 1, 2, 2],
             [0, 0, 0, 3],
@@ -238,12 +245,16 @@ class TestSparse(TestCase):
              [0, 0],
              [4, 5]],
         ])
+        _test_to_dense_hybrid(x, res)
 
-        x.to_dense()  # Tests double to_dense for memory corruption
-        x.to_dense()
-        x.to_dense()
-        self.assertEqual(res, x.to_dense())
-        self.assertEqual(res, self.safeToDense(x))
+        i = self.IndexTensor([
+            [0, 1, 2, 2],
+            [0, 0, 0, 3],
+        ])
+        v = self.ValueTensor(4, 2, 0)
+        x = self.SparseTensor(i, v, torch.Size([3, 4, 2, 0]))
+        res = self.ValueTensor(3, 4, 2, 0)
+        _test_to_dense_hybrid(x, res)
 
     @skipIfRocm
     def test_contig(self):
@@ -1343,7 +1354,7 @@ def load_tests(loader, tests, pattern):
         test_suite = unittest.TestSuite()
         for test_group in tests:
             for test in test_group:
-                if 'test_shared' in str(test):
+                if 'test_to_dense_hybrid' in str(test):
                     test_suite.addTest(test)
         return test_suite
 
