@@ -471,6 +471,8 @@ class TestSparse(TestCase):
                 self.assertEqual(self.safeToDense(x), y)
 
         _test_transpose(self._gen_sparse(4, 20, 5)[0])
+        _test_transpose(self._gen_sparse(4, 10, [100, 100, 100, 5, 5, 5, 0])[0])
+        _test_transpose(self._gen_sparse(4, 0, [0, 0, 100, 5, 5, 5, 0])[0])
 
     @cpu_only
     def test_coalesce_transpose_mm(self):
@@ -1420,7 +1422,7 @@ def load_tests(loader, tests, pattern):
         test_suite = unittest.TestSuite()
         for test_group in tests:
             for test in test_group:
-                if 'test_clone' in str(test):
+                if 'test_transpose' in str(test):
                     test_suite.addTest(test)
         return test_suite
 
