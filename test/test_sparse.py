@@ -575,9 +575,9 @@ class TestSparse(TestCase):
 
     @cpu_only
     def test_saddmm(self):
-        def test_shape(di, dj, dk):
-            x = self._gen_sparse(2, 20, [di, dj])[0]
-            t = self._gen_sparse(2, 20, [di, dk])[0]
+        def test_shape(di, dj, dk, nnz):
+            x = self._gen_sparse(2, nnz, [di, dj])[0]
+            t = self._gen_sparse(2, nnz, [di, dk])[0]
             y = torch.randn(dj, dk)
             alpha = random.random()
             beta = random.random()
@@ -594,9 +594,12 @@ class TestSparse(TestCase):
             expected = torch.mm(self.safeToDense(x), y)
             self.assertEqual(self.safeToDense(res), expected)
 
-        test_shape(7, 5, 3)
-        test_shape(1000, 100, 100)
-        test_shape(3000, 64, 300)
+        test_shape(7, 5, 3, 20)
+        test_shape(1000, 100, 100, 20)
+        test_shape(3000, 64, 300, 20)
+        test_shape(0, 100, 100, 0)
+        test_shape(1000, 0, 100, 0)
+        test_shape(1000, 100, 0, 0)
 
     @skipIfRocm
     def test_dsmm(self):
@@ -1447,7 +1450,7 @@ def load_tests(loader, tests, pattern):
         test_suite = unittest.TestSuite()
         for test_group in tests:
             for test in test_group:
-                if 'test_mm' in str(test):
+                if 'test_saddmm' in str(test):
                     test_suite.addTest(test)
         return test_suite
 
