@@ -436,14 +436,9 @@ class TestSparse(TestCase):
             y = x.clone()
             self.assertTrue(y.is_coalesced())
 
-        x, _, _ = self._gen_sparse(4, 20, 5)
-        _test_clone(x)
-
-        x, _, _ = self._gen_sparse(3, 10, [100, 100, 100, 5, 5, 5, 0])
-        _test_clone(x)
-
-        x, _, _ = self._gen_sparse(3, 0, [0, 0, 100, 5, 5, 5, 0])
-        _test_clone(x)        
+        _test_clone(self._gen_sparse(4, 20, 5)[0])
+        _test_clone(self._gen_sparse(3, 10, [100, 100, 100, 5, 5, 5, 0])[0])
+        _test_clone(self._gen_sparse(3, 0, [0, 0, 100, 5, 5, 5, 0])[0])
 
     @cuda_only
     def test_cuda_empty(self):
@@ -463,17 +458,19 @@ class TestSparse(TestCase):
 
     @skipIfRocm
     def test_transpose(self):
-        x = self._gen_sparse(4, 20, 5)[0]
-        y = self.safeToDense(x)
+        def _test_transpose(x):
+            y = self.safeToDense(x)
 
-        for i, j in itertools.combinations(range(4), 2):
-            x = x.transpose_(i, j)
-            y = y.transpose(i, j)
-            self.assertEqual(self.safeToDense(x), y)
+            for i, j in itertools.combinations(range(4), 2):
+                x = x.transpose_(i, j)
+                y = y.transpose(i, j)
+                self.assertEqual(self.safeToDense(x), y)
 
-            x = x.transpose(i, j)
-            y = y.transpose(i, j)
-            self.assertEqual(self.safeToDense(x), y)
+                x = x.transpose(i, j)
+                y = y.transpose(i, j)
+                self.assertEqual(self.safeToDense(x), y)
+
+        _test_transpose(self._gen_sparse(4, 20, 5)[0])
 
     @cpu_only
     def test_coalesce_transpose_mm(self):
@@ -1423,7 +1420,7 @@ def load_tests(loader, tests, pattern):
         test_suite = unittest.TestSuite()
         for test_group in tests:
             for test in test_group:
-                if 'test_cuda_empty' in str(test):
+                if 'test_clone' in str(test):
                     test_suite.addTest(test)
         return test_suite
 
