@@ -702,9 +702,14 @@ class TestSparse(TestCase):
 
     @skipIfRocm
     def test_norm(self):
-        x, _, _ = self._gen_sparse(3, 10, 100)
-        y = x.coalesce()
-        self.assertEqual(x.norm(), y._values().norm())
+        def test_shape(sparse_dims, nnz, with_size):
+            x, _, _ = self._gen_sparse(sparse_dims, nnz, with_size)
+            y = x.coalesce()
+            self.assertEqual(x.norm(), y._values().norm())
+
+        test_shape(3, 10, 100)
+        test_shape(4, 10, [100, 100, 100, 5, 5, 5, 0])
+        test_shape(4, 0, [0, 0, 100, 5, 5, 5, 0])
 
     def _test_basic_ops_tensors(self, x1, x2):
         y1 = x1 + x2
@@ -1460,7 +1465,7 @@ def load_tests(loader, tests, pattern):
         test_suite = unittest.TestSuite()
         for test_group in tests:
             for test in test_group:
-                if 'test_spadd_hybrid' in str(test):
+                if 'test_norm' in str(test):
                     test_suite.addTest(test)
         return test_suite
 
