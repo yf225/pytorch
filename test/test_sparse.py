@@ -711,7 +711,11 @@ class TestSparse(TestCase):
         test_shape(4, 10, [100, 100, 100, 5, 5, 5, 0])
         test_shape(4, 0, [0, 0, 100, 5, 5, 5, 0])
 
-    def _test_basic_ops_tensors(self, x1, x2):
+    def _test_basic_ops_shape(self, shape_i, shape_v=None):
+        shape = shape_i + (shape_v or [])
+        x1, _, _ = self._gen_sparse(len(shape_i), 9, shape)
+        x2, _, _ = self._gen_sparse(len(shape_i), 12, shape)
+
         y1 = x1 + x2
         y2 = x1.clone()
         y2.add_(x2)
@@ -766,24 +770,9 @@ class TestSparse(TestCase):
         self.assertFalse(x1.is_coalesced())
         self.assertTrue(y.is_coalesced())
         self.assertEqual(x1, y)
-        # check that coalesce is not in-place
+        # check that coalesce is out of place
         y._values().add_(1)
         self.assertEqual(z._values() + 1, y._values())
-
-    def _test_basic_ops_shape(self, shape_i, shape_v=None):
-        shape = shape_i + (shape_v or [])
-        x1, _, _ = self._gen_sparse(len(shape_i), 9, shape)
-        x2, _, _ = self._gen_sparse(len(shape_i), 12, shape)
-        self._test_basic_ops_tensors(x1, x2)
-
-    def _test_basic_ops_empty_tensor_shape(self, shape, shape_i=None, shape_v=None):
-        if shape_i and shape_v:
-            x1 = torch.sparse_coo_tensor(torch.zeros(shape_i), torch.zeros(shape_v), torch.Size(shape), device=self.device)
-            x2 = torch.sparse_coo_tensor(torch.zeros(shape_i), torch.zeros(shape_v), torch.Size(shape), device=self.device)
-        else:
-            x1 = torch.sparse_coo_tensor(size=shape, device=self.device)
-            x2 = torch.sparse_coo_tensor(size=shape, device=self.device)
-        self._test_basic_ops_tensors(x1, x2)
 
     @skipIfRocm
     def test_basic_ops(self):
@@ -793,13 +782,6 @@ class TestSparse(TestCase):
         self._test_basic_ops_shape([5, 5, 5, 5, 5, 5])
 
     @skipIfRocm
-    def test_basic_ops_empty_tensor(self):
-        self._test_basic_ops_empty_tensor_shape([5, 6, 0])
-        self._test_basic_ops_empty_tensor_shape([0, 10, 10, 10])
-        self._test_basic_ops_empty_tensor_shape([0, 50, 30, 20, 0])
-        self._test_basic_ops_empty_tensor_shape([0, 0, 5, 5, 5, 5, 5, 5, 0])
-
-    @skipIfRocm
     def test_basic_ops_hybrid(self):
         self._test_basic_ops_shape([5, 6], [2, 3])
         self._test_basic_ops_shape([10, 10, 10], [3])
@@ -807,12 +789,6 @@ class TestSparse(TestCase):
         self._test_basic_ops_shape([5, 5, 5, 5, 5, 5], [2])
 
     @skipIfRocm
-    def test_basic_ops_hybrid_empty_tensor(self):
-        self._test_basic_ops_empty_tensor_shape([5, 6, 0], [1, 1], [1, 6, 0])
-        self._test_basic_ops_empty_tensor_shape([0, 10, 10, 10], [2, 0], [0, 10, 10])
-        self._test_basic_ops_empty_tensor_shape([0, 50, 30, 20, 0], [3, 0], [0, 20, 0])
-        self._test_basic_ops_empty_tensor_shape([0, 0, 5, 5, 5, 5, 5, 5, 0], [2, 0], [0, 5, 5, 5, 5, 5, 5, 0])
-
     def test_add_dense_sparse_mismatch(self):
         x = torch.zeros([3, 4], dtype=self.value_dtype, device=self.device)
         sparse_y = self.SparseTensor(torch.zeros(1, 4, dtype=torch.int64, device=self.device),

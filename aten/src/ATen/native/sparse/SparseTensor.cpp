@@ -245,19 +245,16 @@ SparseTensor& copy_sparse_(SparseTensor& self, const SparseTensor& src) {
   return self;
 }
 
-// NOTE: `coalesce` should never be an in-place operation.
 SparseTensor coalesce_sparse_cpu(const SparseTensor& self) {
   AT_ASSERT(self.defined());
   AT_ASSERT(!self.is_variable());
   AT_ASSERT(self.is_sparse());
 
   if (self._nnz() < 2) {
-    SparseTensor dst = self.clone();
-    _get_sparse_impl(dst)->set_coalesced(true);
-    return dst;
+    _get_sparse_impl(self)->set_coalesced(true);
   }
   if (self.is_coalesced()) {
-    return self.clone();
+    return self;
   }
 
   LongTensor indices = self._indices();
