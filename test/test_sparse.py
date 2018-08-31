@@ -711,10 +711,10 @@ class TestSparse(TestCase):
         test_shape(4, 10, [100, 100, 100, 5, 5, 5, 0])
         test_shape(4, 0, [0, 0, 100, 5, 5, 5, 0])
 
-    def _test_basic_ops_shape(self, shape_i, shape_v=None):
+    def _test_basic_ops_shape(self, nnz_x1, nnz_x2, shape_i, shape_v=None):
         shape = shape_i + (shape_v or [])
-        x1, _, _ = self._gen_sparse(len(shape_i), 9, shape)
-        x2, _, _ = self._gen_sparse(len(shape_i), 12, shape)
+        x1, _, _ = self._gen_sparse(len(shape_i), nnz_x1, shape)
+        x2, _, _ = self._gen_sparse(len(shape_i), nnz_x2, shape)
 
         y1 = x1 + x2
         y2 = x1.clone()
@@ -776,17 +776,23 @@ class TestSparse(TestCase):
 
     @skipIfRocm
     def test_basic_ops(self):
-        self._test_basic_ops_shape([5, 6])
-        self._test_basic_ops_shape([10, 10, 10])
-        self._test_basic_ops_shape([50, 30, 20])
-        self._test_basic_ops_shape([5, 5, 5, 5, 5, 5])
+        self._test_basic_ops_shape(9, 12, [5, 6])
+        self._test_basic_ops_shape(9, 12, [10, 10, 10])
+        self._test_basic_ops_shape(9, 12, [50, 30, 20])
+        self._test_basic_ops_shape(9, 12, [5, 5, 5, 5, 5, 5])
+        self._test_basic_ops_shape(0, 12, [5, 5, 5, 5, 5, 5])
+        self._test_basic_ops_shape(9, 0, [5, 5, 5, 5, 5, 5])
+        self._test_basic_ops_shape(0, 0, [5, 5, 5, 5, 5, 5])
 
     @skipIfRocm
     def test_basic_ops_hybrid(self):
-        self._test_basic_ops_shape([5, 6], [2, 3])
-        self._test_basic_ops_shape([10, 10, 10], [3])
-        self._test_basic_ops_shape([50, 30, 20], [2])
-        self._test_basic_ops_shape([5, 5, 5, 5, 5, 5], [2])
+        self._test_basic_ops_shape(9, 12, [5, 6], [2, 3])
+        self._test_basic_ops_shape(9, 12, [10, 10, 10], [3])
+        self._test_basic_ops_shape(9, 12, [50, 30, 20], [2])
+        self._test_basic_ops_shape(9, 12, [5, 5, 5, 5, 5, 5], [2])
+        self._test_basic_ops_shape(0, 12, [5, 5, 5, 5, 5, 5], [2])
+        self._test_basic_ops_shape(9, 0, [5, 5, 5, 5, 5, 5], [2])
+        self._test_basic_ops_shape(0, 0, [5, 5, 5, 5, 5, 5], [2])
 
     @skipIfRocm
     def test_add_dense_sparse_mismatch(self):
@@ -1441,7 +1447,7 @@ def load_tests(loader, tests, pattern):
         test_suite = unittest.TestSuite()
         for test_group in tests:
             for test in test_group:
-                if 'test_norm' in str(test):
+                if 'test_basic_ops' in str(test):
                     test_suite.addTest(test)
         return test_suite
 
