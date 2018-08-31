@@ -428,6 +428,7 @@ SparseTensor& mul_out_sparse_cuda(SparseTensor& r_, const SparseTensor& t_, cons
   SparseTensor src = src_.coalesce();
 
   if (src_._nnz() == 0 || t_._nnz() == 0) {
+    r_.resize_as_(src_);
     return r_.zero_();
   }
 
