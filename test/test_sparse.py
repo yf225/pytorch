@@ -494,10 +494,8 @@ class TestSparse(TestCase):
 
         test_shape(10, 20, 30, 20)
         test_shape(0, 20, 30, 0)
-        with self.assertRaisesRegex(RuntimeError, "addmm: matrices expected, got empty tensor"):
-            test_shape(10, 0, 30, 0)
-        with self.assertRaisesRegex(RuntimeError, "addmm: matrices expected, got empty tensor"):
-            test_shape(10, 20, 0, 20)
+        test_shape(10, 0, 30, 0)
+        test_shape(10, 20, 0, 20)
 
     def test_t_empty(self):
         def test_in_place(x):
@@ -566,12 +564,9 @@ class TestSparse(TestCase):
         test_shape(100, 1000, 200, 20)
         test_shape(64, 10000, 300, 20)
         test_shape(0, 100, 100, 0)
-        with self.assertRaisesRegex(RuntimeError, "addmm: matrices expected, got empty tensor"):
-            test_shape(10, 0, 100, 0)
-        with self.assertRaisesRegex(RuntimeError, "addmm: matrices expected, got empty tensor"):
-            test_shape(10, 100, 0, 0)
-        with self.assertRaisesRegex(RuntimeError, "addmm: matrices expected, got empty tensor"):
-            test_shape(10, 100, 0, 20)
+        test_shape(10, 0, 100, 0)
+        test_shape(10, 100, 0, 0)
+        test_shape(10, 100, 0, 20)
 
     @cpu_only
     def test_saddmm(self):
@@ -614,20 +609,10 @@ class TestSparse(TestCase):
         test_shape(7, 5, 3, 20)
         test_shape(1000, 100, 100, 20)
         test_shape(3000, 64, 300, 20)
-        if self.is_cuda:
-            with self.assertRaisesRegex(RuntimeError, "cusparse runtime error: the GPU program failed to execute"):
-                test_shape(0, 100, 100, 0)
-            test_shape(1000, 0, 100, 0)
-            test_shape(1000, 100, 0, 0)
-            test_shape(1000, 100, 0, 20)
-        else:
-            test_shape(0, 100, 100, 0)
-            with self.assertRaisesRegex(RuntimeError, "addmm: matrices expected, got empty tensor"):
-                test_shape(1000, 0, 100, 0)
-            with self.assertRaisesRegex(RuntimeError, "addmm: matrices expected, got empty tensor"):
-                test_shape(1000, 100, 0, 0)
-            with self.assertRaisesRegex(RuntimeError, "addmm: matrices expected, got empty tensor"):
-                test_shape(1000, 100, 0, 20)
+        test_shape(0, 100, 100, 0)
+        test_shape(1000, 0, 100, 0)
+        test_shape(1000, 100, 0, 0)
+        test_shape(1000, 100, 0, 20)
 
     @skipIfRocm
     def test_hsmm(self):
