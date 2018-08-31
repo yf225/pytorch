@@ -526,17 +526,18 @@ class TestSparse(TestCase):
 
     @skipIfRocm
     def test_add_zeros(self):
-        def test_shape(sparse_dims, sizes):
-            x, _, _ = self._gen_sparse(sparse_dims, 20, sizes)
+        def test_shape(sparse_dims, nnz, sizes):
+            x, _, _ = self._gen_sparse(sparse_dims, nnz, sizes)
             zeros = torch.zeros(sizes, layout=torch.sparse_coo).to(x.device)
             r1 = zeros + x
             r2 = x + zeros
             self.assertEqual(r1, x)
             self.assertEqual(r2, x)
 
-        test_shape(1, [1])
-        test_shape(4, [3, 17, 19, 5])
-        test_shape(2, [3, 17, 19, 5])
+        test_shape(1, 20, [1])
+        test_shape(4, 20, [3, 17, 19, 5])
+        test_shape(2, 20, [3, 17, 19, 5])
+        test_shape(2, 20, [3, 17, 19, 0])
 
     @cpu_only
     def test_mm(self):
@@ -1437,7 +1438,7 @@ def load_tests(loader, tests, pattern):
         test_suite = unittest.TestSuite()
         for test_group in tests:
             for test in test_group:
-                if 'test_t_empty' in str(test):
+                if 'test_add_zeros' in str(test):
                     test_suite.addTest(test)
         return test_suite
 
