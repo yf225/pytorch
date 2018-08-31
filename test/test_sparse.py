@@ -476,8 +476,8 @@ class TestSparse(TestCase):
 
     @cpu_only
     def test_coalesce_transpose_mm(self):
-        def test_shape(di, dj, dk):
-            x, _, _ = self._gen_sparse(2, 20, [dj, di])
+        def test_shape(di, dj, dk, nnz):
+            x, _, _ = self._gen_sparse(2, nnz, [dj, di])
             y = torch.randn(dj, dk)
 
             x_coalesced = x.coalesce()
@@ -490,7 +490,12 @@ class TestSparse(TestCase):
             expected = torch.mm(self.safeToDense(x_coalesced_t), y)
             self.assertEqual(res, expected)
 
-        test_shape(10, 20, 30)
+        test_shape(10, 20, 30, 20)
+        test_shape(0, 20, 30, 0)
+        with self.assertRaisesRegex(RuntimeError, "addmm: matrices expected, got empty tensor"):
+            test_shape(10, 0, 30, 0)
+        with self.assertRaisesRegex(RuntimeError, "addmm: matrices expected, got empty tensor"):
+            test_shape(10, 20, 0, 20)
 
     def test_t_empty(self):
         x = self.SparseTensor(2, 3)
@@ -1422,7 +1427,7 @@ def load_tests(loader, tests, pattern):
         test_suite = unittest.TestSuite()
         for test_group in tests:
             for test in test_group:
-                if 'test_transpose' in str(test):
+                if 'test_coalesce_transpose_mm' in str(test):
                     test_suite.addTest(test)
         return test_suite
 
