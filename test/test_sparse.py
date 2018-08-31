@@ -495,6 +495,7 @@ class TestSparse(TestCase):
         test_shape(10, 20, 30, 20)
         test_shape(0, 20, 30, 0)
         test_shape(10, 0, 30, 0)
+        test_shape(10, 20, 0, 0)
         test_shape(10, 20, 0, 20)
 
     def test_t_empty(self):
@@ -595,6 +596,7 @@ class TestSparse(TestCase):
         test_shape(0, 100, 100, 0)
         test_shape(1000, 0, 100, 0)
         test_shape(1000, 100, 0, 0)
+        test_shape(1000, 100, 0, 20)
 
     @skipIfRocm
     def test_dsmm(self):
