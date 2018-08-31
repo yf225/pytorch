@@ -541,8 +541,8 @@ class TestSparse(TestCase):
 
     @cpu_only
     def test_mm(self):
-        def test_shape(di, dj, dk):
-            x, _, _ = self._gen_sparse(2, 20, [di, dj])
+        def test_shape(di, dj, dk, nnz):
+            x, _, _ = self._gen_sparse(2, nnz, [di, dj])
             t = torch.randn(di, dk)
             y = torch.randn(dj, dk)
             alpha = random.random()
@@ -560,9 +560,16 @@ class TestSparse(TestCase):
             expected = torch.mm(self.safeToDense(x), y)
             self.assertEqual(res, expected)
 
-        test_shape(10, 100, 100)
-        test_shape(100, 1000, 200)
-        test_shape(64, 10000, 300)
+        test_shape(10, 100, 100, 20)
+        test_shape(100, 1000, 200, 20)
+        test_shape(64, 10000, 300, 20)
+        test_shape(0, 100, 100, 0)
+        with self.assertRaisesRegex(RuntimeError, "addmm: matrices expected, got empty tensor"):
+            test_shape(10, 0, 100, 0)
+        with self.assertRaisesRegex(RuntimeError, "addmm: matrices expected, got empty tensor"):
+            test_shape(10, 100, 0, 0)
+        with self.assertRaisesRegex(RuntimeError, "addmm: matrices expected, got empty tensor"):
+            test_shape(10, 100, 0, 20)
 
     @cpu_only
     def test_saddmm(self):
@@ -1438,7 +1445,7 @@ def load_tests(loader, tests, pattern):
         test_suite = unittest.TestSuite()
         for test_group in tests:
             for test in test_group:
-                if 'test_add_zeros' in str(test):
+                if 'test_mm' in str(test):
                     test_suite.addTest(test)
         return test_suite
 
