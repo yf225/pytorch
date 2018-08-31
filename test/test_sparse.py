@@ -783,6 +783,7 @@ class TestSparse(TestCase):
         self._test_basic_ops_shape(0, 12, [5, 5, 5, 5, 5, 5])
         self._test_basic_ops_shape(9, 0, [5, 5, 5, 5, 5, 5])
         self._test_basic_ops_shape(0, 0, [5, 5, 5, 5, 5, 5])
+        self._test_basic_ops_shape(0, 0, [5, 5, 5, 5, 0, 0])
 
     @skipIfRocm
     def test_basic_ops_hybrid(self):
@@ -793,6 +794,11 @@ class TestSparse(TestCase):
         self._test_basic_ops_shape(0, 12, [5, 5, 5, 5, 5, 5], [2])
         self._test_basic_ops_shape(9, 0, [5, 5, 5, 5, 5, 5], [2])
         self._test_basic_ops_shape(0, 0, [5, 5, 5, 5, 5, 5], [2])
+        self._test_basic_ops_shape(9, 12, [5, 5, 5, 5, 5, 5], [2, 0])
+        self._test_basic_ops_shape(0, 12, [5, 5, 5, 5, 5, 5], [2, 0])
+        self._test_basic_ops_shape(9, 0, [5, 5, 5, 5, 5, 5], [2, 0])
+        self._test_basic_ops_shape(0, 0, [5, 5, 5, 5, 5, 5], [2, 0])
+        self._test_basic_ops_shape(0, 0, [5, 5, 5, 5, 0, 0], [2, 0])
 
     @skipIfRocm
     def test_add_dense_sparse_mismatch(self):
