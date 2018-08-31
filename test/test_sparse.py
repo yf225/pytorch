@@ -109,7 +109,7 @@ class TestSparse(TestCase):
 
     @skipIfRocm
     def test_basic(self):
-        def _check_sparse_tensor(sparse_dims, nnz, with_size):
+        def test_shape(sparse_dims, nnz, with_size):
             if isinstance(with_size, Number):
                 with_size = [with_size] * sparse_dims
             x, i, v = self._gen_sparse(sparse_dims, nnz, with_size)
@@ -119,10 +119,10 @@ class TestSparse(TestCase):
             self.assertEqual(self.safeCoalesce(x)._nnz(), nnz)
             self.assertEqual(list(x.size()), with_size)
 
-        _check_sparse_tensor(3, 10, 100)
-        _check_sparse_tensor(3, 10, [100, 100, 100])
-        _check_sparse_tensor(3, 10, [100, 100, 100, 5, 5, 5, 0])
-        _check_sparse_tensor(3, 0, [0, 0, 100, 5, 5, 5, 0])
+        test_shape(3, 10, 100)
+        test_shape(3, 10, [100, 100, 100])
+        test_shape(3, 10, [100, 100, 100, 5, 5, 5, 0])
+        test_shape(3, 0, [0, 0, 100, 5, 5, 5, 0])
 
         # Make sure that coalesce handles duplicate indices correctly
         i = self.IndexTensor([[9, 0, 0, 0, 8, 1, 1, 1, 2, 7, 2, 2, 3, 4, 6, 9]])
@@ -160,7 +160,7 @@ class TestSparse(TestCase):
 
     @skipIfRocm
     def test_to_dense(self):
-        def _test_to_dense(x, res):
+        def test_tensor(x, res):
             x.to_dense()  # Tests double to_dense for memory corruption
             x.to_dense()
             x.to_dense()
@@ -188,7 +188,7 @@ class TestSparse(TestCase):
              [0, 0, 0, 0, 0],
              [0, 0, 0, 0, 4]],
         ])
-        _test_to_dense(x, res)
+        test_tensor(x, res)
 
         i = self.IndexTensor([
             [0, 1, 2, 2],
@@ -198,7 +198,7 @@ class TestSparse(TestCase):
         v = self.ValueTensor(4, 0)
         x = self.SparseTensor(i, v, torch.Size([3, 4, 5, 0]))
         res = self.ValueTensor(3, 4, 5, 0)
-        _test_to_dense(x, res)
+        test_tensor(x, res)
 
     @skipIfRocm
     def test_shared(self):
@@ -218,7 +218,7 @@ class TestSparse(TestCase):
 
     @skipIfRocm
     def test_to_dense_hybrid(self):
-        def _test_to_dense_hybrid(x, res):
+        def test_tensor(x, res):
             x.to_dense()  # Tests double to_dense for memory corruption
             x.to_dense()
             x.to_dense()
@@ -245,7 +245,7 @@ class TestSparse(TestCase):
              [0, 0],
              [4, 5]],
         ])
-        _test_to_dense_hybrid(x, res)
+        test_tensor(x, res)
 
         i = self.IndexTensor([
             [0, 1, 2, 2],
@@ -254,11 +254,11 @@ class TestSparse(TestCase):
         v = self.ValueTensor(4, 2, 0)
         x = self.SparseTensor(i, v, torch.Size([3, 4, 2, 0]))
         res = self.ValueTensor(3, 4, 2, 0)
-        _test_to_dense_hybrid(x, res)
+        test_tensor(x, res)
 
     @skipIfRocm
     def test_contig(self):
-        def _test_contig(x, exp_i, exp_v):
+        def test_tensor(x, exp_i, exp_v):
             x = self.safeCoalesce(x)
             self.assertEqual(exp_i, x._indices())
             self.assertEqual(exp_v, x._values())
@@ -274,7 +274,7 @@ class TestSparse(TestCase):
             [31, 92, 65, 50, 34, 62, 22, 56, 74, 89],
         ])
         exp_v = self.ValueTensor([2, 1, 6, 4, 10, 3, 5, 9, 8, 7])
-        _test_contig(x, exp_i, exp_v)
+        test_tensor(x, exp_i, exp_v)
 
         i = self.IndexTensor([
             [2, 0, 2, 1],
@@ -289,7 +289,7 @@ class TestSparse(TestCase):
             [0, 0, 1, 4],
         ])
         exp_v = self.ValueTensor([2, 1, 3, 4])
-        _test_contig(x, exp_i, exp_v)
+        test_tensor(x, exp_i, exp_v)
 
         i = self.IndexTensor([
             [2, 0, 2, 1],
@@ -304,7 +304,7 @@ class TestSparse(TestCase):
             [0, 0, 1, 4],
         ])
         exp_v = self.ValueTensor(4, 0)
-        _test_contig(x, exp_i, exp_v)
+        test_tensor(x, exp_i, exp_v)
 
         # Duplicate indices
         i = self.IndexTensor([
@@ -320,7 +320,7 @@ class TestSparse(TestCase):
             [0, 4],
         ])
         exp_v = self.ValueTensor([6, 4])
-        _test_contig(x, exp_i, exp_v)
+        test_tensor(x, exp_i, exp_v)
 
         i = self.IndexTensor([
             [0, 0, 2, 0],
@@ -335,11 +335,11 @@ class TestSparse(TestCase):
             [0, 4],
         ])
         exp_v = self.ValueTensor(2, 0)
-        _test_contig(x, exp_i, exp_v)
+        test_tensor(x, exp_i, exp_v)
 
     @skipIfRocm
     def test_contig_hybrid(self):
-        def _test_contig_hybrid(x, exp_i, exp_v):
+        def test_tensor(x, exp_i, exp_v):
             x = self.safeCoalesce(x)
             self.assertEqual(exp_i, x._indices())
             self.assertEqual(exp_v, x._values())
@@ -361,7 +361,7 @@ class TestSparse(TestCase):
             [2, 3], [1, 2], [6, 7], [4, 5], [10, 11],
             [3, 4], [5, 6], [9, 10], [8, 9], [7, 8],
         ])
-        _test_contig_hybrid(x, exp_i, exp_v)
+        test_tensor(x, exp_i, exp_v)
 
         i = self.IndexTensor([
             [2, 0, 2, 1],
@@ -376,7 +376,7 @@ class TestSparse(TestCase):
             [0, 0, 1, 4],
         ])
         exp_v = self.ValueTensor([[2, 2, 2], [1, 1, 1], [3, 3, 3], [4, 4, 4]])
-        _test_contig_hybrid(x, exp_i, exp_v)
+        test_tensor(x, exp_i, exp_v)
 
         i = self.IndexTensor([
             [2, 0, 2, 1],
@@ -391,7 +391,7 @@ class TestSparse(TestCase):
             [0, 0, 1, 4],
         ])
         exp_v = self.ValueTensor(4, 3, 0)
-        _test_contig_hybrid(x, exp_i, exp_v)
+        test_tensor(x, exp_i, exp_v)
 
         # Duplicate indices
         i = self.IndexTensor([
@@ -407,7 +407,7 @@ class TestSparse(TestCase):
             [0, 4],
         ])
         exp_v = self.ValueTensor([[6, 4, 5], [4, 3, 4]])
-        _test_contig_hybrid(x, exp_i, exp_v)
+        test_tensor(x, exp_i, exp_v)
 
         i = self.IndexTensor([
             [0, 0, 2, 0],
@@ -422,11 +422,12 @@ class TestSparse(TestCase):
             [0, 4],
         ])
         exp_v = self.ValueTensor(2, 3, 0)
-        _test_contig_hybrid(x, exp_i, exp_v)
+        test_tensor(x, exp_i, exp_v)
 
     @skipIfRocm
     def test_clone(self):
-        def _test_clone(x):
+        def test_shape(sparse_dims, nnz, with_size):
+            x = self._gen_sparse(sparse_dims, nnz, with_size)[0]
             if self.is_uncoalesced:
                 self.assertFalse(x.is_coalesced())
                 y = x.clone()
@@ -436,13 +437,13 @@ class TestSparse(TestCase):
             y = x.clone()
             self.assertTrue(y.is_coalesced())
 
-        _test_clone(self._gen_sparse(4, 20, 5)[0])
-        _test_clone(self._gen_sparse(3, 10, [100, 100, 100, 5, 5, 5, 0])[0])
-        _test_clone(self._gen_sparse(3, 0, [0, 0, 100, 5, 5, 5, 0])[0])
+        test_shape(4, 20, 5)
+        test_shape(3, 10, [100, 100, 100, 5, 5, 5, 0])
+        test_shape(3, 0, [0, 0, 100, 5, 5, 5, 0])
 
     @cuda_only
     def test_cuda_empty(self):
-        def _test_cuda_empty(x):
+        def test_tensor(x):
             y = x.cuda(0)
             self.assertEqual(x._sparseDims(), y._sparseDims())
             self.assertEqual(x._denseDims(), y._denseDims())
@@ -451,14 +452,15 @@ class TestSparse(TestCase):
             self.assertEqual(y._denseDims(), x._denseDims())
 
         x = torch.sparse.FloatTensor(2, 3, 4)
-        _test_cuda_empty(x)
+        test_tensor(x)
 
         x = torch.sparse.FloatTensor(2, 3, 4, 0)
-        _test_cuda_empty(x)        
+        test_tensor(x)
 
     @skipIfRocm
     def test_transpose(self):
-        def _test_transpose(x):
+        def test_shape(sparse_dims, nnz, with_size):
+            x = self._gen_sparse(sparse_dims, nnz, with_size)[0]
             y = self.safeToDense(x)
 
             for i, j in itertools.combinations(range(4), 2):
@@ -470,9 +472,9 @@ class TestSparse(TestCase):
                 y = y.transpose(i, j)
                 self.assertEqual(self.safeToDense(x), y)
 
-        _test_transpose(self._gen_sparse(4, 20, 5)[0])
-        _test_transpose(self._gen_sparse(4, 10, [100, 100, 100, 5, 5, 5, 0])[0])
-        _test_transpose(self._gen_sparse(4, 0, [0, 0, 100, 5, 5, 5, 0])[0])
+        test_shape(4, 20, 5)
+        test_shape(4, 10, [100, 100, 100, 5, 5, 5, 0])
+        test_shape(4, 0, [0, 0, 100, 5, 5, 5, 0])
 
     @cpu_only
     def test_coalesce_transpose_mm(self):
@@ -498,7 +500,7 @@ class TestSparse(TestCase):
             test_shape(10, 20, 0, 20)
 
     def test_t_empty(self):
-        def _test_t_empty_in_place(x):
+        def test_in_place(x):
             shape_original = x.shape
             x.t_()
             self.assertEqual(torch.Size([shape_original[1], shape_original[0]]), x.size())
@@ -507,7 +509,7 @@ class TestSparse(TestCase):
             self.assertEqual(x._sparseDims(), 2)
             self.assertEqual(x._denseDims(), 0)
 
-        def _test_t_empty_not_in_place(x):
+        def test_not_in_place(x):
             shape_original = x.shape
             y = x.t()
             self.assertEqual(torch.Size([shape_original[1], shape_original[0]]), y.size())
@@ -517,12 +519,12 @@ class TestSparse(TestCase):
             self.assertEqual(x._denseDims(), 0)
 
         x = self.SparseTensor(2, 3)
-        _test_t_empty_in_place(x)
-        _test_t_empty_not_in_place(x)
+        test_in_place(x)
+        test_not_in_place(x)
 
         x = self.SparseTensor(2, 0)
-        _test_t_empty_in_place(x)
-        _test_t_empty_not_in_place(x)
+        test_in_place(x)
+        test_not_in_place(x)
 
     @skipIfRocm
     def test_add_zeros(self):
