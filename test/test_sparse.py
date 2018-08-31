@@ -498,21 +498,31 @@ class TestSparse(TestCase):
             test_shape(10, 20, 0, 20)
 
     def test_t_empty(self):
-        x = self.SparseTensor(2, 3)
-        x.t_()
-        self.assertEqual(torch.Size([3, 2]), x.size())
-        self.assertEqual(0, x._indices().numel())
-        self.assertEqual(0, x._values().numel())
-        self.assertEqual(x._sparseDims(), 2)
-        self.assertEqual(x._denseDims(), 0)
+        def _test_t_empty_in_place(x):
+            shape_original = x.shape
+            x.t_()
+            self.assertEqual(torch.Size([shape_original[1], shape_original[0]]), x.size())
+            self.assertEqual(0, x._indices().numel())
+            self.assertEqual(0, x._values().numel())
+            self.assertEqual(x._sparseDims(), 2)
+            self.assertEqual(x._denseDims(), 0)
+
+        def _test_t_empty_not_in_place(x):
+            shape_original = x.shape
+            y = x.t()
+            self.assertEqual(torch.Size([shape_original[1], shape_original[0]]), y.size())
+            self.assertEqual(0, y._indices().numel())
+            self.assertEqual(0, y._values().numel())
+            self.assertEqual(x._sparseDims(), 2)
+            self.assertEqual(x._denseDims(), 0)
 
         x = self.SparseTensor(2, 3)
-        y = x.t()
-        self.assertEqual(torch.Size([3, 2]), y.size())
-        self.assertEqual(0, y._indices().numel())
-        self.assertEqual(0, y._values().numel())
-        self.assertEqual(x._sparseDims(), 2)
-        self.assertEqual(x._denseDims(), 0)
+        _test_t_empty_in_place(x)
+        _test_t_empty_not_in_place(x)
+
+        x = self.SparseTensor(2, 0)
+        _test_t_empty_in_place(x)
+        _test_t_empty_not_in_place(x)
 
     @skipIfRocm
     def test_add_zeros(self):
@@ -1427,7 +1437,7 @@ def load_tests(loader, tests, pattern):
         test_suite = unittest.TestSuite()
         for test_group in tests:
             for test in test_group:
-                if 'test_coalesce_transpose_mm' in str(test):
+                if 'test_t_empty' in str(test):
                     test_suite.addTest(test)
         return test_suite
 
