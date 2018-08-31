@@ -447,13 +447,19 @@ class TestSparse(TestCase):
 
     @cuda_only
     def test_cuda_empty(self):
+        def _test_cuda_empty(x):
+            y = x.cuda(0)
+            self.assertEqual(x._sparseDims(), y._sparseDims())
+            self.assertEqual(x._denseDims(), y._denseDims())
+            x = y.cpu()
+            self.assertEqual(y._sparseDims(), x._sparseDims())
+            self.assertEqual(y._denseDims(), x._denseDims())
+
         x = torch.sparse.FloatTensor(2, 3, 4)
-        y = x.cuda(0)
-        self.assertEqual(x._sparseDims(), y._sparseDims())
-        self.assertEqual(x._denseDims(), y._denseDims())
-        x = y.cpu()
-        self.assertEqual(y._sparseDims(), x._sparseDims())
-        self.assertEqual(y._denseDims(), x._denseDims())
+        _test_cuda_empty(x)
+
+        x = torch.sparse.FloatTensor(2, 3, 4, 0)
+        _test_cuda_empty(x)        
 
     @skipIfRocm
     def test_transpose(self):
@@ -1417,7 +1423,7 @@ def load_tests(loader, tests, pattern):
         test_suite = unittest.TestSuite()
         for test_group in tests:
             for test in test_group:
-                if 'test_clone' in str(test):
+                if 'test_cuda_empty' in str(test):
                     test_suite.addTest(test)
         return test_suite
 
