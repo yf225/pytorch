@@ -106,37 +106,38 @@ Tensor& s_addmm_out_sparse_dense_cuda(Tensor& r_, const Tensor& t, const SparseT
           r__.transpose_(0, 1);
         }
 
-        /* dense */
-        Tensor dense_;
-        char transpose_dense;
-        if(dense.stride(0) == 1 && dense.stride(1) == dense.size(0)) {
-          transpose_dense = 'n';
-          dense_ = dense;
-        } else if(dense.stride(1) == 1 && dense.stride(0) != dense.size(1)) {
-          transpose_dense = 't';
-          dense_ = dense;
-        } else {
-          transpose_dense = 't';
-          dense_ = dense.contiguous();
+        if (nnz > 0) {
+          /* dense */
+          Tensor dense_;
+          char transpose_dense;
+          if(dense.stride(0) == 1 && dense.stride(1) == dense.size(0)) {
+            transpose_dense = 'n';
+            dense_ = dense;
+          } else if(dense.stride(1) == 1 && dense.stride(0) != dense.size(1)) {
+            transpose_dense = 't';
+            dense_ = dense;
+          } else {
+            transpose_dense = 't';
+            dense_ = dense.contiguous();
+          }
+
+          sparse::cuda::csrmm2(
+            'n',
+            transpose_dense,
+            m,
+            n,
+            k,
+            nnz,
+            cast_alpha,
+            values.data<scalar_t>(),
+            csr.data<int32_t>(),
+            colIndicesInt.data<int32_t>(),
+            dense_.data<scalar_t>(),
+            (transpose_dense == 'n' ? dense_.stride(1) : dense_.stride(0)),
+            cast_beta,
+            r__.data<scalar_t>(),
+            r__.stride(1));
         }
-
-        sparse::cuda::csrmm2(
-          'n',
-          transpose_dense,
-          m,
-          n,
-          k,
-          nnz,
-          cast_alpha,
-          values.data<scalar_t>(),
-          csr.data<int32_t>(),
-          colIndicesInt.data<int32_t>(),
-          dense_.data<scalar_t>(),
-          (transpose_dense == 'n' ? dense_.stride(1) : dense_.stride(0)),
-          cast_beta,
-          r__.data<scalar_t>(),
-          r__.stride(1));
-
       });
 
   r_.copy_(r__);

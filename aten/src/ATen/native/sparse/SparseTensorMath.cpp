@@ -520,7 +520,6 @@ Tensor& s_addmm_out_sparse_dense_cpu(
 
   AT_CHECK(sparse_._sparseDims() == 2, "addmm: matrices expected, got ", sparse_._sparseDims(), "D tensor");
   AT_CHECK(sparse_._denseDims() == 0, "addmm: scalar values expected, got ", sparse_._denseDims(), "D values");
-  AT_CHECK(dense.numel() != 0, "addmm: matrices expected, got empty tensor");
   AT_CHECK(dense.dim() == 2, "addmm: matrices expected, got ", dense.dim(), "D tensor");
 
   SparseTensor sparse = sparse_.coalesce();
