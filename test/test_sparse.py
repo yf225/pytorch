@@ -603,17 +603,31 @@ class TestSparse(TestCase):
 
     @skipIfRocm
     def test_dsmm(self):
-        def test_shape(di, dj, dk):
-            x = self._gen_sparse(2, 20, [di, dj])[0]
+        def test_shape(di, dj, dk, nnz):
+            x = self._gen_sparse(2, nnz, [di, dj])[0]
             y = self.randn(dj, dk)
 
             res = torch.dsmm(x, y)
             expected = torch.mm(self.safeToDense(x), y)
             self.assertEqual(res, expected)
 
-        test_shape(7, 5, 3)
-        test_shape(1000, 100, 100)
-        test_shape(3000, 64, 300)
+        test_shape(7, 5, 3, 20)
+        test_shape(1000, 100, 100, 20)
+        test_shape(3000, 64, 300, 20)
+        if self.is_cuda:
+            with self.assertRaisesRegex(RuntimeError, "cusparse runtime error: the GPU program failed to execute"):
+                test_shape(0, 100, 100, 0)
+            test_shape(1000, 0, 100, 0)
+            test_shape(1000, 100, 0, 0)
+            test_shape(1000, 100, 0, 20)
+        else:
+            test_shape(0, 100, 100, 0)
+            with self.assertRaisesRegex(RuntimeError, "addmm: matrices expected, got empty tensor"):
+                test_shape(1000, 0, 100, 0)
+            with self.assertRaisesRegex(RuntimeError, "addmm: matrices expected, got empty tensor"):
+                test_shape(1000, 100, 0, 0)
+            with self.assertRaisesRegex(RuntimeError, "addmm: matrices expected, got empty tensor"):
+                test_shape(1000, 100, 0, 20)
 
     @skipIfRocm
     def test_hsmm(self):
@@ -1450,7 +1464,7 @@ def load_tests(loader, tests, pattern):
         test_suite = unittest.TestSuite()
         for test_group in tests:
             for test in test_group:
-                if 'test_saddmm' in str(test):
+                if 'test_dsmm' in str(test):
                     test_suite.addTest(test)
         return test_suite
 
