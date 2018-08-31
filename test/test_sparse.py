@@ -339,6 +339,11 @@ class TestSparse(TestCase):
 
     @skipIfRocm
     def test_contig_hybrid(self):
+        def _test_contig_hybrid(x, exp_i, exp_v):
+            x = self.safeCoalesce(x)
+            self.assertEqual(exp_i, x._indices())
+            self.assertEqual(exp_v, x._values())
+
         i = self.IndexTensor([
             [1, 0, 35, 14, 39, 6, 71, 66, 40, 27],
             [92, 31, 62, 50, 22, 65, 89, 74, 56, 34],
@@ -356,9 +361,7 @@ class TestSparse(TestCase):
             [2, 3], [1, 2], [6, 7], [4, 5], [10, 11],
             [3, 4], [5, 6], [9, 10], [8, 9], [7, 8],
         ])
-        x = self.safeCoalesce(x)
-        self.assertEqual(exp_i, x._indices())
-        self.assertEqual(exp_v, x._values())
+        _test_contig_hybrid(x, exp_i, exp_v)
 
         i = self.IndexTensor([
             [2, 0, 2, 1],
@@ -373,10 +376,22 @@ class TestSparse(TestCase):
             [0, 0, 1, 4],
         ])
         exp_v = self.ValueTensor([[2, 2, 2], [1, 1, 1], [3, 3, 3], [4, 4, 4]])
+        _test_contig_hybrid(x, exp_i, exp_v)
 
-        x = self.safeCoalesce(x)
-        self.assertEqual(exp_i, x._indices())
-        self.assertEqual(exp_v, x._values())
+        i = self.IndexTensor([
+            [2, 0, 2, 1],
+            [0, 0, 3, 0],
+            [1, 0, 4, 0],
+        ])
+        v = self.ValueTensor(4, 3, 0)
+        x = self.SparseTensor(i, v, torch.Size([3, 4, 5, 3, 0]))
+        exp_i = self.IndexTensor([
+            [0, 1, 2, 2],
+            [0, 0, 0, 3],
+            [0, 0, 1, 4],
+        ])
+        exp_v = self.ValueTensor(4, 3, 0)
+        _test_contig_hybrid(x, exp_i, exp_v)
 
         # Duplicate indices
         i = self.IndexTensor([
@@ -392,10 +407,22 @@ class TestSparse(TestCase):
             [0, 4],
         ])
         exp_v = self.ValueTensor([[6, 4, 5], [4, 3, 4]])
+        _test_contig_hybrid(x, exp_i, exp_v)
 
-        x = self.safeCoalesce(x)
-        self.assertEqual(exp_i, x._indices())
-        self.assertEqual(exp_v, x._values())
+        i = self.IndexTensor([
+            [0, 0, 2, 0],
+            [0, 0, 3, 0],
+            [0, 0, 4, 0],
+        ])
+        v = self.ValueTensor(4, 3, 0)
+        x = self.SparseTensor(i, v, torch.Size([3, 4, 5, 3, 0]))
+        exp_i = self.IndexTensor([
+            [0, 2],
+            [0, 3],
+            [0, 4],
+        ])
+        exp_v = self.ValueTensor(2, 3, 0)
+        _test_contig_hybrid(x, exp_i, exp_v)
 
     @skipIfRocm
     def test_clone(self):
@@ -1381,7 +1408,7 @@ def load_tests(loader, tests, pattern):
         test_suite = unittest.TestSuite()
         for test_group in tests:
             for test in test_group:
-                if 'test_contig' in str(test):
+                if 'test_contig_hybrid' in str(test):
                     test_suite.addTest(test)
         return test_suite
 
