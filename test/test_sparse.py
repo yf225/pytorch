@@ -426,15 +426,24 @@ class TestSparse(TestCase):
 
     @skipIfRocm
     def test_clone(self):
-        x, _, _ = self._gen_sparse(4, 20, 5)
-        if self.is_uncoalesced:
-            self.assertFalse(x.is_coalesced())
+        def _test_clone(x):
+            if self.is_uncoalesced:
+                self.assertFalse(x.is_coalesced())
+                y = x.clone()
+                self.assertFalse(y.is_coalesced())
+            x = x.coalesce()
+            self.assertTrue(x.is_coalesced())
             y = x.clone()
-            self.assertFalse(y.is_coalesced())
-        x = x.coalesce()
-        self.assertTrue(x.is_coalesced())
-        y = x.clone()
-        self.assertTrue(y.is_coalesced())
+            self.assertTrue(y.is_coalesced())
+
+        x, _, _ = self._gen_sparse(4, 20, 5)
+        _test_clone(x)
+
+        x, _, _ = self._gen_sparse(3, 10, [100, 100, 100, 5, 5, 5, 0])
+        _test_clone(x)
+
+        x, _, _ = self._gen_sparse(3, 0, [0, 0, 100, 5, 5, 5, 0])
+        _test_clone(x)        
 
     @cuda_only
     def test_cuda_empty(self):
@@ -1408,7 +1417,7 @@ def load_tests(loader, tests, pattern):
         test_suite = unittest.TestSuite()
         for test_group in tests:
             for test in test_group:
-                if 'test_contig_hybrid' in str(test):
+                if 'test_clone' in str(test):
                     test_suite.addTest(test)
         return test_suite
 
