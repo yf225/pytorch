@@ -695,6 +695,10 @@ class TestSparse(TestCase):
         self._test_spadd_shape(10, [10, 10, 10], [3])
         self._test_spadd_shape(10, [50, 30, 20], [2])
         self._test_spadd_shape(10, [5, 5, 5, 5, 5, 5], [2])
+        self._test_spadd_shape(0, [0, 30, 20], [2, 0])
+        self._test_spadd_shape(0, [50, 0, 20], [2, 0])
+        self._test_spadd_shape(0, [50, 30, 0], [2, 0])
+        self._test_spadd_shape(10, [50, 30, 20], [2, 0])
 
     @skipIfRocm
     def test_norm(self):
@@ -1456,7 +1460,7 @@ def load_tests(loader, tests, pattern):
         test_suite = unittest.TestSuite()
         for test_group in tests:
             for test in test_group:
-                if 'test_spadd' in str(test):
+                if 'test_spadd_hybrid' in str(test):
                     test_suite.addTest(test)
         return test_suite
 
