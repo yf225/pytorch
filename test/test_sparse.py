@@ -634,9 +634,9 @@ class TestSparse(TestCase):
         test_shape(1000, 100, 0, 0)
         test_shape(1000, 100, 0, 20)
 
-    def _test_spadd_shape(self, shape_i, shape_v=None):
+    def _test_spadd_shape(self, nnz, shape_i, shape_v=None):
         shape = shape_i + (shape_v or [])
-        x, _, _ = self._gen_sparse(len(shape_i), 10, shape)
+        x, _, _ = self._gen_sparse(len(shape_i), nnz, shape)
         y = self.randn(*shape)
         r = random.random()
 
@@ -658,7 +658,7 @@ class TestSparse(TestCase):
 
         self.assertEqual(res, expected)
 
-        x, i, v = self._gen_sparse(len(shape_i), 10, shape)
+        x, i, v = self._gen_sparse(len(shape_i), nnz, shape)
         nnz = i.size(1)
 
         # Non contiguous sparse indices tensor
@@ -681,17 +681,20 @@ class TestSparse(TestCase):
 
     @skipIfRocm
     def test_spadd(self):
-        self._test_spadd_shape([5, 6])
-        self._test_spadd_shape([10, 10, 10])
-        self._test_spadd_shape([50, 30, 20])
-        self._test_spadd_shape([5, 5, 5, 5, 5, 5])
+        self._test_spadd_shape(10, [5, 6])
+        self._test_spadd_shape(10, [10, 10, 10])
+        self._test_spadd_shape(10, [50, 30, 20])
+        self._test_spadd_shape(10, [5, 5, 5, 5, 5, 5])
+        self._test_spadd_shape(0, [0, 30, 20])
+        self._test_spadd_shape(0, [50, 0, 20])
+        self._test_spadd_shape(0, [50, 30, 0])
 
     @skipIfRocm
     def test_spadd_hybrid(self):
-        self._test_spadd_shape([5, 6], [2, 3])
-        self._test_spadd_shape([10, 10, 10], [3])
-        self._test_spadd_shape([50, 30, 20], [2])
-        self._test_spadd_shape([5, 5, 5, 5, 5, 5], [2])
+        self._test_spadd_shape(10, [5, 6], [2, 3])
+        self._test_spadd_shape(10, [10, 10, 10], [3])
+        self._test_spadd_shape(10, [50, 30, 20], [2])
+        self._test_spadd_shape(10, [5, 5, 5, 5, 5, 5], [2])
 
     @skipIfRocm
     def test_norm(self):
@@ -1453,7 +1456,7 @@ def load_tests(loader, tests, pattern):
         test_suite = unittest.TestSuite()
         for test_group in tests:
             for test in test_group:
-                if 'test_hsmm' in str(test):
+                if 'test_spadd' in str(test):
                     test_suite.addTest(test)
         return test_suite
 
