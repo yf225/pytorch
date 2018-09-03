@@ -871,6 +871,57 @@ class TestSparse(TestCase):
         self._test_sparse_mask_shape(0, 0, [5, 5, 5, 5, 5, 5])
         self._test_sparse_mask_shape(0, 0, [5, 5, 5, 5, 0, 0])
 
+    def _test_sparse_mask_hybrid_fixed(self):
+        i = self.IndexTensor([
+            [1, 3, 0, 4],
+            [2, 1, 2, 3],
+        ])
+        v = self.ValueTensor([[1, 2], [2, 3], [3, 4], [4, 5]])
+        # TODO: This is also testing that, if coalesce is a no-op,
+        # the indices don't get permuted. I don't know if we actually
+        # want to give this invariant.
+        x = self.SparseTensor(i, v, torch.Size([5, 4, 2])).coalesce()
+        dense = self.ValueTensor([
+            [[1, 3], [2, 2], [3, 3], [4, 2]],
+            [[5, 7], [6, 7], [7, 9], [8, 9]],
+            [[9, 2], [10, 4], [11, 1], [12, 3]],
+            [[13, 5], [14, 1], [15, 1], [16, 6]],
+            [[17, 7], [18, 2], [19, 7], [20, 1]],
+        ])
+        res = dense._sparse_mask(x)
+        exp_v = self.ValueTensor([[7, 9], [14, 1], [3, 3], [20, 1]])
+        expected = self.SparseTensor(i, exp_v, torch.Size([5, 4, 2]))
+        self.assertEqual(res, expected)
+
+        i = self.IndexTensor([
+            [1, 3, 0, 4],
+            [2, 1, 2, 3],
+        ])
+        v = self.ValueTensor(4, 2, 0)
+        x = self.SparseTensor(i, v, torch.Size([5, 4, 2, 0])).coalesce()
+        dense = self.ValueTensor(5, 4, 2, 0)
+        res = dense._sparse_mask(x)
+        exp_v = self.ValueTensor(4, 2, 0)
+        expected = self.SparseTensor(i, exp_v, torch.Size([5, 4, 2, 0]))
+        self.assertEqual(res, expected)
+
+    @skipIfRocm
+    def test_sparse_mask_hybrid(self):
+        self._test_sparse_mask_hybrid_fixed()
+
+        self._test_sparse_mask_shape(9, 12, [5, 6], [2, 3])
+        self._test_sparse_mask_shape(9, 12, [10, 10, 10], [3])
+        self._test_sparse_mask_shape(9, 12, [50, 30, 20], [2])
+        self._test_sparse_mask_shape(9, 12, [5, 5, 5, 5, 5, 5], [2])
+        self._test_sparse_mask_shape(0, 12, [5, 5, 5, 5, 5, 5], [2])
+        self._test_sparse_mask_shape(9, 0, [5, 5, 5, 5, 5, 5], [2])
+        self._test_sparse_mask_shape(0, 0, [5, 5, 5, 5, 5, 5], [2])
+        self._test_sparse_mask_shape(9, 12, [5, 5, 5, 5, 5, 5], [2, 0])
+        self._test_sparse_mask_shape(0, 12, [5, 5, 5, 5, 5, 5], [2, 0])
+        self._test_sparse_mask_shape(9, 0, [5, 5, 5, 5, 5, 5], [2, 0])
+        self._test_sparse_mask_shape(0, 0, [5, 5, 5, 5, 5, 5], [2, 0])
+        self._test_sparse_mask_shape(0, 0, [5, 5, 5, 5, 0, 0], [2, 0])
+
     def _test_zeros(self, shape, out_shape_i, out_shape_v=None):
         out_shape = out_shape_i + (out_shape_v or [])
         for nnz in [9, 12]:
@@ -956,28 +1007,6 @@ class TestSparse(TestCase):
         for i_dim in range(1, len(i_shapes) + 1):
             for v_dim in range(len(v_shapes) + 1):
                 self._test_zeros_like(i_shapes[:i_dim], v_shapes[:v_dim])
-
-    def _test_sparse_mask_hybrid_fixed(self):
-        i = self.IndexTensor([
-            [1, 3, 0, 4],
-            [2, 1, 2, 3],
-        ])
-        v = self.ValueTensor([[1, 2], [2, 3], [3, 4], [4, 5]])
-        # TODO: This is also testing that, if coalesce is a no-op,
-        # the indices don't get permuted. I don't know if we actually
-        # want to give this invariant.
-        x = self.SparseTensor(i, v, torch.Size([5, 4, 2])).coalesce()
-        dense = self.ValueTensor([
-            [[1, 3], [2, 2], [3, 3], [4, 2]],
-            [[5, 7], [6, 7], [7, 9], [8, 9]],
-            [[9, 2], [10, 4], [11, 1], [12, 3]],
-            [[13, 5], [14, 1], [15, 1], [16, 6]],
-            [[17, 7], [18, 2], [19, 7], [20, 1]],
-        ])
-        res = dense._sparse_mask(x)
-        exp_v = self.ValueTensor([[7, 9], [14, 1], [3, 3], [20, 1]])
-        expected = self.SparseTensor(i, exp_v, torch.Size([5, 4, 2]))
-        self.assertEqual(res, expected)
 
     @skipIfRocm
     def test_sparse_variable_methods(self):
@@ -1074,15 +1103,6 @@ class TestSparse(TestCase):
             de_mat = dense_mat.clone()
             self.assertEqual(test_fn(sp_var, de_var).data,
                              test_fn(sp_mat, de_mat), test_name)
-
-    @skipIfRocm
-    def test_sparse_mask_hybrid(self):
-        self._test_sparse_mask_hybrid_fixed()
-
-        self._test_sparse_mask_shape(9, 12, [5, 6], [2, 3])
-        self._test_sparse_mask_shape(9, 12, [10, 10, 10], [3])
-        self._test_sparse_mask_shape(9, 12, [50, 30, 20], [2])
-        self._test_sparse_mask_shape(9, 12, [5, 5, 5, 5, 5, 5], [2])
 
     @skipIfRocm
     def test_sparse_add_coalesce(self):
@@ -1476,7 +1496,7 @@ def load_tests(loader, tests, pattern):
         test_suite = unittest.TestSuite()
         for test_group in tests:
             for test in test_group:
-                if 'test_sparse_mask' in str(test):
+                if 'test_sparse_mask_hybrid' in str(test):
                     test_suite.addTest(test)
         return test_suite
 
