@@ -802,11 +802,18 @@ class TestSparse(TestCase):
 
     @skipIfRocm
     def test_add_dense_sparse_mismatch(self):
-        x = torch.zeros([3, 4], dtype=self.value_dtype, device=self.device)
-        sparse_y = self.SparseTensor(torch.zeros(1, 4, dtype=torch.int64, device=self.device),
-                                     torch.randn(4, 4, 4, dtype=self.value_dtype, device=self.device),
-                                     torch.Size([3, 4, 4]))
-        self.assertExpectedRaises(RuntimeError, lambda: x + sparse_y)
+        def test_shape(dense_size, sparse_dims_shape, dense_dims_shape, sparse_size):
+            x = torch.zeros(dense_size, dtype=self.value_dtype, device=self.device)
+            sparse_y = self.SparseTensor(torch.zeros(sparse_dims_shape, dtype=torch.int64, device=self.device),
+                                         torch.randn(dense_dims_shape, dtype=self.value_dtype, device=self.device),
+                                         torch.Size(sparse_size))
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "add: expected 'self' and 'other' to have same size"):
+                x + sparse_y
+
+        test_shape([3, 4], [1, 4], [4, 4, 4], [3, 4, 4])
+        test_shape([3, 4, 0], [1, 4], [4, 4, 4, 0], [3, 4, 4, 0])
 
     def _test_sparse_mask_shape(self, shape_i, shape_v=None):
         shape = shape_i + (shape_v or [])
@@ -1453,7 +1460,7 @@ def load_tests(loader, tests, pattern):
         test_suite = unittest.TestSuite()
         for test_group in tests:
             for test in test_group:
-                if 'test_basic_ops' in str(test):
+                if 'test_add_dense_sparse_mismatch' in str(test):
                     test_suite.addTest(test)
         return test_suite
 
