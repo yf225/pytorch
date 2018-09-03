@@ -922,9 +922,9 @@ class TestSparse(TestCase):
         self._test_sparse_mask_shape(0, 0, [5, 5, 5, 5, 5, 5], [2, 0])
         self._test_sparse_mask_shape(0, 0, [5, 5, 5, 5, 0, 0], [2, 0])
 
-    def _test_zeros(self, shape, out_shape_i, out_shape_v=None):
+    def _test_zeros(self, nnzs, shape, out_shape_i, out_shape_v=None):
         out_shape = out_shape_i + (out_shape_v or [])
-        for nnz in [9, 12]:
+        for nnz in nnzs:
             out, _, _ = self._gen_sparse(len(out_shape_i), nnz, out_shape)
             torch.zeros(*shape, out=out)
             self.assertEqual(tuple(out.size()), tuple(shape))
@@ -932,6 +932,37 @@ class TestSparse(TestCase):
             self.assertEqual(out._nnz(), 0)
             self.assertEqual(out._sparseDims(), len(shape))
             self.assertEqual(out._denseDims(), 0)
+
+    def test_zeros(self):
+        def test_shape(i_shapes, v_shapes, shape, nnzs):
+            for i_dim in range(1, len(i_shapes) + 1):
+                for v_dim in range(len(v_shapes) + 1):
+                    self._test_zeros(nnzs, shape, i_shapes[:i_dim], v_shapes[:v_dim])
+        test_shape([2, 3, 4], [3, 4, 5, 6], [2, 3, 4], [9, 12])
+        test_shape([0, 3, 4], [3, 4, 5, 6], [2, 3, 4], [0])
+        test_shape([2, 3, 4], [0, 4, 5, 6], [2, 3, 4], [9, 12])
+        test_shape([2, 3, 4], [3, 4, 5, 6], [2, 3, 0], [9, 12])
+        test_shape([0, 3, 4], [3, 4, 5, 6], [2, 3, 0], [0])
+        test_shape([2, 3, 4], [0, 4, 5, 6], [2, 3, 0], [9, 12])
+
+    def _test_zeros_like(self, template_shape_i, template_shape_v=None):
+        template_shape_v = template_shape_v or []
+        template_shape = template_shape_i + template_shape_v
+        for nnz in [9, 12]:
+            t, _, _ = self._gen_sparse(len(template_shape_i), nnz, template_shape)
+            res = torch.zeros_like(t)
+            self.assertEqual(tuple(res.size()), tuple(template_shape))
+            self.assertTrue(res._indices().numel() == res._values().numel() == 0)
+            self.assertEqual(res._nnz(), 0)
+            self.assertEqual(res._sparseDims(), len(template_shape_i))
+            self.assertEqual(res._denseDims(), len(template_shape_v))
+
+    def test_zeros_like(self):
+        i_shapes = [2, 3, 4]
+        v_shapes = [3, 4, 5, 6]
+        for i_dim in range(1, len(i_shapes) + 1):
+            for v_dim in range(len(v_shapes) + 1):
+                self._test_zeros_like(i_shapes[:i_dim], v_shapes[:v_dim])
 
     def _test_log1p_tensor(self, input, dense_tensor):
         expected_output = torch.tensor(dense_tensor).log1p_()
@@ -981,32 +1012,6 @@ class TestSparse(TestCase):
                 torch.Size([5, 6, 0]),
                 device=self.device)
         self._test_log1p_tensor(input, torch.zeros([5, 6, 0]))
-
-    def test_zeros(self):
-        i_shapes = [2, 3, 4]
-        v_shapes = [3, 4, 5, 6]
-        for i_dim in range(1, len(i_shapes) + 1):
-            for v_dim in range(len(v_shapes) + 1):
-                self._test_zeros([2, 3, 4], i_shapes[:i_dim], v_shapes[:v_dim])
-
-    def _test_zeros_like(self, template_shape_i, template_shape_v=None):
-        template_shape_v = template_shape_v or []
-        template_shape = template_shape_i + template_shape_v
-        for nnz in [9, 12]:
-            t, _, _ = self._gen_sparse(len(template_shape_i), nnz, template_shape)
-            res = torch.zeros_like(t)
-            self.assertEqual(tuple(res.size()), tuple(template_shape))
-            self.assertTrue(res._indices().numel() == res._values().numel() == 0)
-            self.assertEqual(res._nnz(), 0)
-            self.assertEqual(res._sparseDims(), len(template_shape_i))
-            self.assertEqual(res._denseDims(), len(template_shape_v))
-
-    def test_zeros_like(self):
-        i_shapes = [2, 3, 4]
-        v_shapes = [3, 4, 5, 6]
-        for i_dim in range(1, len(i_shapes) + 1):
-            for v_dim in range(len(v_shapes) + 1):
-                self._test_zeros_like(i_shapes[:i_dim], v_shapes[:v_dim])
 
     @skipIfRocm
     def test_sparse_variable_methods(self):
@@ -1496,7 +1501,7 @@ def load_tests(loader, tests, pattern):
         test_suite = unittest.TestSuite()
         for test_group in tests:
             for test in test_group:
-                if 'test_sparse_mask_hybrid' in str(test):
+                if 'test_zeros' in str(test):
                     test_suite.addTest(test)
         return test_suite
 
