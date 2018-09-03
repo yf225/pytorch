@@ -945,10 +945,10 @@ class TestSparse(TestCase):
         test_shape([0, 3, 4], [3, 4, 5, 6], [2, 3, 0], [0])
         test_shape([2, 3, 4], [0, 4, 5, 6], [2, 3, 0], [9, 12])
 
-    def _test_zeros_like(self, template_shape_i, template_shape_v=None):
+    def _test_zeros_like(self, nnzs, template_shape_i, template_shape_v=None):
         template_shape_v = template_shape_v or []
         template_shape = template_shape_i + template_shape_v
-        for nnz in [9, 12]:
+        for nnz in nnzs:
             t, _, _ = self._gen_sparse(len(template_shape_i), nnz, template_shape)
             res = torch.zeros_like(t)
             self.assertEqual(tuple(res.size()), tuple(template_shape))
@@ -958,11 +958,16 @@ class TestSparse(TestCase):
             self.assertEqual(res._denseDims(), len(template_shape_v))
 
     def test_zeros_like(self):
-        i_shapes = [2, 3, 4]
-        v_shapes = [3, 4, 5, 6]
-        for i_dim in range(1, len(i_shapes) + 1):
-            for v_dim in range(len(v_shapes) + 1):
-                self._test_zeros_like(i_shapes[:i_dim], v_shapes[:v_dim])
+        def test_shape(i_shapes, v_shapes, nnzs):
+            for i_dim in range(1, len(i_shapes) + 1):
+                for v_dim in range(len(v_shapes) + 1):
+                    self._test_zeros_like(nnzs, i_shapes[:i_dim], v_shapes[:v_dim])
+        test_shape([2, 3, 4], [3, 4, 5, 6], [9, 12])
+        test_shape([0, 3, 4], [3, 4, 5, 6], [0])
+        test_shape([2, 3, 4], [0, 4, 5, 6], [9, 12])
+        test_shape([2, 3, 4], [3, 4, 5, 6], [9, 12])
+        test_shape([0, 3, 4], [3, 4, 5, 6], [0])
+        test_shape([2, 3, 4], [0, 4, 5, 6], [9, 12])
 
     def _test_log1p_tensor(self, input, dense_tensor):
         expected_output = torch.tensor(dense_tensor).log1p_()
@@ -1501,7 +1506,7 @@ def load_tests(loader, tests, pattern):
         test_suite = unittest.TestSuite()
         for test_group in tests:
             for test in test_group:
-                if 'test_zeros' in str(test):
+                if 'test_zeros_like' in str(test):
                     test_suite.addTest(test)
         return test_suite
 
