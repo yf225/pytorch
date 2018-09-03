@@ -1002,8 +1002,6 @@ class TestSparse(TestCase):
             device=self.device)
         self._test_log1p_tensor(input_uncoalesced, [3., 4., 5.])
 
-    @skipIfRocm
-    def test_log1p_empty_tensor(self):
         input = torch.sparse_coo_tensor(
                 torch.zeros([2, 0]),
                 torch.zeros([0, 5, 5, 5, 5, 5, 5, 0]),
@@ -1506,7 +1504,7 @@ def load_tests(loader, tests, pattern):
         test_suite = unittest.TestSuite()
         for test_group in tests:
             for test in test_group:
-                if 'test_zeros_like' in str(test):
+                if 'test_log1p' in str(test):
                     test_suite.addTest(test)
         return test_suite
 
