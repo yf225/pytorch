@@ -815,10 +815,10 @@ class TestSparse(TestCase):
         test_shape([3, 4], [1, 4], [4, 4, 4], [3, 4, 4])
         test_shape([3, 4, 0], [1, 4], [4, 4, 4, 0], [3, 4, 4, 0])
 
-    def _test_sparse_mask_shape(self, shape_i, shape_v=None):
+    def _test_sparse_mask_shape(self, nnz_x1, nnz_x2, shape_i, shape_v=None):
         shape = shape_i + (shape_v or [])
-        x1, _, _ = self._gen_sparse(len(shape_i), 9, shape)
-        x2, _, _ = self._gen_sparse(len(shape_i), 12, shape)
+        x1, _, _ = self._gen_sparse(len(shape_i), nnz_x1, shape)
+        x2, _, _ = self._gen_sparse(len(shape_i), nnz_x2, shape)
 
         y1 = x1 + x2
         y2 = x1.clone()
@@ -846,14 +846,30 @@ class TestSparse(TestCase):
         expected = self.SparseTensor(i, exp_v, torch.Size([5, 4]))
         self.assertEqual(res, expected)
 
+        i = self.IndexTensor([
+            [1, 3, 0, 4],
+            [2, 1, 2, 3],
+        ])
+        v = self.ValueTensor(4, 0)
+        x = self.SparseTensor(i, v, torch.Size([5, 4, 0])).coalesce()
+        dense = self.ValueTensor(5, 4, 0)
+        exp_v = self.ValueTensor(4, 0)
+        res = dense._sparse_mask(x)
+        expected = self.SparseTensor(i, exp_v, torch.Size([5, 4, 0]))
+        self.assertEqual(res, expected)
+
     @skipIfRocm
     def test_sparse_mask(self):
         self._test_sparse_mask_fixed()
 
-        self._test_sparse_mask_shape([5, 6])
-        self._test_sparse_mask_shape([10, 10, 10])
-        self._test_sparse_mask_shape([50, 30, 20])
-        self._test_sparse_mask_shape([5, 5, 5, 5, 5, 5])
+        self._test_sparse_mask_shape(9, 12, [5, 6])
+        self._test_sparse_mask_shape(9, 12, [10, 10, 10])
+        self._test_sparse_mask_shape(9, 12, [50, 30, 20])
+        self._test_sparse_mask_shape(9, 12, [5, 5, 5, 5, 5, 5])
+        self._test_sparse_mask_shape(0, 12, [5, 5, 5, 5, 5, 5])
+        self._test_sparse_mask_shape(9, 0, [5, 5, 5, 5, 5, 5])
+        self._test_sparse_mask_shape(0, 0, [5, 5, 5, 5, 5, 5])
+        self._test_sparse_mask_shape(0, 0, [5, 5, 5, 5, 0, 0])
 
     def _test_zeros(self, shape, out_shape_i, out_shape_v=None):
         out_shape = out_shape_i + (out_shape_v or [])
@@ -1063,10 +1079,10 @@ class TestSparse(TestCase):
     def test_sparse_mask_hybrid(self):
         self._test_sparse_mask_hybrid_fixed()
 
-        self._test_sparse_mask_shape([5, 6], [2, 3])
-        self._test_sparse_mask_shape([10, 10, 10], [3])
-        self._test_sparse_mask_shape([50, 30, 20], [2])
-        self._test_sparse_mask_shape([5, 5, 5, 5, 5, 5], [2])
+        self._test_sparse_mask_shape(9, 12, [5, 6], [2, 3])
+        self._test_sparse_mask_shape(9, 12, [10, 10, 10], [3])
+        self._test_sparse_mask_shape(9, 12, [50, 30, 20], [2])
+        self._test_sparse_mask_shape(9, 12, [5, 5, 5, 5, 5, 5], [2])
 
     @skipIfRocm
     def test_sparse_add_coalesce(self):
@@ -1460,7 +1476,7 @@ def load_tests(loader, tests, pattern):
         test_suite = unittest.TestSuite()
         for test_group in tests:
             for test in test_group:
-                if 'test_add_dense_sparse_mismatch' in str(test):
+                if 'test_sparse_mask' in str(test):
                     test_suite.addTest(test)
         return test_suite
 
