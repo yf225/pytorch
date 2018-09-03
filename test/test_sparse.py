@@ -975,7 +975,8 @@ class TestSparse(TestCase):
         self.assertEqual(expected_output, input.coalesce().log1p_().to_dense())
 
         # test in-place op on uncoalesced input
-        self.assertExpectedRaises(RuntimeError, lambda: input.log1p_(), subname="uncoalesced")
+        with self.assertRaisesRegex(RuntimeError, "in-place on uncoalesced tensors is not supported yet"):
+            input.log1p_()
 
         input.requires_grad_()
         self.assertTrue(input.requires_grad)
@@ -983,7 +984,8 @@ class TestSparse(TestCase):
         # test autograd
         x = input.clone()
         y = input.log1p()
-        self.assertExpectedRaises(RuntimeError, lambda: y.backward(x), subname="backward")
+        with self.assertRaisesRegex(RuntimeError, "log1p of a sparse tensor is made to be non-differentiable"):
+            y.backward(x)
 
     @skipIfRocm
     def test_log1p(self):
