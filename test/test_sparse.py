@@ -1513,6 +1513,16 @@ class TestSparseOneOff(TestCase):
                                      torch.randn(4, 4, 4),
                                      [3, 4, 4])
 
+        with self.assertRaisesRegex(RuntimeError, "backend of indices \\(CUDA\\) must match backend of values \\(CPU\\)"):
+            torch.sparse.FloatTensor(torch.zeros(1, 4).long().cuda(),
+                                     torch.randn(4, 4, 4, 0),
+                                     [3, 4, 4, 0])
+
+        with self.assertRaisesRegex(RuntimeError, "backend of indices \\(CUDA\\) must match backend of values \\(CPU\\)"):
+            torch.sparse.FloatTensor(torch.LongTensor(1, 0).cuda(),
+                                     torch.randn(0, 4, 4, 0),
+                                     [0, 4, 4, 0])
+
     @unittest.skipIf(not TEST_CUDA, 'CUDA not available')
     @skipIfRocm
     def test_cuda_sparse_cpu_dense_add(self):
@@ -1528,7 +1538,7 @@ def load_tests(loader, tests, pattern):
         test_suite = unittest.TestSuite()
         for test_group in tests:
             for test in test_group:
-                if 'test_cuda_sparse_cpu_dense_add' in str(test):
+                if 'test_cuda_from_cpu' in str(test):
                     test_suite.addTest(test)
         return test_suite
 
