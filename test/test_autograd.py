@@ -2663,14 +2663,21 @@ method_tests = [
     ('__rmul__', (S, S, 0), (3.14,), 'constant_empty'),
     ('__rmul__', (), (3.14,), 'scalar_constant'),
     ('div', (S, S, S), (torch.rand(S, S, S) + 0.1,)),
+    ('div', (S, 0, S), (torch.rand(S, S, S) + 0.1,), 'empty'),
     ('div', (S, S, S), (torch.rand(S, S) + 0.1,), 'broadcast_rhs'),
+    ('div', (S, 0, S), (torch.rand(S, S) + 0.1,), 'broadcast_rhs_empty'),
     ('div', (S, S), (torch.rand(S, S, S) + 0.1,), 'broadcast_lhs'),
+    ('div', (S, 0), (torch.rand(S, S, S) + 0.1,), 'broadcast_lhs_empty'),
     ('div', (S, 1, S), (torch.rand(M, S) + 0.1,), 'broadcast_all'),
+    ('div', (S, 1, 0), (torch.rand(M, S) + 0.1,), 'broadcast_all_empty'),
     ('div', (), (uniform_scalar(0.1),), 'scalar'),
     ('div', (S, S, S), (uniform_scalar(0.1),), 'scalar_broadcast_rhs'),
+    ('div', (S, S, 0), (uniform_scalar(0.1),), 'scalar_broadcast_rhs_empty'),
     ('div', (), (uniform_scalar(0.1),), 'scalar_broadcast_lhs'),
     ('div', torch.rand(S, S, S) + 1e-1, (3.14,), 'constant'),
+    ('div', torch.rand(S, S, 0) + 1e-1, (3.14,), 'constant_empty'),
     ('__rdiv__', torch.rand(S, S, S) + 1e-1, (3.14,), 'constant'),
+    ('__rdiv__', torch.rand(S, S, 0) + 1e-1, (3.14,), 'constant_empty'),
     ('div', uniform_scalar(1e-1, requires_grad=True), (3.14,), 'scalar_constant'),
     ('__rdiv__', uniform_scalar(1e-1, requires_grad=True), (3.14,), 'scalar_constant'),
     ('pow', torch.rand(S, S, S) + 1e-3, (torch.rand(S, S, S) + 0.1,)),
@@ -3565,6 +3572,14 @@ def add_test(
 
 for test in method_tests:
     add_test(*test)
+
+def load_tests(loader, tests, pattern):
+    test_suite = unittest.TestSuite()
+    for test_group in tests:
+        for test in test_group:
+            if 'div' in str(test):
+                test_suite.addTest(test)
+    return test_suite
 
 if __name__ == '__main__':
     run_tests()
