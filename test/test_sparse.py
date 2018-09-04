@@ -781,10 +781,10 @@ class TestSparse(TestCase):
         self._test_basic_ops_shape(9, 12, [10, 10, 10])
         self._test_basic_ops_shape(9, 12, [50, 30, 20])
         self._test_basic_ops_shape(9, 12, [5, 5, 5, 5, 5, 5])
-        self._test_basic_ops_shape(0, 12, [5, 5, 5, 5, 5, 5])
-        self._test_basic_ops_shape(9, 0, [5, 5, 5, 5, 5, 5])
-        self._test_basic_ops_shape(0, 0, [5, 5, 5, 5, 5, 5])
-        self._test_basic_ops_shape(0, 0, [5, 5, 5, 5, 0, 0])
+        self._test_basic_ops_shape(0, 12, [10, 10, 10])
+        self._test_basic_ops_shape(9, 0, [10, 10, 10])
+        self._test_basic_ops_shape(0, 0, [10, 10, 10])
+        self._test_basic_ops_shape(0, 0, [10, 10, 0])
 
     @skipIfRocm
     def test_basic_ops_hybrid(self):
@@ -792,14 +792,14 @@ class TestSparse(TestCase):
         self._test_basic_ops_shape(9, 12, [10, 10, 10], [3])
         self._test_basic_ops_shape(9, 12, [50, 30, 20], [2])
         self._test_basic_ops_shape(9, 12, [5, 5, 5, 5, 5, 5], [2])
-        self._test_basic_ops_shape(0, 12, [5, 5, 5, 5, 5, 5], [2])
-        self._test_basic_ops_shape(9, 0, [5, 5, 5, 5, 5, 5], [2])
-        self._test_basic_ops_shape(0, 0, [5, 5, 5, 5, 5, 5], [2])
-        self._test_basic_ops_shape(9, 12, [5, 5, 5, 5, 5, 5], [2, 0])
-        self._test_basic_ops_shape(0, 12, [5, 5, 5, 5, 5, 5], [2, 0])
-        self._test_basic_ops_shape(9, 0, [5, 5, 5, 5, 5, 5], [2, 0])
-        self._test_basic_ops_shape(0, 0, [5, 5, 5, 5, 5, 5], [2, 0])
-        self._test_basic_ops_shape(0, 0, [5, 5, 5, 5, 0, 0], [2, 0])
+        self._test_basic_ops_shape(0, 12, [10, 10, 10], [2])
+        self._test_basic_ops_shape(9, 0, [10, 10, 10], [2])
+        self._test_basic_ops_shape(0, 0, [10, 10, 10], [2])
+        self._test_basic_ops_shape(9, 12, [10, 10, 10], [2, 0])
+        self._test_basic_ops_shape(0, 12, [10, 10, 10], [2, 0])
+        self._test_basic_ops_shape(9, 0, [10, 10, 10], [2, 0])
+        self._test_basic_ops_shape(0, 0, [10, 10, 10], [2, 0])
+        self._test_basic_ops_shape(0, 0, [10, 10, 0], [2, 0])
 
     @skipIfRocm
     def test_add_dense_sparse_mismatch(self):
@@ -867,10 +867,10 @@ class TestSparse(TestCase):
         self._test_sparse_mask_shape(9, 12, [10, 10, 10])
         self._test_sparse_mask_shape(9, 12, [50, 30, 20])
         self._test_sparse_mask_shape(9, 12, [5, 5, 5, 5, 5, 5])
-        self._test_sparse_mask_shape(0, 12, [5, 5, 5, 5, 5, 5])
-        self._test_sparse_mask_shape(9, 0, [5, 5, 5, 5, 5, 5])
-        self._test_sparse_mask_shape(0, 0, [5, 5, 5, 5, 5, 5])
-        self._test_sparse_mask_shape(0, 0, [5, 5, 5, 5, 0, 0])
+        self._test_sparse_mask_shape(0, 12, [10, 10, 10])
+        self._test_sparse_mask_shape(9, 0, [10, 10, 10])
+        self._test_sparse_mask_shape(0, 0, [10, 10, 10])
+        self._test_sparse_mask_shape(0, 0, [10, 10, 0])
 
     def _test_sparse_mask_hybrid_fixed(self):
         i = self.IndexTensor([
@@ -914,14 +914,14 @@ class TestSparse(TestCase):
         self._test_sparse_mask_shape(9, 12, [10, 10, 10], [3])
         self._test_sparse_mask_shape(9, 12, [50, 30, 20], [2])
         self._test_sparse_mask_shape(9, 12, [5, 5, 5, 5, 5, 5], [2])
-        self._test_sparse_mask_shape(0, 12, [5, 5, 5, 5, 5, 5], [2])
-        self._test_sparse_mask_shape(9, 0, [5, 5, 5, 5, 5, 5], [2])
-        self._test_sparse_mask_shape(0, 0, [5, 5, 5, 5, 5, 5], [2])
-        self._test_sparse_mask_shape(9, 12, [5, 5, 5, 5, 5, 5], [2, 0])
-        self._test_sparse_mask_shape(0, 12, [5, 5, 5, 5, 5, 5], [2, 0])
-        self._test_sparse_mask_shape(9, 0, [5, 5, 5, 5, 5, 5], [2, 0])
-        self._test_sparse_mask_shape(0, 0, [5, 5, 5, 5, 5, 5], [2, 0])
-        self._test_sparse_mask_shape(0, 0, [5, 5, 5, 5, 0, 0], [2, 0])
+        self._test_sparse_mask_shape(0, 12, [10, 10, 10], [2])
+        self._test_sparse_mask_shape(9, 0, [10, 10, 10], [2])
+        self._test_sparse_mask_shape(0, 0, [10, 10, 10], [2])
+        self._test_sparse_mask_shape(9, 12, [10, 10, 10], [2, 0])
+        self._test_sparse_mask_shape(0, 12, [10, 10, 10], [2, 0])
+        self._test_sparse_mask_shape(9, 0, [10, 10, 10], [2, 0])
+        self._test_sparse_mask_shape(0, 0, [10, 10, 10], [2, 0])
+        self._test_sparse_mask_shape(0, 0, [10, 10, 0], [2, 0])
 
     def _test_zeros(self, nnzs, shape, out_shape_i, out_shape_v=None):
         out_shape = out_shape_i + (out_shape_v or [])
