@@ -1218,6 +1218,12 @@ class TestSparse(TestCase):
         with self.assertRaisesRegex(RuntimeError, "indices and values must have same nnz"):
             torch.sparse_coo_tensor(indices, values, sizes)
 
+        indices = self.IndexTensor([[0]])  # (sparseDims, nnz): (1, 1)
+        values = self.ValueTensor(2, 0)  # (nnz, ...): (2, 0)
+        sizes = torch.Size([2, 0])
+        with self.assertRaisesRegex(RuntimeError, "indices and values must have same nnz"):
+            torch.sparse_coo_tensor(indices, values, sizes)
+
     def _test_factory_tensor_shape(self, i_shape, v_shape, size, expected_size):
         device = 'cuda' if self.is_cuda else 'cpu'
         if size:
@@ -1452,7 +1458,7 @@ def load_tests(loader, tests, pattern):
         test_suite = unittest.TestSuite()
         for test_group in tests:
             for test in test_group:
-                if 'test_factory' in str(test):
+                if 'test_factory_nnz' in str(test):
                     test_suite.addTest(test)
         return test_suite
 
