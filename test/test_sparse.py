@@ -1099,6 +1099,7 @@ class TestSparse(TestCase):
         self._test_new_device((), 1)
         self._test_new_device((30, 20), 1)
         self._test_new_device((30, 20, 10), 1)
+        self._test_new_device((30, 20, 10, 0), 1)
 
     @skipIfRocm
     def test_new(self):
@@ -1436,7 +1437,7 @@ def load_tests(loader, tests, pattern):
         test_suite = unittest.TestSuite()
         for test_group in tests:
             for test in test_group:
-                if 'test_new_device_single_gpu' in str(test):
+                if 'test_new_device_multi_gpu' in str(test):
                     test_suite.addTest(test)
         return test_suite
 
