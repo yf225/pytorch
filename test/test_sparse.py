@@ -1048,20 +1048,34 @@ class TestSparse(TestCase):
     @unittest.skipIf(torch.cuda.device_count() < 2, "only one GPU detected")
     @skipIfRocm
     def test_same_gpu(self):
+        def check_device(x, device_id):
+            self.assertEqual(x.get_device(), device_id)
+            self.assertEqual(x._values().get_device(), device_id)
+            self.assertEqual(x._indices().get_device(), device_id)
+
         i = self.IndexTensor([[2]]).cuda(1)
         v = self.ValueTensor([5]).cuda(1)
         x = self.SparseTensor(i, v, torch.Size([3]), device=1)
-        self.assertEqual(x.get_device(), 1)
-        self.assertEqual(x._values().get_device(), 1)
-        self.assertEqual(x._indices().get_device(), 1)
+        check_device(x, 1)
+
+        i = self.IndexTensor([[2]]).cuda(1)
+        v = self.ValueTensor(1, 0).cuda(1)
+        x = self.SparseTensor(i, v, torch.Size([3, 0]), device=1)
+        check_device(x, 1)
 
         x = self.SparseTensor(3, device=1)
-        self.assertEqual(x.get_device(), 1)
-        self.assertEqual(x._values().get_device(), 1)
-        self.assertEqual(x._indices().get_device(), 1)
+        check_device(x, 1)
 
+        x = self.SparseTensor(3, 0, device=1)
+        check_device(x, 1)
+
+        i = self.IndexTensor([[2]]).cuda(1)
         v = self.ValueTensor([5]).cuda(0)
         self.assertRaises(RuntimeError, lambda: self.SparseTensor(i, v, torch.Size([3])))
+
+        i = self.IndexTensor([[2]]).cuda(1)
+        v = self.ValueTensor(1, 0).cuda(0)
+        self.assertRaises(RuntimeError, lambda: self.SparseTensor(i, v, torch.Size([3, 0])))
 
     def _test_new_device(self, size, device):
         with torch.cuda.device(device):
@@ -1421,7 +1435,7 @@ def load_tests(loader, tests, pattern):
         test_suite = unittest.TestSuite()
         for test_group in tests:
             for test in test_group:
-                if 'test_storage_not_null' in str(test):
+                if 'test_same_gpu' in str(test):
                     test_suite.addTest(test)
         return test_suite
 
