@@ -1282,11 +1282,17 @@ class TestSparse(TestCase):
         for indices_device in ['cuda', 'cpu']:
             for values_device in ['cuda', 'cpu']:
                 for sparse_device in ['cuda', 'cpu', None]:
-                    t = torch.sparse_coo_tensor(torch.tensor(([0], [2]), device=indices_device),
-                                                torch.tensor([1.], device=values_device),
-                                                (1, 3), device=sparse_device)
-                    should_be_cuda = sparse_device == 'cuda' or (sparse_device is None and values_device == 'cuda')
-                    self.assertEqual(should_be_cuda, t.is_cuda)
+                    for test_empty_tensor in [True, False]:
+                        if test_empty_tensor:
+                            t = torch.sparse_coo_tensor(torch.tensor(([0], [2]), device=indices_device),
+                                                        self.ValueTensor(1, 0).to(values_device),
+                                                        (1, 3, 0), device=sparse_device)
+                        else:
+                            t = torch.sparse_coo_tensor(torch.tensor(([0], [2]), device=indices_device),
+                                                        torch.tensor([1.], device=values_device),
+                                                        (1, 3), device=sparse_device)
+                        should_be_cuda = sparse_device == 'cuda' or (sparse_device is None and values_device == 'cuda')
+                        self.assertEqual(should_be_cuda, t.is_cuda)
 
     @cpu_only
     def test_factory_copy(self):
@@ -1471,7 +1477,7 @@ def load_tests(loader, tests, pattern):
         test_suite = unittest.TestSuite()
         for test_group in tests:
             for test in test_group:
-                if 'test_factory_type_inference' in str(test):
+                if 'test_factory_device_type_inference' in str(test):
                     test_suite.addTest(test)
         return test_suite
 
