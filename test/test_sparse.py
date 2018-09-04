@@ -1252,6 +1252,12 @@ class TestSparse(TestCase):
         with self.assertRaisesRegex(RuntimeError, "values has incorrect size"):
             torch.sparse_coo_tensor(indices, values, sizes)
 
+        indices = self.IndexTensor([[0]])
+        values = self.ValueTensor(1, 2, 3, 0)
+        sizes = torch.Size([1, 3, 4, 0])
+        with self.assertRaisesRegex(RuntimeError, "values has incorrect size"):
+            torch.sparse_coo_tensor(indices, values, sizes)
+
     @cpu_only
     def test_factory_type_inference(self):
         t = torch.sparse_coo_tensor(torch.tensor(([0], [2])), torch.tensor([1.], dtype=torch.float32))
@@ -1458,7 +1464,7 @@ def load_tests(loader, tests, pattern):
         test_suite = unittest.TestSuite()
         for test_group in tests:
             for test in test_group:
-                if 'test_factory_nnz_zero' in str(test):
+                if 'test_factory_dense_dims' in str(test):
                     test_suite.addTest(test)
         return test_suite
 
