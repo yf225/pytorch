@@ -1041,6 +1041,9 @@ class TestSparse(TestCase):
         x = torch.cuda.sparse.FloatTensor(2)
         self.assertNotEqual(x.get_device(), -1)
 
+        x = torch.cuda.sparse.FloatTensor(2, 0)
+        self.assertNotEqual(x.get_device(), -1)
+
     @cuda_only
     @unittest.skipIf(torch.cuda.device_count() < 2, "only one GPU detected")
     @skipIfRocm
@@ -1418,7 +1421,7 @@ def load_tests(loader, tests, pattern):
         test_suite = unittest.TestSuite()
         for test_group in tests:
             for test in test_group:
-                if 'test_sparse_add_coalesce' in str(test):
+                if 'test_storage_not_null' in str(test):
                     test_suite.addTest(test)
         return test_suite
 
