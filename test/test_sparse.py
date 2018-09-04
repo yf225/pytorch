@@ -1382,6 +1382,8 @@ class TestSparse(TestCase):
             self.assertEqual(t, t + y)
 
         do_test(self.SparseTensor())
+        do_test(self.SparseTensor(3, 0))
+        do_test(self.SparseTensor(3, 3))
 
     @skipIfRocm
     def _test_resize_shape(self, x_i, x_v, x_size, y_i, y_v, y_size):
@@ -1502,7 +1504,7 @@ def load_tests(loader, tests, pattern):
         test_suite = unittest.TestSuite()
         for test_group in tests:
             for test in test_group:
-                if 'test_is_sparse' in str(test):
+                if 'test_resize_as' in str(test):
                     test_suite.addTest(test)
         return test_suite
 
