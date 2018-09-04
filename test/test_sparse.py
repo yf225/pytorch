@@ -1363,7 +1363,13 @@ class TestSparse(TestCase):
         x = torch.randn(3, 3)
         self.assertFalse(x.is_sparse)
 
+        x = torch.randn(3, 3, 0)
+        self.assertFalse(x.is_sparse)
+
         x = self.SparseTensor()
+        self.assertTrue(x.is_sparse)
+
+        x = self.SparseTensor(1, 0)
         self.assertTrue(x.is_sparse)
 
     @skipIfRocm
@@ -1496,7 +1502,7 @@ def load_tests(loader, tests, pattern):
         test_suite = unittest.TestSuite()
         for test_group in tests:
             for test in test_group:
-                if 'test_factory_copy' in str(test):
+                if 'test_is_sparse' in str(test):
                     test_suite.addTest(test)
         return test_suite
 
