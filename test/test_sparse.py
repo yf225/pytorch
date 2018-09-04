@@ -1173,6 +1173,13 @@ class TestSparse(TestCase):
 
         indices = self.IndexTensor([[1, 2],
                                     [0, 2]])
+        values = self.ValueTensor(2, 2, 2)
+        sizes = torch.Size([0, 0, 2, 2])
+        with self.assertRaisesRegex(RuntimeError, "sizes is inconsistent with indices"):
+            torch.sparse_coo_tensor(indices, values, sizes)
+
+        indices = self.IndexTensor([[1, 2],
+                                    [0, 2]])
         values = self.ValueTensor([[1, 1, 1], [1, 1, 1]])
         sizes = torch.Size([3, 3, 2])
         with self.assertRaisesRegex(RuntimeError, "values has incorrect size"):
@@ -1518,7 +1525,7 @@ def load_tests(loader, tests, pattern):
         test_suite = unittest.TestSuite()
         for test_group in tests:
             for test in test_group:
-                if 'test_resize_as' in str(test):
+                if 'test_factory_size_check' in str(test):
                     test_suite.addTest(test)
         return test_suite
 
