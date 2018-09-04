@@ -1296,33 +1296,36 @@ class TestSparse(TestCase):
 
     @cpu_only
     def test_factory_copy(self):
+        def test_tensor(indices, values, indices_equal, values_equal):
+            sparse_tensor = torch.sparse_coo_tensor(indices, values, dtype=torch.float64)
+            if indices_equal:
+                self.assertEqual(indices.data_ptr(), sparse_tensor._indices().data_ptr())
+            else:
+                self.assertNotEqual(indices.data_ptr(), sparse_tensor._indices().data_ptr())
+            if values_equal:
+                self.assertEqual(values.data_ptr(), sparse_tensor._values().data_ptr())
+            else:
+                self.assertNotEqual(values.data_ptr(), sparse_tensor._values().data_ptr())
+
         # both correct
         indices = torch.tensor(([0], [2]), dtype=torch.int64)
         values = torch.tensor([1.], dtype=torch.float64)
-        sparse_tensor = torch.sparse_coo_tensor(indices, values, dtype=torch.float64)
-        self.assertEqual(indices.data_ptr(), sparse_tensor._indices().data_ptr())
-        self.assertEqual(values.data_ptr(), sparse_tensor._values().data_ptr())
-
+        test_tensor(indices, values, True, True)
+        
         # only indices correct
         indices = torch.tensor(([0], [2]), dtype=torch.int64)
         values = torch.tensor([1.], dtype=torch.float32)
-        sparse_tensor = torch.sparse_coo_tensor(indices, values, dtype=torch.float64)
-        self.assertEqual(indices.data_ptr(), sparse_tensor._indices().data_ptr())
-        self.assertNotEqual(values.data_ptr(), sparse_tensor._values().data_ptr())
-
+        test_tensor(indices, values, True, False)
+        
         # only values correct
         indices = torch.tensor(([0], [2]), dtype=torch.int32)
         values = torch.tensor([1.], dtype=torch.float64)
-        sparse_tensor = torch.sparse_coo_tensor(indices, values, dtype=torch.float64)
-        self.assertNotEqual(indices.data_ptr(), sparse_tensor._indices().data_ptr())
-        self.assertEqual(values.data_ptr(), sparse_tensor._values().data_ptr())
-
+        test_tensor(indices, values, False, True)
+        
         # neither correct
         indices = torch.tensor(([0], [2]), dtype=torch.int32)
         values = torch.tensor([1.], dtype=torch.float32)
-        sparse_tensor = torch.sparse_coo_tensor(indices, values, dtype=torch.float64)
-        self.assertNotEqual(indices.data_ptr(), sparse_tensor._indices().data_ptr())
-        self.assertNotEqual(values.data_ptr(), sparse_tensor._values().data_ptr())
+        test_tensor(indices, values, False, False)
 
     @cpu_only  # not really, but we only really want to run this once
     def test_dtypes(self):
@@ -1477,7 +1480,7 @@ def load_tests(loader, tests, pattern):
         test_suite = unittest.TestSuite()
         for test_group in tests:
             for test in test_group:
-                if 'test_factory_device_type_inference' in str(test):
+                if 'test_factory_copy' in str(test):
                     test_suite.addTest(test)
         return test_suite
 
