@@ -1475,6 +1475,8 @@ class TestSparse(TestCase):
         self.assertFalse(torch.sparse_coo_tensor(([0, 0],), (0., 0.), (1,)).is_nonzero())
         self.assertFalse(torch.sparse_coo_tensor(([0, 0],), (-1., 1.), (1,)).is_nonzero())
         self.assertTrue(torch.sparse_coo_tensor(torch.zeros(0, 1), 12.3, []).is_nonzero())  # scalar sparse tensor
+        with self.assertRaisesRegex(RuntimeError, "bool value of Tensor with no values is ambiguous"):
+            torch.sparse_coo_tensor(([0, 1],), self.ValueTensor(2, 0), (4, 0)).is_nonzero()
 
 
 class TestUncoalescedSparse(TestSparse):
@@ -1525,7 +1527,7 @@ def load_tests(loader, tests, pattern):
         test_suite = unittest.TestSuite()
         for test_group in tests:
             for test in test_group:
-                if 'test_factory_size_check' in str(test):
+                if 'test_is_nonzero' in str(test):
                     test_suite.addTest(test)
         return test_suite
 
