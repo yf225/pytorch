@@ -1410,8 +1410,11 @@ class TestSparse(TestCase):
 
     @skipIfRocm
     def test_resize(self):
-        # 1. Increase the size of some dense dimensions [Supported]
+        # 1. Expand the size of some dense dimensions [Supported]
         self._test_resize_shape([1, 1], [1, 2, 3], [2, 2, 3],
+                                [1, 1], [1, 2, 4], [2, 2, 4])
+
+        self._test_resize_shape([1, 1], [1, 2, 0], [2, 2, 0],
                                 [1, 1], [1, 2, 4], [2, 2, 4])
 
         # 2. Expand the size of some sparse dimensions [Supported]
@@ -1422,10 +1425,17 @@ class TestSparse(TestCase):
         self._test_resize_shape([1, 0], [0, 2, 3], [2, 2, 3],
                                 [2, 0], [0, 2, 4, 5], [1, 1, 2, 4, 5])
 
+        self._test_resize_shape([1, 0], [0, 2, 3], [2, 2, 3],
+                                [2, 0], [0, 2, 4, 0], [1, 1, 2, 4, 0])
+
         # 4. Add dims to dense dimensions [Not Supported]
         with self.assertRaisesRegex(RuntimeError, "changing the number of dense dimensions"):
             self._test_resize_shape([1, 1], [1, 2, 3], [2, 2, 3],
                                     [1, 1], [1, 2, 3, 4], [2, 2, 3, 4])
+
+        with self.assertRaisesRegex(RuntimeError, "changing the number of dense dimensions"):
+            self._test_resize_shape([1, 1], [1, 2, 3], [2, 2, 3],
+                                    [1, 1], [1, 2, 3, 0], [2, 2, 3, 0])
 
         # 5. Remove dims from dense dimensions [Not Supported]
         with self.assertRaisesRegex(RuntimeError, "changing the number of dense dimensions"):
@@ -1446,6 +1456,10 @@ class TestSparse(TestCase):
         with self.assertRaisesRegex(RuntimeError, "shrinking the size of dense dimensions"):
             self._test_resize_shape([1, 1], [1, 2, 3], [2, 2, 3],
                                     [1, 1], [1, 2, 2], [2, 2, 2])
+
+        with self.assertRaisesRegex(RuntimeError, "shrinking the size of dense dimensions"):
+            self._test_resize_shape([1, 1], [1, 2, 3], [2, 2, 3],
+                                    [1, 1], [1, 2, 0], [2, 2, 0])
 
     def test_is_nonzero(self):
         self.assertTrue(torch.sparse_coo_tensor(([0],), 1., (1,)).is_nonzero())
