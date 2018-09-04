@@ -1028,6 +1028,14 @@ class TestSparse(TestCase):
 
         self.assertFalse(z._indices().numel() != 2 and z.is_coalesced())
 
+        i = self.IndexTensor([[1, 2, 1]])
+        v = self.ValueTensor(3, 0)
+        x = self.SparseTensor(i, v, torch.Size([3, 0]))
+        y = self.SparseTensor(i, v, torch.Size([3, 0]))
+        z = x + y
+
+        self.assertFalse(z._indices().numel() != 2 and z.is_coalesced())
+
     @cuda_only
     def test_storage_not_null(self):
         x = torch.cuda.sparse.FloatTensor(2)
@@ -1410,7 +1418,7 @@ def load_tests(loader, tests, pattern):
         test_suite = unittest.TestSuite()
         for test_group in tests:
             for test in test_group:
-                if 'test_log1p' in str(test):
+                if 'test_sparse_add_coalesce' in str(test):
                     test_suite.addTest(test)
         return test_suite
 
