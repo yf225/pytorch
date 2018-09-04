@@ -1103,12 +1103,16 @@ class TestSparse(TestCase):
 
     @skipIfRocm
     def test_new(self):
-        x, indices, values = self._gen_sparse(3, 10, 100)
-        if not x.is_cuda:
-            # CUDA sparse tensors currently requires the size to be
-            # specified if nDimV > 0
-            self.assertEqual(x.new(indices, values), x)
-        self.assertEqual(x.new(indices, values, x.size()), x)
+        def test_shape(sparse_dims, nnz, with_size):
+            x, indices, values = self._gen_sparse(sparse_dims, nnz, with_size)
+            if not x.is_cuda:
+                # CUDA sparse tensors currently requires the size to be
+                # specified if nDimV > 0
+                self.assertEqual(x.new(indices, values), x)
+            self.assertEqual(x.new(indices, values, x.size()), x)
+
+        test_shape(3, 10, 100)
+        test_shape(3, 0, [100, 100, 0])
 
     @cpu_only  # not really, but we only really want to run this once
     @skipIfRocm
@@ -1437,7 +1441,7 @@ def load_tests(loader, tests, pattern):
         test_suite = unittest.TestSuite()
         for test_group in tests:
             for test in test_group:
-                if 'test_new_device_multi_gpu' in str(test):
+                if 'test_new' in str(test):
                     test_suite.addTest(test)
         return test_suite
 
