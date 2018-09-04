@@ -1224,25 +1224,25 @@ class TestSparse(TestCase):
         with self.assertRaisesRegex(RuntimeError, "indices and values must have same nnz"):
             torch.sparse_coo_tensor(indices, values, sizes)
 
-    def _test_factory_tensor_shape(self, i_shape, v_shape, size, expected_size):
-        device = 'cuda' if self.is_cuda else 'cpu'
-        if size:
-            t = torch.sparse_coo_tensor(torch.empty(i_shape), torch.empty(v_shape), torch.Size(size), device=device)
-        else:
-            t = torch.sparse_coo_tensor(torch.empty(i_shape), torch.empty(v_shape), device=device)
-        expected_indices = torch.empty(i_shape, device=device)
-        expected_values = torch.empty(v_shape, device=device)
-        expected_size = torch.Size(expected_size)
-        self.assertEqual(t._indices(), expected_indices)
-        self.assertEqual(t._values(), expected_values)
-        self.assertEqual(t.size(), expected_size)
-
     def test_factory_nnz_zero(self):
-        self._test_factory_tensor_shape([1, 0], [0, 2, 4, 0], None, [0, 2, 4, 0])
-        self._test_factory_tensor_shape([3, 0], [0, 2, 4, 0], None, [0, 0, 0, 2, 4, 0])
-        self._test_factory_tensor_shape([1, 0], [0, 2, 4, 0], [0, 2, 4, 0], [0, 2, 4, 0])
-        self._test_factory_tensor_shape([3, 0], [0, 2, 4, 0], [0, 0, 0, 2, 4, 0], [0, 0, 0, 2, 4, 0])
-        self._test_factory_tensor_shape([3, 0], [0, 2, 4, 0], [1, 2, 3, 2, 4, 0], [1, 2, 3, 2, 4, 0])
+        def test_shape(i_shape, v_shape, size, expected_size):
+            device = 'cuda' if self.is_cuda else 'cpu'
+            if size:
+                t = torch.sparse_coo_tensor(torch.empty(i_shape), torch.empty(v_shape), torch.Size(size), device=device)
+            else:
+                t = torch.sparse_coo_tensor(torch.empty(i_shape), torch.empty(v_shape), device=device)
+            expected_indices = torch.empty(i_shape, device=device)
+            expected_values = torch.empty(v_shape, device=device)
+            expected_size = torch.Size(expected_size)
+            self.assertEqual(t._indices(), expected_indices)
+            self.assertEqual(t._values(), expected_values)
+            self.assertEqual(t.size(), expected_size)
+
+        test_shape([1, 0], [0, 2, 4, 0], None, [0, 2, 4, 0])
+        test_shape([3, 0], [0, 2, 4, 0], None, [0, 0, 0, 2, 4, 0])
+        test_shape([1, 0], [0, 2, 4, 0], [0, 2, 4, 0], [0, 2, 4, 0])
+        test_shape([3, 0], [0, 2, 4, 0], [0, 0, 0, 2, 4, 0], [0, 0, 0, 2, 4, 0])
+        test_shape([3, 0], [0, 2, 4, 0], [1, 2, 3, 2, 4, 0], [1, 2, 3, 2, 4, 0])
 
     @skipIfRocm
     def test_factory_dense_dims(self):
@@ -1458,7 +1458,7 @@ def load_tests(loader, tests, pattern):
         test_suite = unittest.TestSuite()
         for test_group in tests:
             for test in test_group:
-                if 'test_factory_nnz' in str(test):
+                if 'test_factory_nnz_zero' in str(test):
                     test_suite.addTest(test)
         return test_suite
 
