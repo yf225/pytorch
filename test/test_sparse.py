@@ -5,6 +5,7 @@ import itertools
 import functools
 import random
 import unittest
+import re
 from common import TestCase, run_tests, skipIfRocm
 from common_cuda import TEST_CUDA
 from test_torch import TestTorch
@@ -1507,11 +1508,10 @@ class TestSparseOneOff(TestCase):
     @unittest.skipIf(not TEST_CUDA, 'CUDA not available')
     @skipIfRocm
     def test_cuda_from_cpu(self):
-        self.assertExpectedRaises(
-            RuntimeError,
-            lambda: torch.sparse.FloatTensor(torch.zeros(1, 4).long().cuda(),
-                                             torch.randn(4, 4, 4),
-                                             [3, 4, 4]))
+        with self.assertRaisesRegex(RuntimeError, "backend of indices \\(CUDA\\) must match backend of values \\(CPU\\)"):
+            torch.sparse.FloatTensor(torch.zeros(1, 4).long().cuda(),
+                                     torch.randn(4, 4, 4),
+                                     [3, 4, 4])
 
     @unittest.skipIf(not TEST_CUDA, 'CUDA not available')
     @skipIfRocm
@@ -1527,7 +1527,7 @@ def load_tests(loader, tests, pattern):
         test_suite = unittest.TestSuite()
         for test_group in tests:
             for test in test_group:
-                if 'test_is_nonzero' in str(test):
+                if 'test_cuda_from_cpu' in str(test):
                     test_suite.addTest(test)
         return test_suite
 
