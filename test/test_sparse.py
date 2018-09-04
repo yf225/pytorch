@@ -1520,14 +1520,15 @@ class TestSparseOneOff(TestCase):
         sparse_y = torch.cuda.sparse.FloatTensor(torch.zeros(1, 4).long().cuda(),
                                                  torch.randn(4, 4, 4).cuda(),
                                                  [3, 4, 4])
-        self.assertExpectedRaises(RuntimeError, lambda: x + sparse_y)
+        with self.assertRaisesRegex(RuntimeError, "add: expected 'other' to be a CPU tensor\\, but got a CUDA tensor"):
+            x + sparse_y
 
 
 def load_tests(loader, tests, pattern):
         test_suite = unittest.TestSuite()
         for test_group in tests:
             for test in test_group:
-                if 'test_cuda_from_cpu' in str(test):
+                if 'test_cuda_sparse_cpu_dense_add' in str(test):
                     test_suite.addTest(test)
         return test_suite
 
