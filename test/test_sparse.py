@@ -1267,6 +1267,13 @@ class TestSparse(TestCase):
         t = torch.sparse_coo_tensor(torch.tensor(([0], [2])), torch.tensor([1]))
         self.assertEqual(torch.int64, t.dtype)
 
+        t = torch.sparse_coo_tensor(torch.tensor(([0], [2])), torch.FloatTensor(1, 0))
+        self.assertEqual(torch.float32, t.dtype)
+        t = torch.sparse_coo_tensor(torch.tensor(([0], [2])), torch.DoubleTensor(1, 0))
+        self.assertEqual(torch.float64, t.dtype)
+        t = torch.sparse_coo_tensor(torch.tensor(([0], [2])), torch.LongTensor(1, 0))
+        self.assertEqual(torch.int64, t.dtype)
+
     @cuda_only
     @skipIfRocm
     def test_factory_device_type_inference(self):
@@ -1464,7 +1471,7 @@ def load_tests(loader, tests, pattern):
         test_suite = unittest.TestSuite()
         for test_group in tests:
             for test in test_group:
-                if 'test_factory_dense_dims' in str(test):
+                if 'test_factory_type_inference' in str(test):
                     test_suite.addTest(test)
         return test_suite
 
