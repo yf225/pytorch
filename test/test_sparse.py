@@ -1091,6 +1091,7 @@ class TestSparse(TestCase):
         self._test_new_device((), 0)
         self._test_new_device((30, 20), 0)
         self._test_new_device((30, 20, 10), 0)
+        self._test_new_device((30, 20, 10, 0), 0)
 
     @cuda_only
     @unittest.skipIf(torch.cuda.device_count() < 2, "only one GPU detected")
@@ -1435,7 +1436,7 @@ def load_tests(loader, tests, pattern):
         test_suite = unittest.TestSuite()
         for test_group in tests:
             for test in test_group:
-                if 'test_same_gpu' in str(test):
+                if 'test_new_device_single_gpu' in str(test):
                     test_suite.addTest(test)
         return test_suite
 
