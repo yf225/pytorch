@@ -21,10 +21,8 @@
 
 namespace torch {
 namespace autograd {
-Variable::Impl::Impl(at::Tensor data, bool requires_grad, Edge gradient_edge)
-    : TensorImpl(data.type().type_id(), data.type().scalarType(), data.type().allocator(), /* is variable */ true),
-      data_(std::move(data)),
-      grad_fn_(std::move(gradient_edge.function)),
+Variable::Impl::Impl(bool requires_grad, Edge gradient_edge)
+    : grad_fn_(std::move(gradient_edge.function)),
       requires_grad_(false),
       is_view_(false),
       output_nr_(gradient_edge.input_nr),
@@ -34,64 +32,64 @@ Variable::Impl::Impl(at::Tensor data, bool requires_grad, Edge gradient_edge)
   AT_CHECK(
       !grad_fn_ || !requires_grad_,
       "requires_grad should be false if grad_fn is set");
-  if (!data_.defined()) {
-    throw std::runtime_error("data is undefined");
-  }
+  // if (!data_.defined()) {
+  //   throw std::runtime_error("data is undefined");
+  // }
 }
 
 Variable::Impl::~Impl() = default;
 
-int64_t Variable::Impl::numel() const {
-  return data_.numel();
-}
+// int64_t Variable::Impl::numel() const {
+//   return data_.numel();
+// }
 
-IntList Variable::Impl::sizes() const {
-  return data_.sizes();
-}
+// IntList Variable::Impl::sizes() const {
+//   return data_.sizes();
+// }
 
-IntList Variable::Impl::strides() const {
-  return data_.strides();
-}
+// IntList Variable::Impl::strides() const {
+//   return data_.strides();
+// }
 
-bool Variable::Impl::is_contiguous() const {
-  AT_ERROR("variable impl does not have is_contiguous");
-}
+// bool Variable::Impl::is_contiguous() const {
+//   AT_ERROR("variable impl does not have is_contiguous");
+// }
 
-int64_t Variable::Impl::dim() const {
-  return data_.dim();
-}
+// int64_t Variable::Impl::dim() const {
+//   return data_.dim();
+// }
 
-int64_t Variable::Impl::size(int64_t d) const {
-  return data_.size(d);
-}
+// int64_t Variable::Impl::size(int64_t d) const {
+//   return data_.size(d);
+// }
 
-int64_t Variable::Impl::stride(int64_t d) const {
-  return data_.stride(d);
-}
+// int64_t Variable::Impl::stride(int64_t d) const {
+//   return data_.stride(d);
+// }
 
-void Variable::Impl::resize_dim(int64_t ndim) {
-  AT_ERROR("variable impl does not have resize_dim");
-}
+// void Variable::Impl::resize_dim(int64_t ndim) {
+//   AT_ERROR("variable impl does not have resize_dim");
+// }
 
-void Variable::Impl::set_size(int64_t dim, int64_t new_size) {
-  AT_ERROR("variable impl does not have set_size");
-}
+// void Variable::Impl::set_size(int64_t dim, int64_t new_size) {
+//   AT_ERROR("variable impl does not have set_size");
+// }
 
-void Variable::Impl::set_stride(int64_t dim, int64_t new_stride) {
-  AT_ERROR("variable impl does not have set_stride");
-}
+// void Variable::Impl::set_stride(int64_t dim, int64_t new_stride) {
+//   AT_ERROR("variable impl does not have set_stride");
+// }
 
-void Variable::Impl::set_storage_offset(int64_t storage_offset) {
-  AT_ERROR("variable impl does not have set_storage_offset");
-}
+// void Variable::Impl::set_storage_offset(int64_t storage_offset) {
+//   AT_ERROR("variable impl does not have set_storage_offset");
+// }
 
-const at::Storage& Variable::Impl::storage() const {
-  return data_.storage();
-}
+// const at::Storage& Variable::Impl::storage() const {
+//   return data_.storage();
+// }
 
-int64_t Variable::Impl::storage_offset() const {
-  return data_.storage_offset();
-}
+// int64_t Variable::Impl::storage_offset() const {
+//   return data_.storage_offset();
+// }
 
 std::shared_ptr<Function> Variable::Impl::get_grad_accumulator() {
   if (grad_fn_) {
@@ -172,8 +170,8 @@ void Variable::Impl::release_resources() {
   hooks_.clear();
 }
 
-Variable::ViewImpl::ViewImpl(Variable base, at::Tensor data, Edge gradient_edge)
-    : Variable::Impl(std::move(data), false, std::move(gradient_edge)),
+Variable::ViewImpl::ViewImpl(Variable base, Edge gradient_edge)
+    : Variable::Impl(false, std::move(gradient_edge)),
       base_(std::move(base)) {
   AT_CHECK(base_.defined(), "base is undefined");
   if (base_.is_view()) {

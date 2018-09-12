@@ -172,6 +172,9 @@ struct AT_API TensorImpl : public c10::intrusive_ptr_target {
   virtual int64_t stride(int64_t d) const;
 
   bool is_variable() const { return is_variable_; };
+  void set_variable_impl(void* variable_impl) {
+    variable_impl_ = variable_impl;
+  }
 
  private:
   int64_t storage_offset_;
@@ -203,6 +206,7 @@ struct AT_API TensorImpl : public c10::intrusive_ptr_target {
   ScalarType scalar_type_;
   bool is_variable_ = false;
   bool is_wrapped_number_ = false;
+  void* variable_impl_ = nullptr;
 
  private:
   TensorImpl(Storage&& storage, TensorTypeId type_id, ScalarType scalar_type, bool is_variable);
