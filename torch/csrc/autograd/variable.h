@@ -257,47 +257,49 @@ struct TORCH_API Variable : public at::Tensor {
 
  private:
   /// Private implementation struct of the `Variable`. This struct declaration
-  /// and the `get()` method which exposes it shall forever remain private and
-  /// never be exposed to the public interface of this class.
+  /// shall forever remain private and never be exposed to the public interface
+  /// of this class.
   struct Impl;
   struct ViewImpl;
+
+  void* variable_impl_;
 
   // Private Methods
   //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-  Variable(c10::intrusive_ptr<Variable::Impl> self);
-  Impl* get() const;
+  Variable::Impl* get_variable_impl();
+  Variable(at::Tensor data, c10::intrusive_ptr<Variable::Impl> variable_impl);
 };
 
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 //                            Variable::Impl
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-struct TORCH_API Variable::Impl : public at::TensorImpl {
+struct TORCH_API Variable::Impl : public c10::intrusive_ptr_target {
   explicit Impl(
       at::Tensor data,
       bool requires_grad = false,
       Edge gradient_edge = Edge());
 
-  ~Impl() override;
+  ~Impl();
 
-  int64_t numel() const override;
-  at::IntList sizes() const override;
-  at::IntList strides() const override;
-  bool is_contiguous() const override;
-  int64_t size(int64_t d) const override;
-  int64_t stride(int64_t d) const override;
-  void resize_dim(int64_t ndim) override;
-  void set_size(int64_t dim, int64_t new_size) override;
-  void set_stride(int64_t dim, int64_t new_stride) override;
-  void set_storage_offset(int64_t storage_offset) override;
+  // int64_t numel() const override;
+  // at::IntList sizes() const override;
+  // at::IntList strides() const override;
+  // bool is_contiguous() const override;
+  // int64_t size(int64_t d) const override;
+  // int64_t stride(int64_t d) const override;
+  // void resize_dim(int64_t ndim) override;
+  // void set_size(int64_t dim, int64_t new_size) override;
+  // void set_stride(int64_t dim, int64_t new_stride) override;
+  // void set_storage_offset(int64_t storage_offset) override;
 
-  int64_t dim() const override;
-  const at::Storage& storage() const override;
-  int64_t storage_offset() const override;
+  // int64_t dim() const override;
+  // const at::Storage& storage() const override;
+  // int64_t storage_offset() const override;
 
   std::shared_ptr<Function> get_grad_accumulator();
-  virtual std::shared_ptr<Function>& get_grad_fn() {
+  virtual std::shared_ptr<Function>& get_grad_fn(Tensor data) {
     return grad_fn_;
   }
 
@@ -308,40 +310,38 @@ struct TORCH_API Variable::Impl : public at::TensorImpl {
   /// Sets the `requires_grad` property of `Variable`. This should be true for
   /// leaf variables that want to accumulate gradients, and false for all other
   /// variables.
-  void set_requires_grad(bool requires_grad) override {
+  void set_requires_grad(Tensor data, bool requires_grad) {
     AT_CHECK(
-        !requires_grad || at::isFloatingType(type().scalarType()),
+        !requires_grad || at::isFloatingType(data.type().scalarType()),
         "Only Tensors of floating point dtype can require gradients");
     requires_grad_ = requires_grad;
   }
 
-  bool requires_grad() const override {
+  bool requires_grad() const {
     return requires_grad_ || grad_fn_ || (is_view_ && base().requires_grad());
   }
 
   /// Accesses the gradient `Variable` of this `Variable`.
-  Variable& grad() override {
+  Variable& grad() {
     return grad_;
   }
-  const Variable& grad() const override {
+  const Variable& grad() const {
     return grad_;
   }
 
-  Variable detach() const;
-  void detach_();
-
-  void set_data(Tensor new_data);
+  Variable detach(Tensor data) const;
+  void detach_(Tensor data);
 
   void backward(
+      at::Tensor data,
       at::optional<at::Tensor> gradient,
       bool keep_graph,
       bool create_graph);
 
   /// Reset all expensive fields to free up resources
-  void release_resources() override;
+  virtual void release_resources();
 
   std::string name;
-  at::Tensor data_;
 
   Variable grad_;
   std::shared_ptr<Function> grad_fn_;
@@ -377,12 +377,12 @@ struct TORCH_API Variable::Impl : public at::TensorImpl {
 /// due to in-place modifications of the shared data. Accesses should go
 /// through get_grad_fn(). All other fields are always valid.
 struct TORCH_API Variable::ViewImpl : public Variable::Impl {
-  ViewImpl(Variable base, at::Tensor data, Edge gradient_edge);
+  ViewImpl(Variable base, Edge gradient_edge);
 
   /// Gets the up-to-date grad_fn. If the shared data or base was modified, we
   /// re-create the grad_fn to express the up-to-date view relationship between
   /// this and the base Variable.
-  std::shared_ptr<Function>& get_grad_fn() override;
+  std::shared_ptr<Function>& get_grad_fn(Tensor data) override;
 
   const Variable& base() const override {
     return base_;
@@ -393,7 +393,7 @@ struct TORCH_API Variable::ViewImpl : public Variable::Impl {
 
   /// Called after in-place modifications. Modifies the grad_fn of the base
   /// Variable.
-  void rebase_history(Edge gradient_edge);
+  void rebase_history(Tensor data, Edge gradient_edge);
 
   /// The base `Variable` (never a view).
   Variable base_;
@@ -416,8 +416,8 @@ inline Variable make_variable_view(
     at::Tensor data,
     Edge gradient_edge = Edge()) {
   if (data.defined()) {
-    return Variable(c10::make_intrusive<Variable::ViewImpl>(
-            std::move(base), std::move(data), std::move(gradient_edge)));
+    return Variable(std::move(data), 
+                    c10::make_intrusive<Variable::ViewImpl>(std::move(base), std::move(gradient_edge)));
   }
   return Variable();
 }
@@ -427,7 +427,7 @@ inline Variable make_variable(at::Tensor data, bool requires_grad = false) {
       !data.is_variable(),
       "Must not create a new variable from a variable, use its .data()");
   if (data.defined()) {
-    return Variable(c10::make_intrusive<Variable::Impl>(data, requires_grad));
+    return Variable(data, c10::make_intrusive<Variable::Impl>(requires_grad));
   }
   return Variable();
 }
@@ -437,7 +437,7 @@ inline Variable make_variable(at::Tensor data, Edge gradient_edge) {
       !data.is_variable(),
       "Must not create a new variable from a variable, use its .data()");
   if (data.defined()) {
-    return Variable(c10::make_intrusive<Variable::Impl>(data, false, std::move(gradient_edge)));
+    return Variable(data, c10::make_intrusive<Variable::Impl>(false, std::move(gradient_edge)));
   }
   return Variable();
 }
@@ -465,64 +465,80 @@ inline const Variable& as_variable_ref(const at::Tensor& tensor) {
 }
 
 inline const at::Tensor& Variable::data() const noexcept {
-  return get()->data_;
+  return this;
 }
 
 inline at::Tensor& Variable::data() noexcept {
-  return get()->data_;
+  return this;
 }
 
 // Gradient Function and Edges
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 inline const std::shared_ptr<Function>& Variable::grad_fn() const {
-  return get()->get_grad_fn();
+  return get_variable_impl()->get_grad_fn(this);
 }
 
 inline Function* Variable::grad_fn_unsafe() const {
-  return get()->grad_fn_.get();
+  return get_variable_impl()->grad_fn_.get();
 }
 
 inline void Variable::set_grad_accumulator(
     std::weak_ptr<Function> grad_accumulator) {
-  get()->grad_accumulator_ = std::move(grad_accumulator);
+  get_variable_impl()->grad_accumulator_ = std::move(grad_accumulator);
 }
 
 inline std::shared_ptr<Function> Variable::try_get_grad_accumulator() const {
-  return get()->grad_accumulator_.lock();
+  return get_variable_impl()->grad_accumulator_.lock();
 }
 
 inline std::shared_ptr<Function> Variable::grad_accumulator() const {
-  return get()->get_grad_accumulator();
+  return get_variable_impl()->get_grad_accumulator();
 }
 
 inline Variable Variable::detach() const {
-  return get()->detach();
+  return get_variable_impl()->detach(this);
 }
 
 inline void Variable::detach_() {
-  get()->detach_();
+  get_variable_impl()->detach_(this);
 }
 
 inline void Variable::backward(at::optional<Tensor> gradient, bool keep_graph, bool create_graph) const {
-  get()->backward(gradient, keep_graph, create_graph);
+  get_variable_impl()->backward(this, gradient, keep_graph, create_graph);
 }
 
 inline void Variable::set_data(Tensor new_data) const {
-  get()->set_data(new_data);
+  // Resets gradient accumulator if metadata is out of date
+  std::lock_guard<std::mutex> lock(mutex_);
+  auto prior_accumulator = get_variable_impl()->grad_accumulator_.lock();
+  if (prior_accumulator) {
+    const auto prior_device = prior_accumulator->input_metadata(0).device();
+    const auto new_device = new_data.is_cuda() ? new_data.get_device() : -1;
+
+    if (new_data.type() != type() || prior_device != new_device) {
+      get_variable_impl()->grad_accumulator_.reset();
+    }
+  }
+
+  // Updates metadata
+  tensor_impl_ = new_data->getIntrusivePtr();
+  tensor_impl_->scalar_type_ = new_data.type().scalarType();
+  tensor_impl_->type_id_ = new_data.type().type_id();
+  tensor_impl_->is_variable_ = true;
 }
 
 inline void Variable::set_gradient_edge(Edge edge) noexcept {
-  get()->grad_fn_ = std::move(edge.function);
-  get()->output_nr_ = edge.input_nr;
+  get_variable_impl()->grad_fn_ = std::move(edge.function);
+  get_variable_impl()->output_nr_ = edge.input_nr;
 }
 
 inline uint32_t Variable::output_nr() const noexcept {
-  return get()->output_nr_;
+  return get_variable_impl()->output_nr_;
 }
 
 inline bool Variable::is_leaf() const noexcept {
-  return get()->grad_fn_ == nullptr;
+  return get_variable_impl()->grad_fn_ == nullptr;
 }
 
 // Versions
@@ -530,75 +546,77 @@ inline bool Variable::is_leaf() const noexcept {
 
 inline void Variable::set_version_counter(
     const VariableVersion& version_counter) noexcept {
-  get()->version_counter_ = version_counter;
+  get_variable_impl()->version_counter_ = version_counter;
 }
 
 inline void Variable::bump_version() noexcept {
-  get()->version_counter_.bump();
+  get_variable_impl()->version_counter_.bump();
 }
 
 inline uint32_t Variable::current_version() const noexcept {
-  return get()->version_counter_.current_version();
+  return get_variable_impl()->version_counter_.current_version();
 }
 
 inline const VariableVersion& Variable::version_counter() const noexcept {
-  return get()->version_counter_;
+  return get_variable_impl()->version_counter_;
 }
 
 // Hooks
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 inline void Variable::add_hook(std::shared_ptr<FunctionPreHook> hook) {
-  get()->hooks_.push_back(std::move(hook));
+  get_variable_impl()->hooks_.push_back(std::move(hook));
 }
 
 inline const std::vector<std::shared_ptr<FunctionPreHook>>& Variable::hooks()
     const noexcept {
-  return get()->hooks_;
+  return get_variable_impl()->hooks_;
 }
 
 inline void Variable::clear_hooks() {
-  get()->hooks_.clear();
+  get_variable_impl()->hooks_.clear();
 }
 
 // View Variables
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 inline bool Variable::is_view() const noexcept {
-  return get()->is_view_;
+  return get_variable_impl()->is_view_;
 }
 
 inline const Variable& Variable::base() const {
-  return get()->base();
+  return get_variable_impl()->base();
 }
 
 // Miscellaneous
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 inline void Variable::set_name(const std::string& name) {
-  get()->name = name;
+  get_variable_impl()->name = name;
 }
 
 inline const std::string& Variable::name() const noexcept {
-  return get()->name;
+  return get_variable_impl()->name;
 }
 
 inline void Variable::set_pyobj(PyObject* pyobj) noexcept {
-  get()->pyobj_ = pyobj;
+  get_variable_impl()->pyobj_ = pyobj;
 }
 
 inline PyObject* Variable::pyobj() const noexcept {
-  return get()->pyobj_;
+  return get_variable_impl()->pyobj_;
 }
 
 // Private Methods
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-inline Variable::Variable(c10::intrusive_ptr<Variable::Impl> self)
-    : at::Tensor(std::move(self)) {}
+inline Variable::Variable(at::Tensor data, c10::intrusive_ptr<Variable::Impl> variable_impl)
+    : at::Tensor(std::move(data)),
+      variable_impl_(variable_impl.get()) {}
 
-inline Variable::Impl* Variable::get() const {
-  AT_CHECK(defined(), "Called Variable::get() on an undefined Variable");
-  return static_cast<Variable::Impl*>(tensor_impl_.get());
+inline Variable::Impl* Variable::get_variable_impl() const {
+  AT_CHECK(defined(), "Called Variable::get_variable_impl() on an undefined Variable");
+  AT_CHECK(variable_impl_ == nullptr, "Called Variable::get_variable_impl() on a Variable with variable_impl_ pointing to NULL");
+  return static_cast<Variable::Impl*>(variable_impl_);
 }
 }} // namespace torch::autograd
