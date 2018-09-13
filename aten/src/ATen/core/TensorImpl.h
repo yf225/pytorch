@@ -20,10 +20,52 @@ struct Tensor;
 } // namespace at
 
 namespace at {
+struct TensorImplInternals : public c10::intrusive_ptr_target {
+  // TODO: make these protected
+  // Note: storage->size() may be greater than the recorded size
+  // of a tensor
+  at::Storage storage_;
+
+  int64_t storage_offset_;
+  std::vector<int64_t> sizes_;
+  std::vector<int64_t> strides_;
+
+  bool is_contiguous_;
+  int64_t numel_;
+
+  TensorTypeId type_id_;
+  // INVARIANT: When storage is non-null, this scalar type must
+  // agree with the scalar type in storage
+  ScalarType scalar_type_;
+  bool is_wrapped_number_ = false;
+
+  TensorImplInternals(at::Storage storage,
+                      int64_t storage_offset,
+                      std::vector<int64_t> sizes,
+                      std::vector<int64_t> strides,
+                      bool is_contiguous,
+                      int64_t numel,
+                      TensorTypeId type_id,
+                      ScalarType scalar_type,
+                      bool is_wrapped_number = false)
+                      : storage_(storage),
+                        storage_offset_(storage_offset),
+                        sizes_(sizes),
+                        strides_(strides),
+                        is_contiguous_(is_contiguous),
+                        numel_(numel),
+                        type_id_(type_id),
+                        scalar_type_(scalar_type),
+                        is_wrapped_number_(is_wrapped_number) {};
+};
+} // namespace at
+
+namespace at {
 struct AT_API TensorImpl : public c10::intrusive_ptr_target {
   TensorImpl() = delete;
   TensorImpl(TensorTypeId type_id, ScalarType scalar_type, Allocator *allocator, bool is_variable);
   TensorImpl(Storage&& storage, TensorTypeId type_id, bool is_variable);
+  TensorImpl(c10::intrusive_ptr<TensorImplInternals> internals, bool is_variable);
 
   virtual void release_resources() override;
 
@@ -35,25 +77,29 @@ struct AT_API TensorImpl : public c10::intrusive_ptr_target {
     return *globalLegacyTypeDispatch().getTypeRaw(tensorTypeIdToBackend(type_id()), scalar_type(), is_variable());
   }
 
-  TensorTypeId type_id() const { return type_id_; }
+  TensorTypeId type_id() const { return internals_->type_id_; }
   virtual IntList sizes() const;
   virtual IntList strides() const;
   virtual int64_t dim() const;
   virtual const Storage& storage() const;
+  virtual void set_storage(Storage&& Storage);
   friend struct Type;
 
   virtual int64_t numel() const {
 #ifdef DEBUG
-    AT_ASSERT(compute_numel() == numel_);
+    AT_ASSERT(compute_numel() == internals_->numel_);
 #endif
-    return numel_;
+    return internals_->numel_;
   }
 
   virtual bool is_contiguous() const {
+    if (is_variable_) {
+      AT_ERROR("variable impl does not have is_contiguous");
+    }
 #ifdef DEBUG
-    AT_ASSERT(compute_contiguous() == is_contiguous_);
+    AT_ASSERT(compute_contiguous() == internals_->is_contiguous_);
 #endif
-    return is_contiguous_;
+    return internals_->is_contiguous_;
   }
 
   // this is called by the generated wrapper code when there are conditions
@@ -69,11 +115,11 @@ struct AT_API TensorImpl : public c10::intrusive_ptr_target {
   // numbers. Otherwise, they behave like their non-wrapped equivalents.
   // See [Result type computation] in TensorIterator.h.
   bool is_wrapped_number() const {
-    return is_wrapped_number_;
+    return internals_->is_wrapped_number_;
   }
   void set_wrapped_number(bool value) {
     AT_ASSERT(dim() == 0);
-    is_wrapped_number_ = value;
+    internals_->is_wrapped_number_ = value;
   }
 
   // ~~~~~ Autograd API ~~~~~
@@ -90,33 +136,28 @@ struct AT_API TensorImpl : public c10::intrusive_ptr_target {
   virtual Tensor& grad();
   virtual const Tensor& grad() const;
 
-  // TODO: make these protected
-  // Note: storage->size() may be greater than the recorded size
-  // of a tensor
-  at::Storage storage_;
-
   template <typename T>
   inline T * data() const {
-    return storage_.data<T>() + storage_offset_;
+    return internals_->storage_.data<T>() + internals_->storage_offset_;
   }
 
   inline void* data() const {
     return static_cast<void*>(
-        static_cast<char*>(storage_.data()) +
-        at::elementSize(scalar_type_) * storage_offset_);
+        static_cast<char*>(internals_->storage_.data()) +
+        at::elementSize(internals_->scalar_type_) * internals_->storage_offset_);
   }
 
   template <typename T>
   inline T * unsafe_data() const {
-    return storage_.unsafe_data<T>() + storage_offset_;
+    return internals_->storage_.unsafe_data<T>() + internals_->storage_offset_;
   }
 
   inline at::ScalarType scalar_type() const {
-    return scalar_type_;
+    return internals_->scalar_type_;
   }
 
   virtual int64_t storage_offset() const {
-    return storage_offset_;
+    return internals_->storage_offset_;
   }
 
   // represents that numel() == 0.
@@ -125,28 +166,40 @@ struct AT_API TensorImpl : public c10::intrusive_ptr_target {
   }
 
   virtual void resize_dim(int64_t ndim) {
+    if (is_variable_) {
+      AT_ERROR("variable impl does not have resize_dim");
+    }
     // NB: This is *truly* a resize; calling code (e.g., squeeze)
     // assumes that old values are preserved
-    sizes_.resize(ndim);
-    strides_.resize(ndim);
+    internals_->sizes_.resize(ndim);
+    internals_->strides_.resize(ndim);
     refresh_numel();
     refresh_contiguous();
   }
 
   virtual void set_size(int64_t dim, int64_t new_size) {
-    sizes_[dim] = new_size;
+    if (is_variable_) {
+      AT_ERROR("variable impl does not have set_size");
+    }
+    internals_->sizes_[dim] = new_size;
     refresh_numel();
     refresh_contiguous();
   }
 
   virtual void set_stride(int64_t dim, int64_t new_stride) {
-    strides_[dim] = new_stride;
+    if (is_variable_) {
+      AT_ERROR("variable impl does not have set_stride");
+    }
+    internals_->strides_[dim] = new_stride;
     refresh_numel();
     refresh_contiguous();
   }
 
   virtual void set_storage_offset(int64_t storage_offset) {
-    storage_offset_ = storage_offset;
+    if (is_variable_) {
+      AT_ERROR("variable impl does not have set_storage_offset");
+    }
+    internals_->storage_offset_ = storage_offset;
     refresh_numel();
     refresh_contiguous();
   }
@@ -162,8 +215,8 @@ struct AT_API TensorImpl : public c10::intrusive_ptr_target {
         ") must match dimensionality of strides (",
         new_stride.size(),
         ")");
-    sizes_ = new_size.vec();
-    strides_ = new_stride.vec();
+    internals_->sizes_ = new_size.vec();
+    internals_->strides_ = new_stride.vec();
     refresh_numel();
     refresh_contiguous();
   }
@@ -172,15 +225,9 @@ struct AT_API TensorImpl : public c10::intrusive_ptr_target {
   virtual int64_t stride(int64_t d) const;
 
   bool is_variable() const { return is_variable_; };
+  c10::intrusive_ptr<TensorImplInternals> get_internal() const { return internals_; };
 
  private:
-  int64_t storage_offset_;
-  std::vector<int64_t> sizes_;
-  std::vector<int64_t> strides_;
-
-  bool is_contiguous_;
-  int64_t numel_;
-
   int64_t compute_numel() const {
     int64_t n = 1;
     for (auto s : sizes()) {
@@ -192,17 +239,13 @@ struct AT_API TensorImpl : public c10::intrusive_ptr_target {
 
  protected:
   void refresh_numel() {
-    numel_ = compute_numel();
+    internals_->numel_ = compute_numel();
   }
   void refresh_contiguous() {
-    is_contiguous_ = compute_contiguous();
+    internals_->is_contiguous_ = compute_contiguous();
   }
-  TensorTypeId type_id_;
-  // INVARIANT: When storage is non-null, this scalar type must
-  // agree with the scalar type in storage
-  ScalarType scalar_type_;
   bool is_variable_ = false;
-  bool is_wrapped_number_ = false;
+  c10::intrusive_ptr<TensorImplInternals> internals_;
 
  private:
   TensorImpl(Storage&& storage, TensorTypeId type_id, ScalarType scalar_type, bool is_variable);
