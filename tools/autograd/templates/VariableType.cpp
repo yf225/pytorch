@@ -218,7 +218,10 @@ Variable & VariableType::checked_cast_variable(const Tensor & t, const char * na
 }
 
 Tensor & VariableType::unpack(const Tensor & t, const char * name, int pos) {
-  return checked_cast_variable(t, name, pos).data();
+  std::cout << "VariableType::unpack here01 tensorTypeIdToBackend(t.type_id()): " << tensorTypeIdToBackend(t.type_id()) << "\n";
+  auto tensor = checked_cast_variable(t, name, pos).data();
+  std::cout << "VariableType::unpack here02 tensorTypeIdToBackend(tensor.type_id()): " << tensorTypeIdToBackend(tensor.type_id()) << "\n";
+  return tensor;
 }
 
 SparseTensorRef VariableType::unpack(SparseTensorRef t, const char * name, int pos) {
