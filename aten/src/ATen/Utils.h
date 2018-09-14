@@ -66,6 +66,7 @@ static inline TensorImpl* checked_tensor_unwrap(const Tensor& expr, const char *
     return nullptr;
   }
   if (tensorTypeIdToBackend(expr.type_id()) != backend) {
+    throw 42;
     AT_ERROR("Expected object of backend ", backend, " but got backend ", tensorTypeIdToBackend(expr.type_id()),
              " for argument #", pos, " '", name, "'");
   }
@@ -83,6 +84,7 @@ static inline std::vector<TensorImpl*> checked_tensor_list_unwrap(ArrayRef<Tenso
   for (unsigned int i = 0; i < tensors.size(); ++i) {
     const auto& expr = tensors[i];
     if (tensorTypeIdToBackend(expr.type_id()) != backend) {
+      throw 42;
       AT_ERROR("Expected object of backend ", backend, " but got backend ", tensorTypeIdToBackend(expr.type_id()),
                " for sequence element ", i, " in sequence argument at position #", pos, " '", name, "'");
     }
