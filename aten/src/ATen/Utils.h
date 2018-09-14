@@ -62,9 +62,11 @@ static inline const Storage& checked_storage(
 // TODO: Change Backend into TensorTypeId
 // TODO: Stop unwrapping (this is blocked on getting rid of TH ;)
 static inline TensorImpl* checked_tensor_unwrap(const Tensor& expr, const char * name, int pos, bool allowNull, Backend backend, ScalarType scalar_type) {
+  std::cout << "checked_tensor_unwrap here01 tensorTypeIdToBackend(expr.type_id()): " << tensorTypeIdToBackend(expr.type_id()) << "\n";
   if(allowNull && !expr.defined()) {
     return nullptr;
   }
+  std::cout << "checked_tensor_unwrap here02 tensorTypeIdToBackend(expr.type_id()): " << tensorTypeIdToBackend(expr.type_id()) << "\n";
   std::cout << "checked_tensor_unwrap here1" << "\n";
   if (tensorTypeIdToBackend(expr.type_id()) != backend) {
     std::cout << "checked_tensor_unwrap here2" << "\n";
