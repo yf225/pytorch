@@ -77,7 +77,10 @@ struct AT_API TensorImpl : public c10::intrusive_ptr_target {
     return *globalLegacyTypeDispatch().getTypeRaw(tensorTypeIdToBackend(type_id()), scalar_type(), is_variable());
   }
 
-  TensorTypeId type_id() const { return internals_->type_id_; }
+  TensorTypeId type_id() const { 
+    std::cout << "TensorImpl type_id() is called" << "\n";
+    return internals_->type_id_;
+  }
   virtual IntList sizes() const;
   virtual IntList strides() const;
   virtual int64_t dim() const;

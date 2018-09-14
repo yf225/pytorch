@@ -65,7 +65,9 @@ static inline TensorImpl* checked_tensor_unwrap(const Tensor& expr, const char *
   if(allowNull && !expr.defined()) {
     return nullptr;
   }
+  std::cout << "checked_tensor_unwrap here1" << "\n";
   if (tensorTypeIdToBackend(expr.type_id()) != backend) {
+    std::cout << "checked_tensor_unwrap here2" << "\n";
     throw 42;
     AT_ERROR("Expected object of backend ", backend, " but got backend ", tensorTypeIdToBackend(expr.type_id()),
              " for argument #", pos, " '", name, "'");
