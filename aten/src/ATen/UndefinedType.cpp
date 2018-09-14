@@ -9,6 +9,7 @@ ScalarType UndefinedType::scalarType() const {
   return ScalarType::Undefined;
 }
 Backend UndefinedType::backend() const {
+  std::cout << "UndefinedType::backend() is called" << "\n";
   return Backend::Undefined;
 }
 
