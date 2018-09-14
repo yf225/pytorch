@@ -232,6 +232,9 @@ Tensor internal_new_from_data(const Type & type, at::optional<Device> device_opt
   auto sizes = compute_sizes(data);
   ScalarType scalarType = type_inference ? infer_scalar_type(data) : type.scalarType();
   auto tensor = autograd::make_variable(CPU(scalarType).tensor(sizes), /*requires_grad=*/false);
+  std::cout << "tensor.type(): " << tensor.type() << "\n";
+  std::cout << "tensor.type_id(): " << tensor.type_id() << "\n";
+  std::cout << "tensor.scalar_type(): " << tensor.scalar_type() << "\n";
   recursive_store(
       (char*)tensor.data_ptr(), tensor.sizes(), tensor.strides(), 0,
       scalarType, tensor.type().elementSizeInBytes(), data);
