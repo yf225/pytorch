@@ -97,6 +97,9 @@ struct TORCH_API Variable : public at::Tensor {
       at::Tensor data,
       Edge gradient_edge);
 
+  /// Creates a `Variable` that is a copy of another variable.
+  friend Variable make_variable(Variable base, bool requires_grad);
+
   /// Creates a `Variable` from the given `Tensor`. `requires_grad` should be
   /// set only for leaves, and determines whether the `Variable` will accumulate
   /// gradients. NOTE: `data` must *not* be a `Variable` already. Its dynamic
@@ -327,7 +330,6 @@ struct TORCH_API Variable::Impl : public at::TensorImpl {
     return grad_;
   }
 
-  Variable detach() const;
   void detach_();
 
   void set_data(Tensor new_data);
@@ -341,7 +343,6 @@ struct TORCH_API Variable::Impl : public at::TensorImpl {
   void release_resources() override;
 
   std::string name;
-  at::Tensor data_;
 
   Variable grad_;
   std::shared_ptr<Function> grad_fn_;
@@ -422,6 +423,10 @@ inline Variable make_variable_view(
   return Variable();
 }
 
+inline Variable make_variable(Variable base, bool requires_grad) {
+  return Variable(c10::make_intrusive<Variable::Impl>(base, requires_grad));
+}
+
 inline Variable make_variable(at::Tensor data, bool requires_grad = false) {
   AT_CHECK(
       !data.is_variable(),
@@ -465,11 +470,11 @@ inline const Variable& as_variable_ref(const at::Tensor& tensor) {
 }
 
 inline const at::Tensor& Variable::data() const noexcept {
-  return get()->data_;
+  return *this;
 }
 
 inline at::Tensor& Variable::data() noexcept {
-  return get()->data_;
+  return *this;
 }
 
 // Gradient Function and Edges
@@ -497,7 +502,9 @@ inline std::shared_ptr<Function> Variable::grad_accumulator() const {
 }
 
 inline Variable Variable::detach() const {
-  return get()->detach();
+  auto detached = make_variable(*this, /*requires_grad=*/false);
+  detached.set_version_counter(version_counter());
+  return detached;
 }
 
 inline void Variable::detach_() {

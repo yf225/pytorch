@@ -40,6 +40,27 @@ TensorImpl::TensorImpl(Storage&& storage, TensorTypeId type_id, ScalarType scala
       scalar_type_(scalar_type),
       is_variable_(is_variable) {}
 
+TensorImpl::TensorImpl(Storage storage,
+                       int64_t storage_offset,
+                       at::IntList sizes,
+                       at::IntList strides,
+                       bool is_contiguous,
+                       int64_t numel,
+                       TensorTypeId type_id,
+                       ScalarType scalar_type,
+                       bool is_wrapped_number,
+                       bool is_variable)
+    : storage_(std::move(storage)),
+      storage_offset_(storage_offset),
+      sizes_(sizes.begin(), sizes.end()),
+      strides_(strides.begin(), strides.end()),
+      is_contiguous_(is_contiguous),
+      numel_(numel),
+      type_id_(type_id),
+      scalar_type_(scalar_type),
+      is_wrapped_number_(is_wrapped_number),
+      is_variable_(is_variable) {}
+
 IntList TensorImpl::sizes() const {
   return sizes_;
 }

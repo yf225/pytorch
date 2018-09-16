@@ -149,6 +149,10 @@ public:
     return storage_impl_;
   }
 
+  c10::intrusive_ptr<StorageImpl> impl_ptr() const {
+    return storage_impl_;
+  }
+
   size_t use_count() const {
     return storage_impl_.use_count();
   }
