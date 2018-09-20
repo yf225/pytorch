@@ -500,13 +500,13 @@ Tensor tensor_ctor(const Type& type, PyObject* args, PyObject* kwargs) {
   auto r = parser.parse(args, kwargs, parsed_args);
   if (r.idx == 0) {
     bool type_inference = r.isNone(1);
-    return internal_new_from_data(
+    return static_cast<torch::autograd::Variable>(internal_new_from_data(
                typeWithDefault(r, 1, 2, type),
                r.deviceOptional(2),
                r.pyobject(0),
                true,
                true,
-               type_inference)
+               type_inference))
         .set_requires_grad(r.toBool(3));
   }
   throw std::runtime_error("tensor(): invalid arguments");

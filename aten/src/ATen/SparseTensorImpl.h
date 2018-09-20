@@ -37,6 +37,7 @@ struct AT_API SparseTensorImpl : public TensorImpl {
 public:
   // Public for now...
   explicit SparseTensorImpl(at::TensorTypeId, const caffe2::TypeMeta&);
+  SparseTensorImpl(const SparseTensorImpl& sparse_tensor_impl);
 
   int64_t nnz() const { return values_.size(0); }
   int64_t sparseDims() const { return sparseDims_; }
@@ -182,6 +183,14 @@ public:
   // NB: This used to be able to avoid a refcount bump, but I was too lazy to
   // make it happen
   void set_indices_and_values_unsafe(const Tensor& indices, const Tensor& values);
+
+  // // yf225 TODO: maybe we should rename this to shallow_copy()
+  // TensorImpl* clone() const override {  // yf225 TODO: can we return an intrusive_ptr here instead? Is it a good idea?
+  //   return new SparseTensorImpl(*this);  // yf225 TODO: I hate the `new` here
+  // }
+  c10::intrusive_ptr<TensorImpl> clone() const {
+    return c10::make_intrusive<SparseTensorImpl>(*this);
+  }
 };
 
 } // namespace at

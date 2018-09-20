@@ -24,6 +24,7 @@ struct AT_API TensorImpl : public c10::intrusive_ptr_target {
   TensorImpl() = delete;
   TensorImpl(TensorTypeId type_id, const caffe2::TypeMeta& data_type, Allocator *allocator, bool is_variable);
   TensorImpl(Storage&& storage, TensorTypeId type_id, bool is_variable);
+  TensorImpl(const TensorImpl& tensor_impl);
 
   virtual void release_resources() override;
 
@@ -80,15 +81,15 @@ struct AT_API TensorImpl : public c10::intrusive_ptr_target {
   // Some methods below are defined in TensorImpl.cpp because Tensor is an
   // incomplete type.
 
-  virtual void set_requires_grad(bool requires_grad) {
-    AT_ERROR("set_requires_grad is not implemented for Tensor");
-  }
-  virtual bool requires_grad() const {
-    AT_ERROR("requires_grad is not implemented for Tensor");
-  }
+  // virtual void set_requires_grad(bool requires_grad) {
+  //   AT_ERROR("set_requires_grad is not implemented for Tensor");
+  // }
+  // virtual bool requires_grad() const {
+  //   AT_ERROR("requires_grad is not implemented for Tensor");
+  // }
 
-  virtual Tensor& grad();
-  virtual const Tensor& grad() const;
+  // virtual Tensor& grad();
+  // virtual const Tensor& grad() const;
 
   // TODO: make these protected
   // Note: storage->size() may be greater than the recorded size
@@ -172,6 +173,20 @@ struct AT_API TensorImpl : public c10::intrusive_ptr_target {
   virtual int64_t stride(int64_t d) const;
 
   bool is_variable() const { return is_variable_; };
+  void* get_variable_impl() const {
+    return variable_impl_;
+  }
+  void set_variable_impl(void* variable_impl) {
+    variable_impl_ = variable_impl;
+    is_variable_ = true;
+  }
+  // yf225 TODO: maybe we should rename this to shallow_copy()
+  // virtual TensorImpl* clone() const {  // yf225 TODO: can we return an intrusive_ptr here instead? Is it a good idea?
+  //   return new TensorImpl(*this);  // yf225 TODO: I hate the `new` here
+  // }
+  virtual c10::intrusive_ptr<TensorImpl> clone() const {
+    return c10::make_intrusive<TensorImpl>(*this);
+  }
 
  private:
   int64_t storage_offset_;
@@ -203,6 +218,7 @@ struct AT_API TensorImpl : public c10::intrusive_ptr_target {
   caffe2::TypeMeta data_type_;
   bool is_variable_ = false;
   bool is_wrapped_number_ = false;
+  void* variable_impl_ = nullptr;
 
  private:
   TensorImpl(Storage&& storage, TensorTypeId type_id, const caffe2::TypeMeta& data_type, bool is_variable);
