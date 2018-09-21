@@ -71,7 +71,7 @@ Variable::ViewImpl::ViewImpl(Variable base, Edge gradient_edge)
   }
   is_view_ = true;
   version_counter_ = base_.version_counter();
-  attr_version = version_counter_.current_version();
+  attr_version_ = version_counter_.current_version();
 }
 
 void Variable::ViewImpl::release_resources() {
@@ -82,13 +82,13 @@ void Variable::ViewImpl::release_resources() {
 void Variable::backward(
     at::optional<Tensor> gradient,
     bool keep_graph,
-    bool create_graph) {
+    bool create_graph) const {
   std::vector<Edge> edges;
   edges.emplace_back(get()->grad_fn_, get()->output_nr_);
 
   std::vector<Variable> inputs;
   if (!gradient.has_value()) {
-    gradient = make_variable(at::ones_like(this), /*requires_grad=*/false);
+    gradient = make_variable(at::ones_like(*this), /*requires_grad=*/false);
   }
   inputs.push_back(std::move(as_variable_ref(*gradient)));
   Engine::get_default_engine().execute(edges, inputs, keep_graph, create_graph);
@@ -109,8 +109,8 @@ void Variable::rebase_history(Edge gradient_edge) {
         "Functions which modify views in-place must return a single Variable");
     impl.output_nr_ = gradient_edge.input_nr;
     auto copy_slices = std::make_shared<CopySlices>(
-        impl.base_, at::TensorGeometry(this), std::move(gradient_edge.function));
-    impl.base_.set_gradient_edge({std::move(copy_slices), 0});
+        impl.base_, at::TensorGeometry(*this), std::move(gradient_edge.function));
+    impl.base_.set_gradient_edge(Edge(std::move(copy_slices), 0));
     grad_fn(); // trigger an update to the view's grad_fn
   } else {
     set_gradient_edge(std::move(gradient_edge));
@@ -121,29 +121,30 @@ void Variable::rebase_history(Edge gradient_edge) {
 // re-create the grad_fn to express the up-to-date view relationship between this and the base Variable.
 const std::shared_ptr<Function>& Variable::grad_fn() const {
   if (is_view()) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (!grad_fn_ && !base_.requires_grad()) {
-      return grad_fn_;
+    auto& impl = static_cast<Variable::ViewImpl&>(*get());
+    std::lock_guard<std::mutex> lock(impl.mutex_);
+    if (!impl.grad_fn_ && !impl.base_.requires_grad()) {
+      return impl.grad_fn_;
     }
-    auto current_version = version_counter_.current_version();
-    if (attr_version != current_version) {
-      AT_ASSERT(output_nr_ == 0);
+    auto current_version = impl.version_counter_.current_version();
+    if (impl.attr_version_ != current_version) {
+      AT_ASSERT(impl.output_nr_ == 0);
       auto fn = std::make_shared<generated::AsStridedBackward>();
-      fn->self_geometry = at::TensorGeometry(base_);
+      fn->self_geometry = at::TensorGeometry(impl.base_);
       fn->size = sizes().vec();
       fn->stride = strides().vec();
       fn->storage_offset = storage_offset();
-      fn->set_next_edges(collect_next_edges(base_));
+      fn->set_next_edges(collect_next_edges(impl.base_));
       fn->add_input_metadata(
-        base_.type()
+        impl.base_.type()
       , sizes() // Note: sizes(), not base_.sizes(), is intentional
-      , base_.is_cuda() ? base_.get_device() : -1);
-      grad_fn_ = std::move(fn);
-      attr_version = current_version;
+      , impl.base_.is_cuda() ? impl.base_.get_device() : -1);
+      impl.grad_fn_ = std::move(fn);
+      impl.attr_version_ = current_version;
     }
-    return grad_fn_;
+    return impl.grad_fn_;
   } else {
-    return grad_fn_;
+    return get()->grad_fn_;
   }
 }
 

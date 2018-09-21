@@ -356,9 +356,9 @@ struct TORCH_API Variable::ViewImpl : public Variable::Impl {
   Variable base_;
 
   /// The value of the version_counter at the time grad_fn was created. The
-  /// grad_fn field is stale if attr_version !=
+  /// grad_fn field is stale if attr_version_ !=
   /// version_counter.current_version().
-  uint32_t attr_version;
+  uint32_t attr_version_;
 };
 
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
