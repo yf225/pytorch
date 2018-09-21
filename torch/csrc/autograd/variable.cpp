@@ -19,6 +19,12 @@
 #include <string>
 #include <vector>
 
+namespace at {
+  bool yf225_test_function(int i) {
+    return true;
+  }
+}
+
 namespace torch {
 namespace autograd {
 Variable::Impl::Impl(at::Tensor data, bool requires_grad, Edge gradient_edge)

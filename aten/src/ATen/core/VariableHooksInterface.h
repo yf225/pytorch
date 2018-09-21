@@ -9,6 +9,10 @@ namespace at {
   struct Type;
 }
 
+namespace at {
+  bool yf225_test_function(int i);
+}
+
 // NB: Registry class not actually in the namespace detail, due to limitations
 // of Registry.h
 namespace at {

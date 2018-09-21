@@ -10,6 +10,7 @@
 namespace at {
 
 Tensor& TensorImpl::grad() {
+  yf225_test_function(1);
   AT_ERROR("grad is not implemented for Tensor");
 }
 
