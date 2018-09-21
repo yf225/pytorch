@@ -129,7 +129,8 @@ struct TORCH_API Variable : public at::Tensor {
 
   // NOTE: Assignment operators to Tensor come for free from the constructors.
 
-  at::Tensor data() const noexcept;
+  const at::Tensor& data() const noexcept;
+  at::Tensor& data() noexcept;
 
   // Gradient Function and Edges
   //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -436,9 +437,12 @@ inline const Variable& as_variable_ref(const at::Tensor& tensor) {
   return static_cast<const Variable&>(tensor);
 }
 
-// yf225 TODO: this might not be what we want
-inline at::Tensor Variable::data() const noexcept {
-  return at::Tensor(getIntrusivePtr());
+inline const at::Tensor& Variable::data() const noexcept {
+  return *this;
+}
+
+inline at::Tensor& Variable::data() noexcept {
+  return *this;
 }
 
 // Gradient Function and Edges
