@@ -3,10 +3,29 @@
 #include <ATen/core/Registry.h>
 #include <ATen/core/ScalarType.h>
 #include <ATen/core/Backend.h>
+#include <ATen/core/intrusive_ptr.h>
 
 namespace at {
   class LegacyTypeDispatch;
   struct Type;
+  struct TensorImpl;
+}
+
+namespace at {
+struct VariableImplInterface : public c10::intrusive_ptr_target {
+  virtual void set_requires_grad(const TensorImpl& tensor_impl, bool requires_grad) {
+    AT_ERROR("set_requires_grad is not implemented for Tensor");
+  }
+  virtual bool requires_grad(const TensorImpl& tensor_impl) const {
+    AT_ERROR("requires_grad is not implemented for Tensor");
+  }
+  virtual Tensor& grad() {
+    AT_ERROR("grad is not implemented for Tensor");
+  }
+  virtual const Tensor& grad() const {
+    AT_ERROR("grad is not implemented for Tensor");
+  }
+};
 }
 
 // NB: Registry class not actually in the namespace detail, due to limitations

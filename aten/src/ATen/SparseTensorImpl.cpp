@@ -36,6 +36,15 @@ SparseTensorImpl::SparseTensorImpl(at::TensorTypeId type_id, const caffe2::TypeM
     , indices_(globalContext().getNonVariableTypeOpt(sparseTensorIdToDenseBackend(type_id), ScalarType::Long)->tensor({1, 0}))
     , values_(globalContext().getNonVariableTypeOpt(sparseTensorIdToDenseBackend(type_id), dataTypeToScalarType(data_type.id()))->tensor()) {}
 
+SparseTensorImpl::SparseTensorImpl(const SparseTensorImpl& sparse_tensor_impl)
+    : TensorImpl(sparse_tensor_impl)
+    , size_(sparse_tensor_impl.size_)
+    , sparseDims_(sparse_tensor_impl.sparseDims_)
+    , denseDims_(sparse_tensor_impl.denseDims_)
+    , indices_(sparse_tensor_impl.indices_)
+    , values_(sparse_tensor_impl.values_)
+    , coalesced_(sparse_tensor_impl.coalesced_) {}
+
 IntList SparseTensorImpl::sizes() const {
   return size_;
 }

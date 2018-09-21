@@ -5,17 +5,7 @@
 #include <ATen/core/WrapDimMinimal.h>
 #include <ATen/core/LegacyTypeDispatch.h>
 
-#include <ATen/core/VariableHooksInterface.h>
-
 namespace at {
-
-Tensor& TensorImpl::grad() {
-  AT_ERROR("grad is not implemented for Tensor");
-}
-
-const Tensor& TensorImpl::grad() const {
-  AT_ERROR("grad is not implemented for Tensor");
-}
 
 TensorImpl::TensorImpl(TensorTypeId type_id, const caffe2::TypeMeta& data_type, Allocator *allocator, bool is_variable)
     : TensorImpl({}, type_id, data_type, is_variable) {
@@ -39,6 +29,19 @@ TensorImpl::TensorImpl(Storage&& storage, TensorTypeId type_id, const caffe2::Ty
       type_id_(type_id),
       data_type_(data_type),
       is_variable_(is_variable) {}
+
+TensorImpl::TensorImpl(const TensorImpl& tensor_impl)
+    : storage_(tensor_impl.storage()),
+      storage_offset_(tensor_impl.storage_offset()),
+      sizes_(tensor_impl.sizes().begin(), tensor_impl.sizes().end()),
+      strides_(tensor_impl.strides().begin(), tensor_impl.strides().end()),
+      is_contiguous_(tensor_impl.is_contiguous()),
+      numel_(tensor_impl.numel()),
+      type_id_(tensor_impl.type_id()),
+      data_type_(tensor_impl.dtype()),
+      is_wrapped_number_(tensor_impl.is_wrapped_number()),
+      is_variable_(tensor_impl.is_variable()),
+      variable_impl_(tensor_impl.get_variable_impl()) {}
 
 IntList TensorImpl::sizes() const {
   return sizes_;

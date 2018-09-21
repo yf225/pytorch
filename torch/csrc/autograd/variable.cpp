@@ -21,77 +21,20 @@
 
 namespace torch {
 namespace autograd {
-Variable::Impl::Impl(at::Tensor data, bool requires_grad, Edge gradient_edge)
-    : TensorImpl(data.type().type_id(), data.type().typeMeta(), data.type().allocator(), /* is variable */ true),
-      data_(std::move(data)),
-      grad_fn_(std::move(gradient_edge.function)),
+Variable::Impl::Impl(const at::TensorImpl& tensor_impl, bool requires_grad, Edge gradient_edge)   // yf225 TODO: do we need to call VariableImplInterface's default constructor here?
+    : grad_fn_(std::move(gradient_edge.function)),
       requires_grad_(false),
       is_view_(false),
       output_nr_(gradient_edge.input_nr),
       pyobj_(nullptr) {
   // set_requires_grad also checks error conditions.
-  set_requires_grad(requires_grad);
+  set_requires_grad(tensor_impl, requires_grad);
   AT_CHECK(
       !grad_fn_ || !requires_grad_,
       "requires_grad should be false if grad_fn is set");
-  if (!data_.defined()) {
-    throw std::runtime_error("data is undefined");
-  }
 }
 
 Variable::Impl::~Impl() = default;
-
-int64_t Variable::Impl::numel() const {
-  return data_.numel();
-}
-
-IntList Variable::Impl::sizes() const {
-  return data_.sizes();
-}
-
-IntList Variable::Impl::strides() const {
-  return data_.strides();
-}
-
-bool Variable::Impl::is_contiguous() const {
-  AT_ERROR("variable impl does not have is_contiguous");
-}
-
-int64_t Variable::Impl::dim() const {
-  return data_.dim();
-}
-
-int64_t Variable::Impl::size(int64_t d) const {
-  return data_.size(d);
-}
-
-int64_t Variable::Impl::stride(int64_t d) const {
-  return data_.stride(d);
-}
-
-void Variable::Impl::resize_dim(int64_t ndim) {
-  AT_ERROR("variable impl does not have resize_dim");
-}
-
-void Variable::Impl::set_size(int64_t dim, int64_t new_size) {
-  AT_ERROR("variable impl does not have set_size");
-}
-
-void Variable::Impl::set_stride(int64_t dim, int64_t new_stride) {
-  AT_ERROR("variable impl does not have set_stride");
-}
-
-void Variable::Impl::set_storage_offset(int64_t storage_offset) {
-  AT_ERROR("variable impl does not have set_storage_offset");
-}
-
-const at::Storage& Variable::Impl::storage() const {
-  return data_.storage();
-}
-
-int64_t Variable::Impl::storage_offset() const {
-  return data_.storage_offset();
-}
 
 std::shared_ptr<Function> Variable::Impl::get_grad_accumulator() {
   if (grad_fn_) {
@@ -115,65 +58,14 @@ std::shared_ptr<Function> Variable::Impl::get_grad_accumulator() {
   return result;
 }
 
-Variable Variable::Impl::detach() const {
-  auto detached = make_variable(data_, /*requires_grad=*/false);
-  detached.set_version_counter(version_counter_);
-  return detached;
-}
-
-void Variable::Impl::detach_() {
-  if (is_view_) {
-    AT_ERROR("Can't detach views in-place. Use detach() instead");
-  }
-  set_requires_grad(false);
-  grad_fn_.reset();
-  output_nr_ = 0;
-}
-
-void Variable::Impl::backward(
-    at::optional<Tensor> gradient,
-    bool keep_graph,
-    bool create_graph) {
-  std::vector<Edge> edges;
-  edges.emplace_back(grad_fn_, output_nr_);
-
-  std::vector<Variable> inputs;
-  if (!gradient.has_value()) {
-    gradient = make_variable(at::ones_like(data_), /*requires_grad=*/false);
-  }
-  inputs.push_back(std::move(as_variable_ref(*gradient)));
-  Engine::get_default_engine().execute(edges, inputs, keep_graph, create_graph);
-}
-
-void Variable::Impl::set_data(Tensor new_data) {
-  // Resets gradient accumulator if metadata is out of date
-  std::lock_guard<std::mutex> lock(mutex_);
-  auto prior_accumulator = grad_accumulator_.lock();
-  if (prior_accumulator) {
-    const auto prior_device = prior_accumulator->input_metadata(0).device();
-    const auto new_device = new_data.is_cuda() ? new_data.get_device() : -1;
-
-    if (new_data.type() != data_.type() || prior_device != new_device) {
-      grad_accumulator_.reset();
-    }
-  }
-
-  // Updates metadata
-  data_type_ = new_data.type().typeMeta();
-  type_id_ = new_data.type().type_id();
-  is_variable_ = true;
-  data_ = std::move(new_data);
-}
-
 void Variable::Impl::release_resources() {
-  data_.reset();
   grad_.reset();
   grad_fn_.reset();
   hooks_.clear();
 }
 
-Variable::ViewImpl::ViewImpl(Variable base, at::Tensor data, Edge gradient_edge)
-    : Variable::Impl(std::move(data), false, std::move(gradient_edge)),
+Variable::ViewImpl::ViewImpl(const at::TensorImpl& tensor_impl, Variable base, Edge gradient_edge)
+    : Variable::Impl(tensor_impl, false, std::move(gradient_edge)),
       base_(std::move(base)) {
   AT_CHECK(base_.defined(), "base is undefined");
   if (base_.is_view()) {
@@ -184,56 +76,100 @@ Variable::ViewImpl::ViewImpl(Variable base, at::Tensor data, Edge gradient_edge)
   attr_version = version_counter_.current_version();
 }
 
-std::shared_ptr<Function>& Variable::ViewImpl::get_grad_fn() {
-  std::lock_guard<std::mutex> lock(mutex_);
-  if (!grad_fn_ && !base_.requires_grad()) {
-    return grad_fn_;
-  }
-  auto current_version = version_counter_.current_version();
-  if (attr_version != current_version) {
-    AT_ASSERT(output_nr_ == 0);
-    auto fn = std::make_shared<generated::AsStridedBackward>();
-    fn->self_geometry = at::TensorGeometry(base_);
-    fn->size = sizes().vec();
-    fn->stride = strides().vec();
-    fn->storage_offset = data_.storage_offset();
-    fn->set_next_edges(collect_next_edges(base_));
-    fn->add_input_metadata(
-      base_.type()
-    , sizes() // Note: sizes(), not base_.sizes(), is intentional
-    , base_.is_cuda() ? base_.get_device() : -1);
-    grad_fn_ = std::move(fn);
-    attr_version = current_version;
-  }
-  return grad_fn_;
-}
-
-void Variable::ViewImpl::rebase_history(Edge gradient_edge) {
-  AT_ASSERT(gradient_edge.input_nr == 0);
-  AT_ASSERT(gradient_edge.function);
-  AT_CHECK(
-      gradient_edge.function->num_inputs() == 1,
-      "Functions which modify views in-place must return a single Variable");
-  this->output_nr_ = gradient_edge.input_nr;
-  auto copy_slices = std::make_shared<CopySlices>(
-      base_, at::TensorGeometry(data_), std::move(gradient_edge.function));
-  base_.set_gradient_edge({std::move(copy_slices), 0});
-  get_grad_fn(); // trigger an update to the view's grad_fn
-}
-
 void Variable::ViewImpl::release_resources() {
   Variable::Impl::release_resources();
   base_.reset();
 }
 
+void Variable::backward(
+    at::optional<Tensor> gradient,
+    bool keep_graph,
+    bool create_graph) {
+  std::vector<Edge> edges;
+  edges.emplace_back(get()->grad_fn_, get()->output_nr_);
+
+  std::vector<Variable> inputs;
+  if (!gradient.has_value()) {
+    gradient = make_variable(at::ones_like(this), /*requires_grad=*/false);
+  }
+  inputs.push_back(std::move(as_variable_ref(*gradient)));
+  Engine::get_default_engine().execute(edges, inputs, keep_graph, create_graph);
+}
+
 void Variable::rebase_history(Edge gradient_edge) {
   AT_ASSERT(gradient_edge.function != nullptr);
   if (is_view()) {
+    /// Called after in-place modifications. Modifies the grad_fn of the base
+    /// Variable.
     auto& impl = static_cast<Variable::ViewImpl&>(*get());
-    impl.rebase_history(std::move(gradient_edge));
+    gradient_edge = std::move(gradient_edge);
+
+    AT_ASSERT(gradient_edge.input_nr == 0);
+    AT_ASSERT(gradient_edge.function);
+    AT_CHECK(
+        gradient_edge.function->num_inputs() == 1,
+        "Functions which modify views in-place must return a single Variable");
+    impl.output_nr_ = gradient_edge.input_nr;
+    auto copy_slices = std::make_shared<CopySlices>(
+        impl.base_, at::TensorGeometry(this), std::move(gradient_edge.function));
+    impl.base_.set_gradient_edge({std::move(copy_slices), 0});
+    grad_fn(); // trigger an update to the view's grad_fn
   } else {
     set_gradient_edge(std::move(gradient_edge));
   }
+}
+
+// NOTE: For View on Variable, this gets the up-to-date grad_fn. If the shared data or base was modified, we
+// re-create the grad_fn to express the up-to-date view relationship between this and the base Variable.
+const std::shared_ptr<Function>& Variable::grad_fn() const {
+  if (is_view()) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!grad_fn_ && !base_.requires_grad()) {
+      return grad_fn_;
+    }
+    auto current_version = version_counter_.current_version();
+    if (attr_version != current_version) {
+      AT_ASSERT(output_nr_ == 0);
+      auto fn = std::make_shared<generated::AsStridedBackward>();
+      fn->self_geometry = at::TensorGeometry(base_);
+      fn->size = sizes().vec();
+      fn->stride = strides().vec();
+      fn->storage_offset = storage_offset();
+      fn->set_next_edges(collect_next_edges(base_));
+      fn->add_input_metadata(
+        base_.type()
+      , sizes() // Note: sizes(), not base_.sizes(), is intentional
+      , base_.is_cuda() ? base_.get_device() : -1);
+      grad_fn_ = std::move(fn);
+      attr_version = current_version;
+    }
+    return grad_fn_;
+  } else {
+    return grad_fn_;
+  }
+}
+
+void Variable::set_data(Tensor new_data) {
+  // Resets gradient accumulator if metadata is out of date
+  std::lock_guard<std::mutex> lock(get()->mutex_);
+  auto prior_accumulator = get()->grad_accumulator_.lock();
+  if (prior_accumulator) {
+    const auto prior_device = prior_accumulator->input_metadata(0).device();
+    const auto new_device = new_data.is_cuda() ? new_data.get_device() : -1;
+
+    if (new_data.type() != type() || prior_device != new_device) {
+      get()->grad_accumulator_.reset();
+    }
+  }
+
+  // yf225 TODO: the logic here could be wrong
+
+  // Updates metadata
+  auto new_tensor_impl = new_data.getIntrusivePtr()->clone();
+  AT_ASSERT(new_tensor_impl.use_count() == 1);
+  new_tensor_impl->set_variable_impl(tensor_impl_->get_variable_impl());
+  tensor_impl_ = new_tensor_impl;
+  AT_ASSERT(tensor_impl_->is_variable());
 }
 
 }} // namespace torch::autograd
