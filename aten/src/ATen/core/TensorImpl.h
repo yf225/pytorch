@@ -84,10 +84,13 @@ struct AT_API TensorImpl : public c10::intrusive_ptr_target {
   // incomplete type.
 
   void set_requires_grad(bool requires_grad) {
-    variable_impl_->set_requires_grad(*this, requires_grad);
+    AT_CHECK(
+        !requires_grad || at::isFloatingType(dataTypeToScalarType(dtype().id())),
+        "Only Tensors of floating point dtype can require gradients");
+    variable_impl_->set_requires_grad(requires_grad);
   }
   bool requires_grad() const {
-    return variable_impl_->requires_grad(*this);
+    return variable_impl_->requires_grad();
   }
 
   Tensor& grad() {

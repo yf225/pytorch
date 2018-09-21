@@ -288,14 +288,11 @@ struct TORCH_API Variable::Impl : public at::VariableImplInterface {
   /// Sets the `requires_grad` property of `Variable`. This should be true for
   /// leaf variables that want to accumulate gradients, and false for all other
   /// variables.
-  void set_requires_grad(const at::TensorImpl& tensor_impl, bool requires_grad) override {
-    AT_CHECK(
-        !requires_grad || at::isFloatingType(tensor_impl.type().scalarType()),
-        "Only Tensors of floating point dtype can require gradients");
+  void set_requires_grad(bool requires_grad) override {
     requires_grad_ = requires_grad;
   }
 
-  bool requires_grad(const at::TensorImpl& tensor_impl) const override {
+  bool requires_grad() const override {
     return requires_grad_ || grad_fn_ || (is_view_ && base().requires_grad());
   }
 
@@ -439,6 +436,7 @@ inline const Variable& as_variable_ref(const at::Tensor& tensor) {
   return static_cast<const Variable&>(tensor);
 }
 
+// yf225 TODO: this might not be what we want
 inline at::Tensor Variable::data() const noexcept {
   return at::Tensor(getIntrusivePtr());
 }
@@ -477,7 +475,7 @@ inline void Variable::detach_() {
   if (get()->is_view_) {
     AT_ERROR("Can't detach views in-place. Use detach() instead");
   }
-  get()->set_requires_grad(getIntrusivePtr->get(), false);
+  get()->set_requires_grad(false);
   get()->grad_fn_.reset();
   get()->output_nr_ = 0;
 }

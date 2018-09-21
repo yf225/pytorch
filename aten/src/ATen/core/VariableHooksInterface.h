@@ -13,10 +13,10 @@ namespace at {
 
 namespace at {
 struct VariableImplInterface : public c10::intrusive_ptr_target {
-  virtual void set_requires_grad(const TensorImpl& tensor_impl, bool requires_grad) {
+  virtual void set_requires_grad(bool requires_grad) {
     AT_ERROR("set_requires_grad is not implemented for Tensor");
   }
-  virtual bool requires_grad(const TensorImpl& tensor_impl) const {
+  virtual bool requires_grad() const {
     AT_ERROR("requires_grad is not implemented for Tensor");
   }
   virtual Tensor& grad() {

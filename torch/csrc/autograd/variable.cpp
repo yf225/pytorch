@@ -21,14 +21,12 @@
 
 namespace torch {
 namespace autograd {
-Variable::Impl::Impl(const at::TensorImpl& tensor_impl, bool requires_grad, Edge gradient_edge)   // yf225 TODO: do we need to call VariableImplInterface's default constructor here?
+Variable::Impl::Impl(bool requires_grad, Edge gradient_edge)   // yf225 TODO: do we need to call VariableImplInterface's default constructor here?
     : grad_fn_(std::move(gradient_edge.function)),
-      requires_grad_(false),
+      requires_grad_(requires_grad),
       is_view_(false),
       output_nr_(gradient_edge.input_nr),
       pyobj_(nullptr) {
-  // set_requires_grad also checks error conditions.
-  set_requires_grad(tensor_impl, requires_grad);
   AT_CHECK(
       !grad_fn_ || !requires_grad_,
       "requires_grad should be false if grad_fn is set");
@@ -64,8 +62,8 @@ void Variable::Impl::release_resources() {
   hooks_.clear();
 }
 
-Variable::ViewImpl::ViewImpl(const at::TensorImpl& tensor_impl, Variable base, Edge gradient_edge)
-    : Variable::Impl(tensor_impl, false, std::move(gradient_edge)),
+Variable::ViewImpl::ViewImpl(Variable base, Edge gradient_edge)
+    : Variable::Impl(false, std::move(gradient_edge)),
       base_(std::move(base)) {
   AT_CHECK(base_.defined(), "base is undefined");
   if (base_.is_view()) {
