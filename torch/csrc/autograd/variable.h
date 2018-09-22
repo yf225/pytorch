@@ -280,8 +280,6 @@ struct TORCH_API Variable::Impl : public at::VariableImplInterface {
 
   ~Impl() override;
 
-  std::shared_ptr<Function> get_grad_accumulator();
-
   virtual const Variable& base() const {
     throw std::runtime_error("Can't get base of non-view Variable");
   }
@@ -331,7 +329,7 @@ struct TORCH_API Variable::Impl : public at::VariableImplInterface {
 
   // Mutex to ensure that concurrent read operations that modify internal
   // state are still thread-safe. Used by grad_fn and
-  // get_grad_accumulator.
+  // grad_accumulator.
   std::mutex mutex_;
 };
 
@@ -459,10 +457,6 @@ inline void Variable::set_grad_accumulator(
 
 inline std::shared_ptr<Function> Variable::try_get_grad_accumulator() const {
   return get()->grad_accumulator_.lock();
-}
-
-inline std::shared_ptr<Function> Variable::grad_accumulator() const {
-  return get()->get_grad_accumulator();
 }
 
 inline Variable Variable::detach() const {

@@ -34,28 +34,6 @@ Variable::Impl::Impl(bool requires_grad, Edge gradient_edge)   // yf225 TODO: do
 
 Variable::Impl::~Impl() = default;
 
-std::shared_ptr<Function> Variable::Impl::get_grad_accumulator() {
-  if (grad_fn_) {
-    throw std::logic_error(
-        "get_grad_accumulator() should be only called on leaf Variables");
-  }
-  if (!requires_grad_) {
-    return nullptr;
-  }
-
-  std::lock_guard<std::mutex> lock(mutex_);
-
-  auto result = grad_accumulator_.lock();
-  if (result)
-    return result;
-
-  c10::raw::intrusive_ptr::incref(this);
-  auto intrusive_from_this = c10::intrusive_ptr<Variable::Impl>::reclaim(this);
-  result = std::make_shared<AccumulateGrad>(Variable(std::move(intrusive_from_this)));
-  grad_accumulator_ = result;
-  return result;
-}
-
 void Variable::Impl::release_resources() {
   grad_.reset();
   grad_fn_.reset();
@@ -77,6 +55,28 @@ Variable::ViewImpl::ViewImpl(Variable base, Edge gradient_edge)
 void Variable::ViewImpl::release_resources() {
   Variable::Impl::release_resources();
   base_.reset();
+}
+
+std::shared_ptr<Function> Variable::grad_accumulator() const {
+  if (get()->grad_fn_) {
+    throw std::logic_error(
+        "get_grad_accumulator() should be only called on leaf Variables");
+  }
+  if (!get()->requires_grad_) {
+    return nullptr;
+  }
+
+  std::lock_guard<std::mutex> lock(get()->mutex_);
+
+  auto result = get()->grad_accumulator_.lock();
+  if (result)
+    return result;
+
+  // yf225 TODO: the refcount here could be wrong
+  auto intrusive_from_this = c10::intrusive_ptr<at::TensorImpl>(this->getIntrusivePtr());
+  result = std::make_shared<AccumulateGrad>(Variable(std::move(intrusive_from_this)));
+  get()->grad_accumulator_ = result;
+  return result;
 }
 
 void Variable::backward(
