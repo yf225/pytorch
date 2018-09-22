@@ -376,7 +376,6 @@ inline Variable make_variable_view(
     AT_ASSERT(tensor_impl.use_count() == 1);
     tensor_impl->set_variable_impl(c10::make_intrusive<Variable::ViewImpl>(
             std::move(base), std::move(gradient_edge)));
-    AT_ASSERT(tensor_impl->get_variable_impl().use_count() == 1);
 
     return Variable(tensor_impl);
   }
@@ -391,8 +390,6 @@ inline Variable make_variable(at::Tensor data, bool requires_grad = false) {
     auto tensor_impl = data.getIntrusivePtr()->clone();
     AT_ASSERT(tensor_impl.use_count() == 1);
     tensor_impl->set_variable_impl(c10::make_intrusive<Variable::Impl>(requires_grad));
-    AT_ASSERT(tensor_impl->get_variable_impl().use_count() == 1);
-
     return Variable(tensor_impl);
   }
   return Variable();
@@ -406,7 +403,6 @@ inline Variable make_variable(at::Tensor data, Edge gradient_edge) {
     auto tensor_impl = data.getIntrusivePtr()->clone();
     AT_ASSERT(tensor_impl.use_count() == 1);
     tensor_impl->set_variable_impl(c10::make_intrusive<Variable::Impl>(false, std::move(gradient_edge)));
-    AT_ASSERT(tensor_impl->get_variable_impl().use_count() == 1);
 
     return Variable(tensor_impl);
   }
@@ -463,7 +459,6 @@ inline Variable Variable::detach() const {
   auto tensor_impl = this->getIntrusivePtr()->clone();
   AT_ASSERT(tensor_impl.use_count() == 1);
   tensor_impl->set_variable_impl(c10::make_intrusive<Variable::Impl>(/*requires_grad=*/false));
-  AT_ASSERT(tensor_impl->get_variable_impl().use_count() == 1);
   auto detached = Variable(tensor_impl);
   detached.set_version_counter(get()->version_counter_);
   return detached;
