@@ -432,11 +432,11 @@ inline const Variable& as_variable_ref(const at::Tensor& tensor) {
 }
 
 inline const at::Tensor& Variable::data() const noexcept {
-  return *this;
+  return static_cast<at::Tensor>(*this);
 }
 
 inline at::Tensor& Variable::data() noexcept {
-  return *this;
+  return static_cast<at::Tensor>(*this);
 }
 
 // Gradient Function and Edges
