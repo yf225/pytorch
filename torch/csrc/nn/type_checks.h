@@ -27,7 +27,7 @@ static inline int get_device(PyObject* args) {
   for (int i = 0, n = PyTuple_GET_SIZE(args); i != n; i++) {
     PyObject* arg = PyTuple_GET_ITEM(args, i);
     if (THPVariable_Check(arg)) {
-      auto& tensor = THPVariable_UnpackData(arg);
+      auto tensor = THPVariable_UnpackData(arg);
       if (tensor.type().is_cuda()) {
         return tensor.get_device();
       }

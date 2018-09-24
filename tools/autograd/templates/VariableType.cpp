@@ -220,7 +220,7 @@ Variable & VariableType::checked_cast_variable(const Tensor & t, const char * na
   return as_variable_ref(const_cast<Tensor&>(t));
 }
 
-Tensor & VariableType::unpack(const Tensor & t, const char * name, int pos) {
+Tensor VariableType::unpack(const Tensor & t, const char * name, int pos) {
   return checked_cast_variable(t, name, pos).data();
 }
 
@@ -402,8 +402,8 @@ Tensor & VariableType::s_copy_(Tensor & self, const Tensor & src, bool non_block
   }
   // TODO: once copy is exposed in Declarations.yaml we may be able to bind
   // it automatically
-  auto& self_ = unpack(self, "self", 0);
-  auto& src_ = unpack(src, "src", 1);
+  auto self_ = unpack(self, "self", 0);
+  auto src_ = unpack(src, "src", 1);
   check_inplace(self);
   std::shared_ptr<CopyBackwards> grad_fn;
   auto requires_grad = compute_requires_grad(self, src);
@@ -430,7 +430,7 @@ Tensor & VariableType::_s_copy_from(const Tensor & self, Tensor & dst, bool non_
 }
 
 Tensor & VariableType::resize_(Tensor & self, IntList size) const {
-  auto& self_ = unpack(self, "self", 0);
+  auto self_ = unpack(self, "self", 0);
   if (as_variable_ref(self).requires_grad()) {
     AT_ERROR("cannot resize variables that require grad");
   }
@@ -439,8 +439,8 @@ Tensor & VariableType::resize_(Tensor & self, IntList size) const {
 }
 
 Tensor & VariableType::resize_as_(Tensor & self, const Tensor & the_template) const {
-  auto& self_ = unpack(self, "self", 0);
-  auto& the_template_ = unpack(the_template, "the_template", 1);
+  auto self_ = unpack(self, "self", 0);
+  auto the_template_ = unpack(the_template, "the_template", 1);
   if (as_variable_ref(self).requires_grad()) {
     AT_ERROR("cannot resize variables that require grad");
   }

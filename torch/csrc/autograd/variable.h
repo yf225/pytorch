@@ -129,8 +129,7 @@ struct TORCH_API Variable : public at::Tensor {
 
   // NOTE: Assignment operators to Tensor come for free from the constructors.
 
-  const at::Tensor& data() const noexcept;
-  at::Tensor& data() noexcept;
+  at::Tensor data() const noexcept;
 
   // Gradient Function and Edges
   //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -376,6 +375,7 @@ inline Variable make_variable_view(
     AT_ASSERT(tensor_impl.use_count() == 1);
     tensor_impl->set_variable_impl(c10::make_intrusive<Variable::ViewImpl>(
             std::move(base), std::move(gradient_edge)));
+    tensor_impl->set_is_variable(true);
 
     return Variable(tensor_impl);
   }
@@ -390,6 +390,7 @@ inline Variable make_variable(at::Tensor data, bool requires_grad = false) {
     auto tensor_impl = data.getIntrusivePtr()->clone();
     AT_ASSERT(tensor_impl.use_count() == 1);
     tensor_impl->set_variable_impl(c10::make_intrusive<Variable::Impl>(requires_grad));
+    tensor_impl->set_is_variable(true);
     return Variable(tensor_impl);
   }
   return Variable();
@@ -403,6 +404,7 @@ inline Variable make_variable(at::Tensor data, Edge gradient_edge) {
     auto tensor_impl = data.getIntrusivePtr()->clone();
     AT_ASSERT(tensor_impl.use_count() == 1);
     tensor_impl->set_variable_impl(c10::make_intrusive<Variable::Impl>(false, std::move(gradient_edge)));
+    tensor_impl->set_is_variable(true);
 
     return Variable(tensor_impl);
   }
@@ -431,12 +433,13 @@ inline const Variable& as_variable_ref(const at::Tensor& tensor) {
   return static_cast<const Variable&>(tensor);
 }
 
-inline const at::Tensor& Variable::data() const noexcept {
-  return static_cast<at::Tensor>(*this);
-}
+inline at::Tensor Variable::data() const noexcept {
+  auto tensor_impl = getIntrusivePtr()->clone();
+  AT_ASSERT(tensor_impl.use_count() == 1);
+  tensor_impl->set_variable_impl(c10::intrusive_ptr<at::VariableImplInterface>());
+  tensor_impl->set_is_variable(false);
 
-inline at::Tensor& Variable::data() noexcept {
-  return static_cast<at::Tensor>(*this);
+  return at::Tensor(tensor_impl);
 }
 
 // Gradient Function and Edges
@@ -459,6 +462,7 @@ inline Variable Variable::detach() const {
   auto tensor_impl = this->getIntrusivePtr()->clone();
   AT_ASSERT(tensor_impl.use_count() == 1);
   tensor_impl->set_variable_impl(c10::make_intrusive<Variable::Impl>(/*requires_grad=*/false));
+  tensor_impl->set_is_variable(true);
   auto detached = Variable(tensor_impl);
   detached.set_version_counter(get()->version_counter_);
   return detached;
@@ -556,7 +560,7 @@ inline PyObject* Variable::pyobj() const noexcept {
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 inline Variable::Variable(c10::intrusive_ptr<at::TensorImpl> tensor_impl)
-    : at::Tensor(std::move(tensor_impl)) {}
+    : at::Tensor(std::move(tensor_impl)) {}  // yf225 TODO: maybe moving twice won't work
 
 inline Variable::Impl* Variable::get() const {
   AT_CHECK(defined(), "Called Variable::get() on an undefined Variable");

@@ -182,12 +182,12 @@ struct AT_API TensorImpl : public c10::intrusive_ptr_target {
   virtual int64_t stride(int64_t d) const;
 
   bool is_variable() const { return is_variable_; };
+  void set_is_variable(bool is_variable) { is_variable_ = is_variable; };
   c10::intrusive_ptr<VariableImplInterface> get_variable_impl() const {
     return variable_impl_;
   }
   void set_variable_impl(c10::intrusive_ptr<VariableImplInterface> variable_impl) {
     variable_impl_ = variable_impl;
-    is_variable_ = true;
   }
 
   virtual c10::intrusive_ptr<TensorImpl> clone() const {

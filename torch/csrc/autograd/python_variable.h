@@ -32,7 +32,7 @@ inline torch::autograd::Variable& THPVariable_Unpack(PyObject* obj) {
   return var->cdata;
 }
 
-inline at::Tensor& THPVariable_UnpackData(PyObject* obj) {
+inline at::Tensor THPVariable_UnpackData(PyObject* obj) {
   auto var = (THPVariable*)obj;
   return var->cdata.data();
 }

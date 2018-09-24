@@ -167,6 +167,7 @@ void Variable::set_data(Tensor new_data) {
   auto new_tensor_impl = new_data.getIntrusivePtr()->clone();
   AT_ASSERT(new_tensor_impl.use_count() == 1);
   new_tensor_impl->set_variable_impl(tensor_impl_->get_variable_impl());
+  new_tensor_impl->set_is_variable(true);
   tensor_impl_ = new_tensor_impl;
   AT_ASSERT(tensor_impl_->is_variable());
 }
