@@ -560,7 +560,7 @@ inline PyObject* Variable::pyobj() const noexcept {
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 inline Variable::Variable(c10::intrusive_ptr<at::TensorImpl> tensor_impl)
-    : at::Tensor(std::move(tensor_impl)) {}  // yf225 TODO: maybe moving twice won't work
+    : at::Tensor(std::move(tensor_impl)) {}
 
 inline Variable::Impl* Variable::get() const {
   AT_CHECK(defined(), "Called Variable::get() on an undefined Variable");
