@@ -92,6 +92,8 @@ void TensorIterator::compute_common_type() {
 
   auto& type = at::globalContext().getNonVariableType(backend, result_type);
 
+  // NOTE: We need no_grad_guard to make sure op.tensor->type() returns non-Variable type
+  no_grad_guard = true;
   for (auto& op : operands_) {
     if (!op.type) {
       op.type = &type;
@@ -107,6 +109,7 @@ void TensorIterator::compute_common_type() {
       }
     }
   }
+  no_grad_guard = false;
 }
 
 DimVector TensorIterator::compatible_stride(int element_size) const {

@@ -383,9 +383,6 @@ inline Variable make_variable_view(
 }
 
 inline Variable make_variable(at::Tensor data, bool requires_grad = false) {
-  AT_CHECK(
-      !data.is_variable(),
-      "Must not create a new variable from a variable, use its .data()");
   if (data.defined()) {
     auto tensor_impl = data.getIntrusivePtr()->clone();
     AT_ASSERT(tensor_impl.use_count() == 1);
@@ -397,9 +394,6 @@ inline Variable make_variable(at::Tensor data, bool requires_grad = false) {
 }
 
 inline Variable make_variable(at::Tensor data, Edge gradient_edge) {
-  AT_CHECK(
-      !data.is_variable(),
-      "Must not create a new variable from a variable, use its .data()");
   if (data.defined()) {
     auto tensor_impl = data.getIntrusivePtr()->clone();
     AT_ASSERT(tensor_impl.use_count() == 1);
@@ -433,6 +427,7 @@ inline const Variable& as_variable_ref(const at::Tensor& tensor) {
   return static_cast<const Variable&>(tensor);
 }
 
+// NOTE: This is a slow operation, use it only from "tensor.data" Python API.
 inline at::Tensor Variable::data() const noexcept {
   auto tensor_impl = getIntrusivePtr()->clone();
   AT_ASSERT(tensor_impl.use_count() == 1);

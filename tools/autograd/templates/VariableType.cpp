@@ -402,8 +402,6 @@ Tensor & VariableType::s_copy_(Tensor & self, const Tensor & src, bool non_block
   }
   // TODO: once copy is exposed in Declarations.yaml we may be able to bind
   // it automatically
-  auto self_ = unpack(self, "self", 0);
-  auto src_ = unpack(src, "src", 1);
   check_inplace(self);
   std::shared_ptr<CopyBackwards> grad_fn;
   auto requires_grad = compute_requires_grad(self, src);
@@ -416,7 +414,9 @@ Tensor & VariableType::s_copy_(Tensor & self, const Tensor & src, bool non_block
       grad_fn->src_device = src.get_device();
     }
   }
-  baseType->s_copy_(self_, src_, non_blocking);
+  no_grad_guard = true;
+  baseType->s_copy_(self, src, non_blocking);
+  no_grad_guard = false;
   increment_version(self);
   rebase_history(as_variable_ref( self ), std::move(grad_fn));
   if(torch::jit::tracer::isTracing()) {
@@ -430,26 +430,26 @@ Tensor & VariableType::_s_copy_from(const Tensor & self, Tensor & dst, bool non_
 }
 
 Tensor & VariableType::resize_(Tensor & self, IntList size) const {
-  auto self_ = unpack(self, "self", 0);
   if (as_variable_ref(self).requires_grad()) {
     AT_ERROR("cannot resize variables that require grad");
   }
-  baseType->resize_(self_, size);
+  no_grad_guard = true;
+  baseType->resize_(self, size);
+  no_grad_guard = false;
   return self;
 }
 
 Tensor & VariableType::resize_as_(Tensor & self, const Tensor & the_template) const {
-  auto self_ = unpack(self, "self", 0);
-  auto the_template_ = unpack(the_template, "the_template", 1);
   if (as_variable_ref(self).requires_grad()) {
     AT_ERROR("cannot resize variables that require grad");
   }
-  baseType->resize_as_(self_, the_template_);
+  no_grad_guard = true;
+  baseType->resize_as_(self, the_template);
+  no_grad_guard = false;
   return self;
 }
 
 Tensor VariableType::contiguous(const Tensor & self) const {
-  unpack(self, "self", 0);
   if (self.is_contiguous()) {
     return self;
   }

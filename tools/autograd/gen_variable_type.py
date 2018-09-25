@@ -79,6 +79,10 @@ DONT_REQUIRE_DERIVATIVE = {
     '__lshift__', '__or__', '__rshift__', '__xor__',
 }
 
+# Thread-local state to control whether we want to dispatch to Variable type vs. Tensor type.
+# Defined in VariableHooksInterface.h.
+NO_GRAD_GUARD_NAME = 'no_grad_guard'
+
 METHOD_DECLARATION = CodeTemplate("""\
 ${return_type} ${method_prefix_derived}${api_name}(${type_method_formals}) const override;
 """)
@@ -88,9 +92,6 @@ ${return_type} VariableType::${method_prefix_derived}${api_name}(${type_method_f
   ${type_definition_body}
 }
 """)
-
-UNPACK_TENSOR = CodeTemplate("""\
-auto ${arg_name}_ = unpack${suffix}(${arg_name}, "${arg_name}", ${arg_pos});""")
 
 DECLARE_GRAD_FN = CodeTemplate("""\
 std::shared_ptr<${op}> grad_fn;
@@ -466,6 +467,12 @@ def emit_body(declaration):
             return []
         return ['increment_version({});'.format(arg['name']) for arg in differentiable_outputs]
 
+    def set_no_grad_guard():
+        return NO_GRAD_GUARD_NAME + ' = true;'
+
+    def unset_no_grad_guard():
+        return NO_GRAD_GUARD_NAME + ' = false;'
+
     env = {}
     combined = nested_dict(env, declaration)
 
@@ -473,7 +480,9 @@ def emit_body(declaration):
     if base_name not in DONT_PROFILE:
         body.append(RECORD_FUNCTION.substitute(combined))
     if strategy != 'use_type':
+        body.append(set_no_grad_guard())
         body.extend(unpack_args(env, declaration))
+        body.append(unset_no_grad_guard())
     if requires_derivative:
         body.extend(emit_check_inplace())
         body.extend(setup_derivative())
@@ -517,13 +526,7 @@ def unpack_args(env, declaration):
         ref = (not is_nullable) and dynamic_type not in ['TensorList', 'SparseTensorRef']
         suffix = '_opt' if is_nullable else ''
 
-        body.append(UNPACK_TENSOR.substitute(
-            arg_name=arg['name'],
-            arg_pos=i,
-            suffix=suffix,
-            ref='&' if ref else '',
-        ))
-        unpacked_args.append(arg['name'] + '_')
+        unpacked_args.append(arg['name'])
 
     env['unpacked_args'] = unpacked_args
     return body
