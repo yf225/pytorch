@@ -87,16 +87,24 @@ struct AT_API TensorImpl : public c10::intrusive_ptr_target {
     AT_CHECK(
         !requires_grad || at::isFloatingType(dataTypeToScalarType(dtype().id())),
         "Only Tensors of floating point dtype can require gradients");
+    std::cout << "variable_impl_.use_count(): " << variable_impl_.use_count() << "\n";
+    AT_ASSERT(variable_impl_.use_count() > 0);
     variable_impl_->set_requires_grad(requires_grad);
   }
   bool requires_grad() const {
+    std::cout << "variable_impl_.use_count(): " << variable_impl_.use_count() << "\n";
+    AT_ASSERT(variable_impl_.use_count() > 0);
     return variable_impl_->requires_grad();
   }
 
   Tensor& grad() {
+    std::cout << "variable_impl_.use_count(): " << variable_impl_.use_count() << "\n";
+    AT_ASSERT(variable_impl_.use_count() > 0);
     return variable_impl_->grad();
   }
   const Tensor& grad() const {
+    std::cout << "variable_impl_.use_count(): " << variable_impl_.use_count() << "\n";
+    AT_ASSERT(variable_impl_.use_count() > 0);
     return variable_impl_->grad();
   }
 
@@ -183,10 +191,10 @@ struct AT_API TensorImpl : public c10::intrusive_ptr_target {
 
   bool is_variable() const { return is_variable_; };
   void set_is_variable(bool is_variable) { is_variable_ = is_variable; };
-  c10::intrusive_ptr<VariableImplInterface> get_variable_impl() const {
+  const c10::intrusive_ptr<VariableImplInterface>& get_variable_impl() const {
     return variable_impl_;
   }
-  void set_variable_impl(c10::intrusive_ptr<VariableImplInterface> variable_impl) {
+  void set_variable_impl(const c10::intrusive_ptr<VariableImplInterface>& variable_impl) {
     variable_impl_ = variable_impl;
   }
 

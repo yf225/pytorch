@@ -388,6 +388,7 @@ inline Variable make_variable(at::Tensor data, bool requires_grad = false) {
     AT_ASSERT(tensor_impl.use_count() == 1);
     tensor_impl->set_variable_impl(c10::make_intrusive<Variable::Impl>(requires_grad));
     tensor_impl->set_is_variable(true);
+
     return Variable(tensor_impl);
   }
   return Variable();
@@ -431,7 +432,7 @@ inline const Variable& as_variable_ref(const at::Tensor& tensor) {
 inline at::Tensor Variable::data() const noexcept {
   auto tensor_impl = getIntrusivePtr()->clone();
   AT_ASSERT(tensor_impl.use_count() == 1);
-  tensor_impl->set_variable_impl(c10::intrusive_ptr<at::VariableImplInterface>());
+  tensor_impl->set_variable_impl(c10::make_intrusive<Variable::Impl>(false));
   tensor_impl->set_is_variable(false);
 
   return at::Tensor(tensor_impl);

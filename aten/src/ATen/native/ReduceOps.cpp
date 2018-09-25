@@ -628,7 +628,9 @@ Tensor _norm(const Tensor &self, Scalar p) {
       return at::th_norm(self, p);
     } else {
       if (self.is_contiguous()) {
+        no_grad_guard = true;
         Tensor result = CPU(kFloat).scalarTensor(0).toType(self.type());
+        no_grad_guard = false;
         norm_kernel(kCPU, result, self, p, nullopt);
         return result;
       } else {
