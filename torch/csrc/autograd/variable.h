@@ -115,8 +115,6 @@ struct TORCH_API Variable : public at::Tensor {
   // "Downcasts" a `Tensor` into a `Variable`. Only call this on tensors you
   // know are Variables.
   /*implicit*/ Variable(at::Tensor const& rhs) : at::Tensor(rhs) {
-    std::cout << "Variable(at::Tensor const& rhs): is_variable(): " << is_variable() << "\n";
-    std::cout << "Variable(at::Tensor const& rhs): !defined(): " << !defined() << "\n";
     AT_CHECK(
         is_variable() || !defined(),
         "Tensor that was converted to Variable was not actually a Variable");
@@ -124,8 +122,6 @@ struct TORCH_API Variable : public at::Tensor {
 
   /*implicit*/ Variable(at::Tensor&& rhs)
       : at::Tensor(std::move(rhs)) {
-    std::cout << "Variable(at::Tensor&& rhs): is_variable(): " << is_variable() << "\n";
-    std::cout << "Variable(at::Tensor&& rhs): !defined(): " << !defined() << "\n";
     AT_CHECK(
         is_variable() || !defined(),
         "Tensor that was converted to Variable was not actually a Variable");
@@ -379,7 +375,6 @@ inline Variable make_variable_view(
     AT_ASSERT(tensor_impl.use_count() == 1);
     tensor_impl->set_variable_impl(c10::make_intrusive<Variable::ViewImpl>(
             std::move(base), std::move(gradient_edge)));
-    std::cout << "make_variable_view: tensor_impl->get_variable_impl().use_count(): " << tensor_impl->get_variable_impl().use_count() << "\n";
     tensor_impl->set_is_variable(true);
 
     return Variable(tensor_impl);
@@ -392,7 +387,6 @@ inline Variable make_variable(at::Tensor data, bool requires_grad = false) {
     auto tensor_impl = data.getIntrusivePtr()->clone();
     AT_ASSERT(tensor_impl.use_count() == 1);
     tensor_impl->set_variable_impl(c10::make_intrusive<Variable::Impl>(requires_grad));
-    std::cout << "make_variable(data, requires_grad): tensor_impl->get_variable_impl().use_count(): " << tensor_impl->get_variable_impl().use_count() << "\n";
     tensor_impl->set_is_variable(true);
 
     return Variable(tensor_impl);
@@ -405,7 +399,6 @@ inline Variable make_variable(at::Tensor data, Edge gradient_edge) {
     auto tensor_impl = data.getIntrusivePtr()->clone();
     AT_ASSERT(tensor_impl.use_count() == 1);
     tensor_impl->set_variable_impl(c10::make_intrusive<Variable::Impl>(false, std::move(gradient_edge)));
-    std::cout << "make_variable(data, gradient_edge): tensor_impl->get_variable_impl().use_count(): " << tensor_impl->get_variable_impl().use_count() << "\n";
     tensor_impl->set_is_variable(true);
 
     return Variable(tensor_impl);
@@ -440,7 +433,6 @@ inline at::Tensor Variable::data() const noexcept {
   auto tensor_impl = getIntrusivePtr()->clone();
   AT_ASSERT(tensor_impl.use_count() == 1);
   tensor_impl->set_variable_impl(c10::make_intrusive<Variable::Impl>(false)); // yf225 TODO: this might be wrong! should we create a NULL intrusive pointer instead?
-  std::cout << "Variable::data(): tensor_impl->get_variable_impl().use_count(): " << tensor_impl->get_variable_impl().use_count() << "\n";  
   tensor_impl->set_is_variable(false);
 
   return at::Tensor(tensor_impl);
@@ -466,7 +458,6 @@ inline Variable Variable::detach() const {
   auto tensor_impl = this->getIntrusivePtr()->clone();
   AT_ASSERT(tensor_impl.use_count() == 1);
   tensor_impl->set_variable_impl(c10::make_intrusive<Variable::Impl>(/*requires_grad=*/false));
-  std::cout << "Variable::detach(): tensor_impl->get_variable_impl().use_count(): " << tensor_impl->get_variable_impl().use_count() << "\n";
   tensor_impl->set_is_variable(true);
   auto detached = Variable(tensor_impl);
   detached.set_version_counter(get()->version_counter_);

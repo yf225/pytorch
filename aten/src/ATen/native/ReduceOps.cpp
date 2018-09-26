@@ -629,8 +629,6 @@ Tensor _norm(const Tensor &self, Scalar p) {
     } else {
       if (self.is_contiguous()) {
         at::GradMode::set_enabled(false);
-        std::cout << "CPU(kFloat).scalarTensor(0).type(): " << CPU(kFloat).scalarTensor(0).type() << "\n";
-        std::cout << "self.type(): " << self.type() << "\n";
         Tensor result = CPU(kFloat).scalarTensor(0).toType(self.type());
         at::GradMode::set_enabled(true);
         norm_kernel(kCPU, result, self, p, nullopt);
@@ -648,7 +646,6 @@ Tensor norm(const Tensor& self, Scalar p, int64_t dim, bool keepdim) {
 }
 
 Tensor norm(const Tensor& self, Scalar p) {
-  std::cout << "self.getIntrusivePtr()->get_variable_impl().use_count()" << self.getIntrusivePtr()->get_variable_impl().use_count() << "\n";
   return at::native::_norm(self, p);
 }
 
