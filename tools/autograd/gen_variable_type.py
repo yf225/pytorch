@@ -25,6 +25,7 @@
 from __future__ import print_function
 import os
 import sys
+import re
 from .utils import CodeTemplate, nested_dict, write, uninplace_api_name
 from .gen_autograd import VIEW_FUNCTIONS, HARDCODED_DIFFERENTIABLE_OUTPUTS
 from .gen_autograd_functions import uses_single_grad
@@ -392,7 +393,7 @@ def emit_body(declaration):
         names = [ret['type'] + ' ' + ret['name'] + ';' for ret in declaration['returns']]
         return '\n'.join(names)
 
-    def wrap_output(call):
+    def wrap_output(call, is_view):
         if 'Tensor' not in declaration['return_type']:
             return call
         elif is_view:
@@ -400,19 +401,30 @@ def emit_body(declaration):
         else:
             return 'as_variable({})'.format(call)
 
+    def unwrap_output(call):
+        if 'as_view' in call:
+            call = call.replace('as_view(self, ', '')
+            call = call[:len(call)-1]
+        elif 'as_variable' in call:
+            call = call.replace('as_variable(', '')
+            call = call[:len(call)-1]
+        return call
+
     def add_no_grad_guard(call):
         code_block = ''
-        if 'as_view(self, ' in call:
+        if 'as_view' in call or 'as_variable' in call:
             call_lhs, call_rhs = call.split(' = ')
-            call_rhs = call_rhs.replace('as_view(self, ', '')
-            call_rhs = call_rhs[:len(call_rhs)-2]  # Remove right parenthesis and semicolon
+            unwrapped_call = unwrap_output(call_rhs)
             code_block = set_no_grad_guard() + '\n'
-            code_block += 'auto tmp = {};\n'.format(call_rhs)
+            code_block += 'auto tmp = {};\n'.format(unwrapped_call)
             code_block += unset_no_grad_guard() + '\n'
-            code_block += '{} = as_view(self, tmp);'.format(call_lhs)
+            if 'as_view' in call:
+                code_block += '{} = {};'.format(call_lhs, wrap_output('tmp', True))
+            elif 'as_variable' in call:
+                code_block += '{} = {};'.format(call_lhs, wrap_output('tmp', False))
         else:
             code_block = set_no_grad_guard() + '\n'
-            code_block += call + '\n'
+            code_block += call + ';\n'
             code_block += unset_no_grad_guard()
         return code_block
 
@@ -421,12 +433,12 @@ def emit_body(declaration):
         if strategy == 'use_derived':
             call = CALL_VIA_DERIVED.substitute(combined)
             if not modifies_arguments:
-                call = wrap_output(call)
+                call = wrap_output(call, is_view)
         else:
             call = CALL_VIA_TYPE.substitute(declaration)
         if not modifies_arguments and not returns_void:
             call = '{} = {}'.format(tie_return_values(), call)
-        return add_no_grad_guard(call + ';')
+        return add_no_grad_guard(call)
 
     def tie_return_values():
         if len(declaration['returns']) == 1:
