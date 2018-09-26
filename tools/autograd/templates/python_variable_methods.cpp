@@ -273,7 +273,11 @@ static PyObject * THPVariable_cuda(PyObject* self, PyObject* args, PyObject* kwa
 static PyObject * THPVariable_to_type(PyObject* self, ScalarType scalarType) {
   HANDLE_TH_ERRORS
   auto& self_ = reinterpret_cast<THPVariable*>(self)->cdata;
+  std::cout << "THPVariable_to_type: self_.is_variable(): "  << self_.is_variable() << "\n";
+  std::cout << "THPVariable_to_type: !self_.defined(): "  << !self_.defined() << "\n";
   auto tmp = dispatch_to(self_, scalarType, false);
+  std::cout << "THPVariable_to_type: tmp.is_variable(): "  << tmp.is_variable() << "\n";
+  std::cout << "THPVariable_to_type: !tmp.defined(): "  << !tmp.defined() << "\n";
   return THPVariable_Wrap(tmp);
   END_HANDLE_TH_ERRORS
 }
