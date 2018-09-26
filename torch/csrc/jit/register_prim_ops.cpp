@@ -44,7 +44,7 @@ void checkImplicitTensorToNum(at::Tensor t, bool toInt) {
   if (t.sizes().size() != 0) {
     throw std::runtime_error("Cannot input a tensor of dimension other than 0 as a scalar argument");
   }
-  if (toInt && !isIntegralType(autograd::as_variable_ref(t).data().type().scalarType())) {
+  if (toInt && !isIntegralType(autograd::as_variable_ref(t).type().scalarType())) {
     std::stringstream ss;
     ss << "Cannot input a tensor of type " << t.type().scalarType() << " as an integral argument";
     throw std::runtime_error(ss.str());

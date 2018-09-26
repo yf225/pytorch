@@ -61,9 +61,9 @@ inline Value* getValueTrace(const Variable& var) {
   auto & value_map = getTracingState()->value_map;
   auto it = value_map.find(var);
   if (it == value_map.end()) {
-    Value *constant = state->graph->insertConstant(var.data()); // yf225 TODO: var.data() use here might be wrong
+    Value *constant = state->graph->insertConstant(var); // yf225 TODO: modified
     recordSourceLocation(constant->node());
-    constant->inferTypeFrom(var.data()); // yf225 TODO: var.data() use here might be wrong
+    constant->inferTypeFrom(var); // yf225 TODO: modified
     it = value_map.emplace_hint(it, var, constant);
   }
   return it->second;

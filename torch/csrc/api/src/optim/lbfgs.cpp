@@ -18,7 +18,7 @@ LBFGSOptions::LBFGSOptions(double learning_rate)
 Tensor LBFGS::gather_flat_grad() {
   std::vector<Tensor> views;
   for (auto& parameter : parameters_) {
-    views.push_back(autograd::Variable(parameter.grad()).data().view(-1));
+    views.push_back(autograd::Variable(parameter.grad()).view(-1));
   }
   return at::cat(views);
 }
@@ -27,7 +27,7 @@ void LBFGS::add_grad(const torch::Scalar& step_size, const Tensor& update) {
   int64_t offset = 0;
   for (auto& parameter : parameters_) {
     int64_t numel = parameter.numel();
-    Tensor pd = autograd::Variable(parameter).data();
+    Tensor pd = autograd::Variable(parameter);
     pd.add_(update.slice(0, offset, offset + numel, 1).view_as(pd), step_size);
     offset += numel;
   }

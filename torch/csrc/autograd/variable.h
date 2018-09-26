@@ -129,7 +129,7 @@ struct TORCH_API Variable : public at::Tensor {
 
   // NOTE: Assignment operators to Tensor come for free from the constructors.
 
-  at::Tensor data() const noexcept;
+  // at::Tensor tmp_data() const noexcept;
 
   // Gradient Function and Edges
   //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -428,15 +428,15 @@ inline const Variable& as_variable_ref(const at::Tensor& tensor) {
   return static_cast<const Variable&>(tensor);
 }
 
-// NOTE: This is a slow operation, use it only from "tensor.data" Python API.
-inline at::Tensor Variable::data() const noexcept {
-  auto tensor_impl = getIntrusivePtr()->clone();
-  AT_ASSERT(tensor_impl.use_count() == 1);
-  tensor_impl->set_variable_impl(c10::make_intrusive<Variable::Impl>(false)); // yf225 TODO: this might be wrong! should we create a NULL intrusive pointer instead?
-  tensor_impl->set_is_variable(false);
+// // NOTE: This is a slow operation, use it only from "tensor.data" Python API.
+// inline at::Tensor Variable::tmp_data() const noexcept {
+//   auto tensor_impl = getIntrusivePtr()->clone();
+//   AT_ASSERT(tensor_impl.use_count() == 1);
+//   tensor_impl->set_variable_impl(c10::make_intrusive<Variable::Impl>(false)); // yf225 TODO: this might be wrong! should we create a NULL intrusive pointer instead?
+//   tensor_impl->set_is_variable(false);
 
-  return at::Tensor(tensor_impl);
-}
+//   return at::Tensor(tensor_impl);
+// }
 
 // Gradient Function and Edges
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

@@ -145,7 +145,7 @@ static PyObject* THPVariable_make_subclass(PyObject* _ignored, PyObject* args, P
   if (!PyType_Check(cls)) {
     throw TypeError("cls must be a type (got %s)", Py_TYPE(cls)->tp_name);
   }
-  auto data = as_variable_ref(r.tensor(1)).data();
+  auto data = as_variable_ref(r.tensor(1));
   auto var = make_variable(data, r.toBool(2));
   return THPVariable_NewWithVar((PyTypeObject*)cls, std::move(var));
   END_HANDLE_TH_ERRORS
@@ -200,7 +200,7 @@ static PyObject *THPVariable_is_leaf(THPVariable *self)
 static PyObject * THPVariable_get_data(THPVariable *self)
 {
   HANDLE_TH_ERRORS
-  return THPVariable_Wrap(make_variable(self->cdata.data(), false));
+  return THPVariable_Wrap(make_variable(self->cdata, false));
   END_HANDLE_TH_ERRORS
 }
 
@@ -210,7 +210,7 @@ int THPVariable_set_data(THPVariable *self, PyObject *data)
   if (!THPVariable_Check(data)) {
     throw torch::TypeError("Variable data has to be a tensor, but got %s", Py_TYPE(data)->tp_name);
   }
-  self->cdata.set_data(THPVariable_UnpackData(data));
+  self->cdata.set_data(THPVariable_Unpack(data));
   return 0;
   END_HANDLE_TH_ERRORS_RET(-1)
 }

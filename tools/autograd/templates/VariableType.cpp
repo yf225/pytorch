@@ -220,37 +220,37 @@ Variable & VariableType::checked_cast_variable(const Tensor & t, const char * na
   return as_variable_ref(const_cast<Tensor&>(t));
 }
 
-Tensor VariableType::unpack(const Tensor & t, const char * name, int pos) {
-  return checked_cast_variable(t, name, pos).data();
-}
+// Tensor VariableType::tmp_unpack(const Tensor & t, const char * name, int pos) {
+//   return checked_cast_variable(t, name, pos).tmp_data();
+// }
 
-SparseTensorRef VariableType::unpack(SparseTensorRef t, const char * name, int pos) {
-  return SparseTensorRef(checked_cast_variable(t.tref, name, pos).data());
-}
+// SparseTensorRef VariableType::tmp_unpack(SparseTensorRef t, const char * name, int pos) {
+//   return SparseTensorRef(checked_cast_variable(t.tref, name, pos).tmp_data());
+// }
 
-Tensor VariableType::unpack_opt(const Tensor & t, const char * name, int pos) {
-  if (!t.defined()) {
-    return Tensor();
-  }
-  return unpack(t, name, pos);
-}
+// Tensor VariableType::tmp_unpack_opt(const Tensor & t, const char * name, int pos) {
+//   if (!t.defined()) {
+//     return Tensor();
+//   }
+//   return tmp_unpack(t, name, pos);
+// }
 
-std::vector<at::Tensor> VariableType::unpack(at::TensorList tl, const char *name, int pos) {
-  std::vector<at::Tensor> ret(tl.size());
-  for (size_t i = 0; i < tl.size(); ++i) {
-    const auto &t = tl[i];
-    if (!t.defined()) {
-      AT_ERROR("Expected a Tensor of type Variable but found an undefined Tensor at position #", i, " "
-                    "for iterable argument #", pos, " '", name, "'");
-    }
-    if (!isVariableType(t.type())) {
-      AT_ERROR("Expected object of type Variable but found type ", t.type().toString(), " at position #", i, " "
-                    "for iterable argument #", pos, " '", name, "'");
-    }
-    ret[i] = static_cast<const Variable&>(t).data();
-  }
-  return ret;
-}
+// std::vector<at::Tensor> VariableType::tmp_unpack(at::TensorList tl, const char *name, int pos) {
+//   std::vector<at::Tensor> ret(tl.size());
+//   for (size_t i = 0; i < tl.size(); ++i) {
+//     const auto &t = tl[i];
+//     if (!t.defined()) {
+//       AT_ERROR("Expected a Tensor of type Variable but found an undefined Tensor at position #", i, " "
+//                     "for iterable argument #", pos, " '", name, "'");
+//     }
+//     if (!isVariableType(t.type())) {
+//       AT_ERROR("Expected object of type Variable but found type ", t.type().toString(), " at position #", i, " "
+//                     "for iterable argument #", pos, " '", name, "'");
+//     }
+//     ret[i] = static_cast<const Variable&>(t).tmp_data();
+//   }
+//   return ret;
+// }
 
 // Assumed that saved tensor lists are never inplace outputs
 static std::vector<SavedVariable> make_saved_variable_list(TensorList tensors) {

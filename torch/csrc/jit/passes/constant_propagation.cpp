@@ -47,7 +47,7 @@ std::vector<IValue> runNode(Node* n) {
     if (v.isTensor()) {
       auto t = std::move(v).toTensor();
       if(t.defined()) {
-        return IValue(autograd::as_variable_ref(t).data());
+        return IValue(autograd::as_variable_ref(t));
       } else {
         return t;
       }

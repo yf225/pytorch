@@ -61,9 +61,15 @@ auto AccumulateGrad::apply(variable_list&& grads) -> variable_list {
     // a thing never promised and documented, but used in some hacks seen
     // on the internet.
     if (grad_variable.type().is_sparse() && !new_grad.type().is_sparse()) {
-      grad_variable.data() = new_grad.data() + grad_variable.data();   // yf225 TODO: .data() use here might be wrong
+      {
+        at::AutoGradMode grad_mode(false);
+        grad_variable = new_grad + grad_variable;   // yf225 TODO: modified
+      }
     } else {
-      grad_variable.data() += new_grad.data();  // yf225 TODO: .data() use here might be wrong
+      {
+        at::AutoGradMode grad_mode(false);
+        grad_variable += new_grad;  // yf225 TODO: modified
+      }
     }
   } else {
     variable.grad() = grad + new_grad;

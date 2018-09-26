@@ -29,7 +29,7 @@ Value* insertConstant(
     n->output()->setType(ListType::ofInts());
   } else if(val.isTensorList()) {
     n->ts_(attr::value, fmap(val.toTensorList()->elements(), [](const at::Tensor & t) {
-      return autograd::Variable(t).data();
+      return static_cast<const at::Tensor &>(autograd::Variable(t));
     }));
     n->output()->setType(ListType::ofTensors());
   } else if(val.isString()) {

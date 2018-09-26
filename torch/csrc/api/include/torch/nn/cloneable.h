@@ -58,7 +58,7 @@ class Cloneable : public virtual Module {
         copy->parameters_[parameter.key].copy_(
             *parameter, /*non_blocking=*/true);
       } else {
-        copy->parameters_[parameter.key].set_data(autograd::Variable(*parameter).data().clone());
+        copy->parameters_[parameter.key].set_data(autograd::Variable(*parameter).clone());
       }
     }
     AT_CHECK(
@@ -71,7 +71,7 @@ class Cloneable : public virtual Module {
       if (device) {
         copy->buffers_[buffer.key].copy_(*buffer, /*non_blocking=*/true);
       } else {
-        copy->buffers_[buffer.key].set_data(autograd::Variable(*buffer).data().clone());
+        copy->buffers_[buffer.key].set_data(autograd::Variable(*buffer).clone());
       }
     }
     AT_CHECK(

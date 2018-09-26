@@ -69,10 +69,10 @@ struct TORCH_API VariableType final : public at::TypeDefault {
 private:
   // checks that t is actually a Variable
   static Variable & checked_cast_variable(const Tensor & t, const char * name, int pos);
-  static at::Tensor unpack(const Tensor & t, const char * name, int pos);
-  static at::SparseTensorRef unpack(SparseTensorRef t, const char * name, int pos);
-  static at::Tensor unpack_opt(const Tensor & t, const char * name, int pos);
-  static std::vector<at::Tensor> unpack(at::TensorList tl, const char *name, int pos);
+  // static at::Tensor tmp_unpack(const Tensor & t, const char * name, int pos);
+  // static at::SparseTensorRef tmp_unpack(SparseTensorRef t, const char * name, int pos);
+  // static at::Tensor tmp_unpack_opt(const Tensor & t, const char * name, int pos);
+  // static std::vector<at::Tensor> tmp_unpack(at::TensorList tl, const char *name, int pos);
 
   at::TypeExtendedInterface* baseType;
   std::string str;

@@ -186,6 +186,7 @@ struct Attributes {
 
   // does not use CREATE_ACCESSOR because we need additional asserts
   Derived* t_(Symbol name, TensorAttr::ConstructorType v) {
+    at::AutoGradMode grad_mode(false);
     JIT_ASSERT(!v.defined() || !v.is_variable());
     return set<TensorAttr>(name,std::forward<TensorAttr::ConstructorType>(v));
   }
@@ -194,6 +195,7 @@ struct Attributes {
   }
 
   Derived* ts_(Symbol name, TensorsAttr::ConstructorType v) {
+    at::AutoGradMode grad_mode(false);
     for(auto & t : v) {
       JIT_ASSERT(!t.defined() || !t.is_variable());
     }
