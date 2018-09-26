@@ -404,10 +404,10 @@ def emit_body(declaration):
     def unwrap_output(call):
         if 'as_view' in call:
             call = call.replace('as_view(self, ', '')
-            call = call[:len(call)-1]
+            call = call[:len(call)-1]  # Remove closing parenthesis
         elif 'as_variable' in call:
             call = call.replace('as_variable(', '')
-            call = call[:len(call)-1]
+            call = call[:len(call)-1]  # Remove closing parenthesis
         return call
 
     def add_no_grad_guard(call):
