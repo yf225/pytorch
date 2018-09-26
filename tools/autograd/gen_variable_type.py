@@ -469,6 +469,12 @@ def emit_body(declaration):
     def unset_no_grad_guard():
         return 'at::GradMode::set_enabled(true);'
 
+    def debug_trace():
+        return '''\
+std::cout << "VariableType::select: is_variable(): " << self.is_variable() << "\\n";
+std::cout << "VariableType::select: !defined(): " << !self.defined() << "\\n";
+'''
+
     env = {}
     combined = nested_dict(env, declaration)
 
@@ -486,6 +492,8 @@ def emit_body(declaration):
 
     body.append(pre_record_trace)
     body.append(set_no_grad_guard())
+    if 'select' in name:
+        body.append(debug_trace())
     body.append(emit_call(env))
     body.append(unset_no_grad_guard())
     if requires_derivative:

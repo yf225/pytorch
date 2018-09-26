@@ -103,6 +103,10 @@ static Variable applySelect(const Variable& self, int64_t dim, int64_t index) {
   // if the index is negative, do not normalize it because that would fix the index
   // on the current tensor size in the tracer.
   // aten::select also works on negative indices
+
+  // is_variable() || !defined(),
+  std::cout << "applySelect: self.is_variable(): " << self.is_variable() << "\n";
+  std::cout << "applySelect: !self.defined(): " << !self.defined() << "\n";
   return self.select(dim, index);
 }
 

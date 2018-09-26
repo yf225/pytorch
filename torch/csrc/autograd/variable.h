@@ -115,6 +115,8 @@ struct TORCH_API Variable : public at::Tensor {
   // "Downcasts" a `Tensor` into a `Variable`. Only call this on tensors you
   // know are Variables.
   /*implicit*/ Variable(at::Tensor const& rhs) : at::Tensor(rhs) {
+    std::cout << "Variable(at::Tensor const& rhs): is_variable(): " << is_variable() << "\n";
+    std::cout << "Variable(at::Tensor const& rhs): !defined(): " << !defined() << "\n";
     AT_CHECK(
         is_variable() || !defined(),
         "Tensor that was converted to Variable was not actually a Variable");
@@ -122,6 +124,8 @@ struct TORCH_API Variable : public at::Tensor {
 
   /*implicit*/ Variable(at::Tensor&& rhs)
       : at::Tensor(std::move(rhs)) {
+    std::cout << "Variable(at::Tensor&& rhs): is_variable(): " << is_variable() << "\n";
+    std::cout << "Variable(at::Tensor&& rhs): !defined(): " << !defined() << "\n";
     AT_CHECK(
         is_variable() || !defined(),
         "Tensor that was converted to Variable was not actually a Variable");
