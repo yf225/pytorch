@@ -400,6 +400,22 @@ def emit_body(declaration):
         else:
             return 'as_variable({})'.format(call)
 
+    def add_no_grad_guard(call):
+        code_block = ''
+        if 'as_view(self, ' in call:
+            call_lhs, call_rhs = call.split(' = ')
+            call_rhs = call_rhs.replace('as_view(self, ', '')
+            call_rhs = call_rhs[:len(call_rhs)-2]  # Remove right parenthesis and semicolon
+            code_block = set_no_grad_guard() + '\n'
+            code_block += 'auto tmp = {};\n'.format(call_rhs)
+            code_block += unset_no_grad_guard() + '\n'
+            code_block += '{} = as_view(self, tmp);'.format(call_lhs)
+        else:
+            code_block = set_no_grad_guard() + '\n'
+            code_block += call + '\n'
+            code_block += unset_no_grad_guard()
+        return code_block
+
     def emit_call(env):
         combined = nested_dict(env, declaration)
         if strategy == 'use_derived':
@@ -410,7 +426,7 @@ def emit_body(declaration):
             call = CALL_VIA_TYPE.substitute(declaration)
         if not modifies_arguments and not returns_void:
             call = '{} = {}'.format(tie_return_values(), call)
-        return call + ';'
+        return add_no_grad_guard(call + ';')
 
     def tie_return_values():
         if len(declaration['returns']) == 1:
@@ -491,11 +507,7 @@ std::cout << "VariableType::select: !defined(): " << !self.defined() << "\\n";
     pre_record_trace, post_record_trace = emit_record_trace(env)
 
     body.append(pre_record_trace)
-    body.append(set_no_grad_guard())
-    if 'select' in name:
-        body.append(debug_trace())
     body.append(emit_call(env))
-    body.append(unset_no_grad_guard())
     if requires_derivative:
         # set_flags has to appear after version_counter, because rebase_history
         # requires that the counter is incremented before it is called
