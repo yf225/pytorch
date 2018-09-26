@@ -585,7 +585,7 @@ std::pair<tensor_list, tensor_list> runGradient(Gradient& grad_spec,
 }
 
 void testADFormulas() {
-  static const auto unwrap = [](const Variable& v) { return v.data(); };
+  static const auto unwrap = [](const Variable& v) { return v.data(); };  // yf225 TODO: .data() use here might be wrong
 
   using VL = variable_list;
   static const var_meta_list binary_pointwise = {{2, 3, 4, 5}, {2, 3, 4, 5}};

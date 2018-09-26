@@ -70,7 +70,7 @@ static PyObject * THPGenerator_getState(THPGenerator *self)
   HANDLE_TH_ERRORS
   THGenerator *generator = THPGenerator_TH_CData(self);
   Variable var = torch::empty({0}, at::device(at::kCPU).dtype(at::kByte));
-  THByteTensor_getRNGState(generator, (THByteTensor*)(var.data().unsafeGetTensorImpl()));
+  THByteTensor_getRNGState(generator, (THByteTensor*)(var.unsafeGetTensorImpl()));
   return THPVariable_Wrap(std::move(var));
   END_HANDLE_TH_ERRORS
 }
