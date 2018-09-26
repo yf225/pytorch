@@ -273,7 +273,8 @@ static PyObject * THPVariable_cuda(PyObject* self, PyObject* args, PyObject* kwa
 static PyObject * THPVariable_to_type(PyObject* self, ScalarType scalarType) {
   HANDLE_TH_ERRORS
   auto& self_ = reinterpret_cast<THPVariable*>(self)->cdata;
-  return THPVariable_Wrap(dispatch_to(self_, scalarType, false));
+  auto tmp = dispatch_to(self_, scalarType, false);
+  return THPVariable_Wrap(tmp);
   END_HANDLE_TH_ERRORS
 }
 static PyObject * THPVariable_byte(PyObject* self, PyObject* args) {
