@@ -41,7 +41,10 @@ TensorImpl::TensorImpl(const TensorImpl& tensor_impl)
       data_type_(tensor_impl.dtype()),
       is_wrapped_number_(tensor_impl.is_wrapped_number()),
       is_variable_(tensor_impl.is_variable()),
-      variable_impl_(tensor_impl.get_variable_impl()) {}
+      variable_impl_(tensor_impl.get_variable_impl()) {
+  std::cout << "TensorImpl::TensorImpl: tensor_impl.get_variable_impl().use_count(): " << tensor_impl.get_variable_impl().use_count() << "\n";
+  std::cout << "TensorImpl::TensorImpl: variable_impl_.use_count(): " << variable_impl_.use_count() << "\n";
+}
 
 IntList TensorImpl::sizes() const {
   return sizes_;

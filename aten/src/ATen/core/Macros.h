@@ -84,5 +84,3 @@ inline int stoi(const std::string& str) {
 #endif // defined(__ANDROID__)
 }
 } // namespace at
-
-static thread_local bool no_grad_guard;

@@ -480,9 +480,7 @@ def emit_body(declaration):
     if base_name not in DONT_PROFILE:
         body.append(RECORD_FUNCTION.substitute(combined))
     if strategy != 'use_type':
-        body.append(set_no_grad_guard())
         body.extend(unpack_args(env, declaration))
-        body.append(unset_no_grad_guard())
     if requires_derivative:
         body.extend(emit_check_inplace())
         body.extend(setup_derivative())
@@ -491,7 +489,9 @@ def emit_body(declaration):
     pre_record_trace, post_record_trace = emit_record_trace(env)
 
     body.append(pre_record_trace)
+    body.append(set_no_grad_guard())
     body.append(emit_call(env))
+    body.append(unset_no_grad_guard())
     if requires_derivative:
         # set_flags has to appear after version_counter, because rebase_history
         # requires that the counter is incremented before it is called

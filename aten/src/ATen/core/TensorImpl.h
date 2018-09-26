@@ -35,6 +35,8 @@ struct AT_API TensorImpl : public c10::intrusive_ptr_target {
     // could not have been created without initializing the Type first.
     // TODO: This is not actually true via the Caffe2 codepath!  Make
     // it so.
+    std::cout << "TensorImpl.h type(): is_variable(): " << is_variable() << "\n";
+    std::cout << "TensorImpl.h type(): no_grad_guard: " << no_grad_guard << "\n";
     return *globalLegacyTypeDispatch().getTypeRaw(tensorTypeIdToBackend(type_id()), dataTypeToScalarType(dtype().id()), is_variable() && !no_grad_guard);
   }
 
@@ -87,23 +89,23 @@ struct AT_API TensorImpl : public c10::intrusive_ptr_target {
     AT_CHECK(
         !requires_grad || at::isFloatingType(dataTypeToScalarType(dtype().id())),
         "Only Tensors of floating point dtype can require gradients");
-    std::cout << "variable_impl_.use_count(): " << variable_impl_.use_count() << "\n";
+    std::cout << "set_requires_grad(): variable_impl_.use_count(): " << variable_impl_.use_count() << "\n";
     AT_ASSERT(variable_impl_.use_count() > 0);
     variable_impl_->set_requires_grad(requires_grad);
   }
   bool requires_grad() const {
-    std::cout << "variable_impl_.use_count(): " << variable_impl_.use_count() << "\n";
+    std::cout << "requires_grad(): variable_impl_.use_count(): " << variable_impl_.use_count() << "\n";
     AT_ASSERT(variable_impl_.use_count() > 0);
     return variable_impl_->requires_grad();
   }
 
   Tensor& grad() {
-    std::cout << "variable_impl_.use_count(): " << variable_impl_.use_count() << "\n";
+    std::cout << "Tensor& grad(): variable_impl_.use_count(): " << variable_impl_.use_count() << "\n";
     AT_ASSERT(variable_impl_.use_count() > 0);
     return variable_impl_->grad();
   }
   const Tensor& grad() const {
-    std::cout << "variable_impl_.use_count(): " << variable_impl_.use_count() << "\n";
+    std::cout << "const Tensor& grad(): variable_impl_.use_count(): " << variable_impl_.use_count() << "\n";
     AT_ASSERT(variable_impl_.use_count() > 0);
     return variable_impl_->grad();
   }
