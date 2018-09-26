@@ -7,4 +7,9 @@
 #define AT_EXPORT AT_CORE_EXPORT
 #define AT_IMPORT AT_CORE_IMPORT
 
-extern thread_local bool no_grad_guard;
+namespace at {
+struct AT_API GradMode {
+  static bool is_enabled();
+  static void set_enabled(bool enabled);
+};
+}

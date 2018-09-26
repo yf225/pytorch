@@ -79,10 +79,6 @@ DONT_REQUIRE_DERIVATIVE = {
     '__lshift__', '__or__', '__rshift__', '__xor__',
 }
 
-# Thread-local state to control whether we want to dispatch to Variable type vs. Tensor type.
-# Defined in VariableHooksInterface.h.
-NO_GRAD_GUARD_NAME = 'no_grad_guard'
-
 METHOD_DECLARATION = CodeTemplate("""\
 ${return_type} ${method_prefix_derived}${api_name}(${type_method_formals}) const override;
 """)
@@ -468,10 +464,10 @@ def emit_body(declaration):
         return ['increment_version({});'.format(arg['name']) for arg in differentiable_outputs]
 
     def set_no_grad_guard():
-        return NO_GRAD_GUARD_NAME + ' = true;'
+        return 'at::GradMode::set_enabled(false);'
 
     def unset_no_grad_guard():
-        return NO_GRAD_GUARD_NAME + ' = false;'
+        return 'at::GradMode::set_enabled(true);'
 
     env = {}
     combined = nested_dict(env, declaration)

@@ -414,9 +414,9 @@ Tensor & VariableType::s_copy_(Tensor & self, const Tensor & src, bool non_block
       grad_fn->src_device = src.get_device();
     }
   }
-  no_grad_guard = true;
+  at::GradMode::set_enabled(false);
   baseType->s_copy_(self, src, non_blocking);
-  no_grad_guard = false;
+  at::GradMode::set_enabled(true);
   increment_version(self);
   rebase_history(as_variable_ref( self ), std::move(grad_fn));
   if(torch::jit::tracer::isTracing()) {
@@ -433,9 +433,9 @@ Tensor & VariableType::resize_(Tensor & self, IntList size) const {
   if (as_variable_ref(self).requires_grad()) {
     AT_ERROR("cannot resize variables that require grad");
   }
-  no_grad_guard = true;
+  at::GradMode::set_enabled(false);
   baseType->resize_(self, size);
-  no_grad_guard = false;
+  at::GradMode::set_enabled(true);
   return self;
 }
 
@@ -443,9 +443,9 @@ Tensor & VariableType::resize_as_(Tensor & self, const Tensor & the_template) co
   if (as_variable_ref(self).requires_grad()) {
     AT_ERROR("cannot resize variables that require grad");
   }
-  no_grad_guard = true;
+  at::GradMode::set_enabled(false);
   baseType->resize_as_(self, the_template);
-  no_grad_guard = false;
+  at::GradMode::set_enabled(true);
   return self;
 }
 

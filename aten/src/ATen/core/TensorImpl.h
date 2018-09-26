@@ -36,8 +36,8 @@ struct AT_API TensorImpl : public c10::intrusive_ptr_target {
     // TODO: This is not actually true via the Caffe2 codepath!  Make
     // it so.
     std::cout << "TensorImpl.h type(): is_variable(): " << is_variable() << "\n";
-    std::cout << "TensorImpl.h type(): no_grad_guard: " << no_grad_guard << "\n";
-    return *globalLegacyTypeDispatch().getTypeRaw(tensorTypeIdToBackend(type_id()), dataTypeToScalarType(dtype().id()), is_variable() && !no_grad_guard);
+    std::cout << "TensorImpl.h type(): at::GradMode::is_enabled(): " << at::GradMode::is_enabled() << "\n";
+    return *globalLegacyTypeDispatch().getTypeRaw(tensorTypeIdToBackend(type_id()), dataTypeToScalarType(dtype().id()), is_variable() && at::GradMode::is_enabled());
   }
 
   TensorTypeId type_id() const { return type_id_; }

@@ -628,11 +628,11 @@ Tensor _norm(const Tensor &self, Scalar p) {
       return at::th_norm(self, p);
     } else {
       if (self.is_contiguous()) {
-        no_grad_guard = true;
+        at::GradMode::set_enabled(false);
         std::cout << "CPU(kFloat).scalarTensor(0).type(): " << CPU(kFloat).scalarTensor(0).type() << "\n";
         std::cout << "self.type(): " << self.type() << "\n";
         Tensor result = CPU(kFloat).scalarTensor(0).toType(self.type());
-        no_grad_guard = false;
+        at::GradMode::set_enabled(true);
         norm_kernel(kCPU, result, self, p, nullopt);
         return result;
       } else {
