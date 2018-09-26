@@ -438,7 +438,10 @@ def emit_body(declaration):
             call = CALL_VIA_TYPE.substitute(declaration)
         if not modifies_arguments and not returns_void:
             call = '{} = {}'.format(tie_return_values(), call)
-        return add_no_grad_guard(call)
+        if strategy == 'use_derived':
+            return add_no_grad_guard(call)
+        else:
+            return call + ';'
 
     def tie_return_values():
         if len(declaration['returns']) == 1:
