@@ -240,6 +240,7 @@ void __printTensor(std::ostream& stream, Tensor& self, int64_t linesize)
 
 std::ostream& print(std::ostream& stream, const Tensor & tensor_, int64_t linesize) {
   FormatGuard guard(stream);
+  at::AutoGradMode grad_mode(false);
   if(!tensor_.defined()) {
     stream << "[ Tensor (undefined) ]";
   } else if (tensor_.is_sparse()) {

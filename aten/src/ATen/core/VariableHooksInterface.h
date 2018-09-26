@@ -12,6 +12,27 @@ namespace at {
 }
 
 namespace at {
+
+struct AT_API GradMode {
+  static bool is_enabled();
+  static void set_enabled(bool enabled);
+};
+
+// A RAII, thread local (!) guard that enables or disables grad mode upon
+// construction, and sets it back to the original value upon destruction.
+struct AT_API AutoGradMode {
+  AutoGradMode(bool enabled) : prev_mode(GradMode::is_enabled()) {
+    GradMode::set_enabled(enabled);
+  }
+  ~AutoGradMode() {
+    GradMode::set_enabled(prev_mode);
+  }
+  bool prev_mode;
+};
+
+}
+
+namespace at {
 struct VariableImplInterface : public c10::intrusive_ptr_target {
   virtual void set_requires_grad(bool requires_grad) {
     AT_ERROR("set_requires_grad is not implemented for Tensor");

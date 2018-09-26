@@ -414,9 +414,10 @@ Tensor & VariableType::s_copy_(Tensor & self, const Tensor & src, bool non_block
       grad_fn->src_device = src.get_device();
     }
   }
-  at::GradMode::set_enabled(false);
-  baseType->s_copy_(self, src, non_blocking);
-  at::GradMode::set_enabled(true);
+  {
+    at::AutoGradMode grad_mode(false);
+    baseType->s_copy_(self, src, non_blocking);
+  }
   increment_version(self);
   rebase_history(as_variable_ref( self ), std::move(grad_fn));
   if(torch::jit::tracer::isTracing()) {
@@ -433,9 +434,10 @@ Tensor & VariableType::resize_(Tensor & self, IntList size) const {
   if (as_variable_ref(self).requires_grad()) {
     AT_ERROR("cannot resize variables that require grad");
   }
-  at::GradMode::set_enabled(false);
-  baseType->resize_(self, size);
-  at::GradMode::set_enabled(true);
+  {
+    at::AutoGradMode grad_mode(false);
+    baseType->resize_(self, size);
+  }
   return self;
 }
 
@@ -443,9 +445,10 @@ Tensor & VariableType::resize_as_(Tensor & self, const Tensor & the_template) co
   if (as_variable_ref(self).requires_grad()) {
     AT_ERROR("cannot resize variables that require grad");
   }
-  at::GradMode::set_enabled(false);
-  baseType->resize_as_(self, the_template);
-  at::GradMode::set_enabled(true);
+  {
+    at::AutoGradMode grad_mode(false);
+    baseType->resize_as_(self, the_template);
+  }
   return self;
 }
 

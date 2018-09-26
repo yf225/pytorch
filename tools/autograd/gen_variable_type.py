@@ -412,20 +412,27 @@ def emit_body(declaration):
 
     def add_no_grad_guard(call):
         code_block = ''
-        if 'as_view' in call or 'as_variable' in call:
+        if ' = ' in call:
             call_lhs, call_rhs = call.split(' = ')
-            unwrapped_call = unwrap_output(call_rhs)
-            code_block = set_no_grad_guard() + '\n'
-            code_block += 'auto tmp = {};\n'.format(unwrapped_call)
-            code_block += unset_no_grad_guard() + '\n'
+            unwrapped_call = call_rhs
+            if 'as_view' in call or 'as_variable' in call_rhs:
+                unwrapped_call = unwrap_output(call_rhs)
+            code_block += 'decltype({}) tmp;\n'.format(unwrapped_call)
+            code_block += '{\n'
+            code_block += '  ' + set_no_grad_guard_raii() + '\n'
+            code_block += '  ' + 'tmp = {};\n'.format(unwrapped_call)
+            code_block += '}\n'
             if 'as_view' in call:
                 code_block += '{} = {};'.format(call_lhs, wrap_output('tmp', True))
             elif 'as_variable' in call:
                 code_block += '{} = {};'.format(call_lhs, wrap_output('tmp', False))
+            else:
+                code_block += '{} = {};'.format(call_lhs, 'tmp')
         else:
-            code_block = set_no_grad_guard() + '\n'
-            code_block += call + ';\n'
-            code_block += unset_no_grad_guard()
+            code_block += '{\n'
+            code_block += '  ' + set_no_grad_guard_raii() + '\n'
+            code_block += '  ' + call + ';\n'
+            code_block += '}\n'
         return code_block
 
     def emit_call(env):
@@ -494,11 +501,8 @@ def emit_body(declaration):
             return []
         return ['increment_version({});'.format(arg['name']) for arg in differentiable_outputs]
 
-    def set_no_grad_guard():
-        return 'at::GradMode::set_enabled(false);'
-
-    def unset_no_grad_guard():
-        return 'at::GradMode::set_enabled(true);'
+    def set_no_grad_guard_raii():
+        return 'at::AutoGradMode grad_mode(false);'
 
     env = {}
     combined = nested_dict(env, declaration)
