@@ -237,6 +237,8 @@ static Tensor dispatch_to(const Tensor & self, Device device, bool non_blocking)
 
 static Tensor dispatch_to(const Tensor & self, ScalarType dtype, bool non_blocking) {
   AutoNoGIL no_gil;
+  std::cout << "dispatch_to: self.is_variable()" << self.is_variable() << "\n";
+  std::cout << "dispatch_to: self.type().is_variable()" << self.type().is_variable() << "\n";
   return self.to(dtype, non_blocking);
 }
 
@@ -275,6 +277,7 @@ static PyObject * THPVariable_to_type(PyObject* self, ScalarType scalarType) {
   auto& self_ = reinterpret_cast<THPVariable*>(self)->cdata;
   std::cout << "THPVariable_to_type: self_.is_variable(): "  << self_.is_variable() << "\n";
   std::cout << "THPVariable_to_type: !self_.defined(): "  << !self_.defined() << "\n";
+  std::cout << "at::GradMode::is_enabled(): " << at::GradMode::is_enabled() << "\n";
   auto tmp = dispatch_to(self_, scalarType, false);
   std::cout << "THPVariable_to_type: tmp.is_variable(): "  << tmp.is_variable() << "\n";
   std::cout << "THPVariable_to_type: !tmp.defined(): "  << !tmp.defined() << "\n";
