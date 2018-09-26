@@ -741,6 +741,7 @@ PyObject *THPFunction_apply(PyObject *cls, PyObject *inputs)
   THPObjectPtr tensor_outputs;
   {
     AutoGradMode grad_mode(false);
+    at::AutoGradMode at_grad_mode(false);
     THPObjectPtr forward_fn(PyObject_GetAttrString(cls, "forward"));
     if (!forward_fn) return nullptr;
     tensor_outputs = PyObject_CallObject(forward_fn, ctx_input_tuple);
