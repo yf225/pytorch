@@ -10,6 +10,7 @@
 namespace torch { namespace nn {
 
 inline bool check_type(PyObject* obj, at::TypeID typeID) {
+  at::AutoGradMode grad_mode(false);
   if (THPVariable_Check(obj)) {
     return ((THPVariable*)obj)->cdata.type().ID() == typeID;
   }
