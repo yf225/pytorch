@@ -198,6 +198,20 @@ struct AT_API TensorImpl : public c10::intrusive_ptr_target {
     return c10::make_intrusive<TensorImpl>(*this);
   }
 
+  void copy_from(const TensorImpl& tensor_impl) {
+    storage_ = tensor_impl.storage_;
+    storage_offset_ = tensor_impl.storage_offset_;
+    sizes_ = tensor_impl.sizes_;
+    strides_ = tensor_impl.strides_;
+    is_contiguous_ = tensor_impl.is_contiguous_;
+    numel_ = tensor_impl.numel_;
+    type_id_ = tensor_impl.type_id_;
+    data_type_ = tensor_impl.data_type_;
+    is_wrapped_number_ = tensor_impl.is_wrapped_number_;
+    is_variable_ = tensor_impl.is_variable_;
+    variable_impl_ = tensor_impl.get_variable_impl();
+  }
+
  private:
   int64_t storage_offset_;
   std::vector<int64_t> sizes_;

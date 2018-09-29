@@ -111,8 +111,8 @@ void SparseTensorImpl::set_indices_and_values_unsafe(const Tensor& indices, cons
     "values has incorrect size, expected ", expected_values_size, ", got ", new_values_size
   );
 
-  indices_ = indices;
-  values_ = values;
+  indices_.unsafeGetTensorImpl()->copy_from(*indices.unsafeGetTensorImpl());
+  values_.unsafeGetTensorImpl()->copy_from(*values.unsafeGetTensorImpl());
 
   coalesced_ = false;
 }
