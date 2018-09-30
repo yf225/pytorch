@@ -62,12 +62,12 @@ auto AccumulateGrad::apply(variable_list&& grads) -> variable_list {
     // on the internet.
     if (grad_variable.type().is_sparse() && !new_grad.type().is_sparse()) {
       {
-        at::AutoGradMode grad_mode(false);
+        // at::AutoGradMode grad_mode(false);
         grad_variable = new_grad + grad_variable;   // yf225 TODO: modified
       }
     } else {
       {
-        at::AutoGradMode grad_mode(false);
+        at::AutoGradMode grad_mode(false);  // yf225 TODO: do we actually need this? Test!
         grad_variable += new_grad;  // yf225 TODO: modified
       }
     }
