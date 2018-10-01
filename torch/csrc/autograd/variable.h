@@ -384,6 +384,10 @@ inline Variable make_variable_view(
 
 inline Variable make_variable(at::Tensor data, bool requires_grad = false) {
   if (data.defined()) {
+    AT_CHECK(
+        !requires_grad || at::isFloatingType(data.type().scalarType()),
+        "Only Tensors of floating point dtype can require gradients");
+
     auto tensor_impl = data.getIntrusivePtr()->clone();
     AT_ASSERT(tensor_impl.use_count() == 1);
     tensor_impl->set_variable_impl(c10::make_intrusive<Variable::Impl>(requires_grad));
