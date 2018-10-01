@@ -318,6 +318,12 @@ caffe2_linux_test_defaults: &caffe2_linux_test_defaults
           export PATH=/opt/conda/bin:$PATH
         fi
 
+        # Upgrade SSL module to avoid old SSL warnings
+        # TODO: move the apt-get commands to Docker image
+        sudo apt-get update
+        sudo apt-get install python-dev libssl-dev libffi-dev
+        pip install --upgrade pyOpenSSL ndg-httpsclient pyasn1
+
         pip install --user -b /tmp/pip_install_onnx "file:///var/lib/jenkins/workspace/third_party/onnx#egg=onnx"
         pip install --user future
 
