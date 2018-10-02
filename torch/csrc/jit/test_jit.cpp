@@ -805,8 +805,11 @@ void testGraphExecutor() {
   CATCH_REQUIRE(stack.size() == 2);
   at::Tensor r0, r1;
   std::tie(r0, r1) = lstm(input, hx, cx, w_ih, w_hh);
-  CATCH_REQUIRE(almostEqual(Variable(stack[0].toTensor()), r0));
-  CATCH_REQUIRE(almostEqual(Variable(stack[1].toTensor()), r1));
+  {
+    at::AutoGradMode grad_mode(false);
+    CATCH_REQUIRE(almostEqual(stack[0].toTensor(), r0));
+    CATCH_REQUIRE(almostEqual(stack[1].toTensor(), r1));
+  }
 }
 
 void testBlocks(std::ostream & out) {
