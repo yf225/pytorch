@@ -184,13 +184,14 @@ class Module(object):
         for module in self.children():
             module._apply(fn)
 
-        for param in self._parameters.values():
+        for key, param in self._parameters.items():
             if param is not None:
                 # Tensors stored in modules are graph leaves, and we don't
                 # want to create copy nodes, so we have to unpack the data.
                 param.data = fn(param.data)
                 if param._grad is not None:
                     param._grad.data = fn(param._grad.data)
+                self._parameters[key] = param
 
         for key, buf in self._buffers.items():
             if buf is not None:
