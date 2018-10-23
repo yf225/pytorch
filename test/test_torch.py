@@ -9048,7 +9048,6 @@ class TestTorch(TestCase):
         self.assertEqual(2 - torch.tensor(3), 2 - torch.tensor(3).to("cuda:1"))    # __rsub__
         self.assertEqual(2 * torch.tensor(3), 2 * torch.tensor(3).to("cuda:1"))    # __rmul__
         self.assertEqual(2 / torch.tensor(3), 2 / torch.tensor(3).to("cuda:1"))    # __rtruediv__
-        self.assertEqual(2**torch.tensor(3), 2**torch.tensor(3).to("cuda:1"))      # __rpow__
         self.assertEqual(2 // torch.tensor(3), 2 // torch.tensor(3).to("cuda:1"))  # __rfloordiv__
 
         with self.assertRaisesRegex(RuntimeError, "expected both inputs to be on same device"):
@@ -9059,8 +9058,6 @@ class TestTorch(TestCase):
             torch.tensor(2).to("cuda:1") * torch.tensor(3).to("cuda:0")
         with self.assertRaisesRegex(RuntimeError, "expected both inputs to be on same device"):
             torch.tensor(2).to("cuda:1") / torch.tensor(3).to("cuda:0")
-        with self.assertRaisesRegex(RuntimeError, "expected both inputs to be on same device"):
-            torch.tensor(2).to("cuda:1") ** torch.tensor(3).to("cuda:0")
         with self.assertRaisesRegex(RuntimeError, "expected both inputs to be on same device"):
             torch.tensor(2).to("cuda:1") // torch.tensor(3).to("cuda:0")
 
