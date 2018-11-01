@@ -315,18 +315,6 @@ public:
   : TensorImpl(at::UndefinedTensorId(), caffe2::TypeMeta(), nullptr, /* is_variable */ false) {}
 
   ~ContainerTensor() override = default;
-  at::IntList sizes() const override {
-    throw std::runtime_error("sizes() on ContainerTensor");
-  }
-  at::IntList strides() const override {
-    throw std::runtime_error("strides() on ContainerTensor");
-  }
-  int64_t dim() const override {
-    throw std::runtime_error("dim() on ContainerTensor");
-  }
-  const at::Storage& storage() const override {
-    throw std::runtime_error("storage() on ContainerTensor");
-  }
 };
 
 // We need some lists for inputs and outputs. To keep all the memory

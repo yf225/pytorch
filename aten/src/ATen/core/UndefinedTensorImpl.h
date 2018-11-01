@@ -17,13 +17,6 @@ struct CAFFE2_API UndefinedTensorImpl final : public TensorImpl {
 #endif
     return &_singleton;
   }
-  IntList sizes() const override;
-  IntList strides() const override;
-  int64_t size(int64_t d) const override;
-  int64_t stride(int64_t d) const override;
-  int64_t dim() const override;
-  const Storage& storage() const override;
-  int64_t storage_offset() const override;
 private:
   UndefinedTensorImpl();
   static UndefinedTensorImpl _singleton;

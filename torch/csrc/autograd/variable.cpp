@@ -41,62 +41,6 @@ Variable::Impl::Impl(at::Tensor data, bool requires_grad, Edge gradient_edge)
 
 Variable::Impl::~Impl() = default;
 
-int64_t Variable::Impl::numel() const {
-  return data_.numel();
-}
-
-IntList Variable::Impl::sizes() const {
-  return data_.sizes();
-}
-
-IntList Variable::Impl::strides() const {
-  return data_.strides();
-}
-
-bool Variable::Impl::is_contiguous() const {
-  AT_ERROR("variable impl does not have is_contiguous");
-}
-
-int64_t Variable::Impl::dim() const {
-  return data_.dim();
-}
-
-int64_t Variable::Impl::size(int64_t d) const {
-  return data_.size(d);
-}
-
-int64_t Variable::Impl::stride(int64_t d) const {
-  return data_.stride(d);
-}
-
-void Variable::Impl::resize_dim(int64_t ndim) {
-  AT_ERROR("variable impl does not have resize_dim");
-}
-
-void Variable::Impl::set_size(int64_t dim, int64_t new_size) {
-  AT_ERROR("variable impl does not have set_size");
-}
-
-void Variable::Impl::set_stride(int64_t dim, int64_t new_stride) {
-  AT_ERROR("variable impl does not have set_stride");
-}
-
-void Variable::Impl::set_storage_offset(int64_t storage_offset) {
-  AT_ERROR("variable impl does not have set_storage_offset");
-}
-
-void* Variable::Impl::slow_data() const {
-  return data_.unsafeGetTensorImpl()->slow_data();
-}
-
-const at::Storage& Variable::Impl::storage() const {
-  return data_.storage();
-}
-
-int64_t Variable::Impl::storage_offset() const {
-  return data_.storage_offset();
-}
-
 int64_t Variable::Impl::get_device_slow() const {
   return data_.get_device();
 }

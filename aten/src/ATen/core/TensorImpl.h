@@ -333,19 +333,19 @@ struct CAFFE2_API TensorImpl : public c10::intrusive_ptr_target {
    * Return a reference to the sizes of this tensor.  This reference remains
    * valid as long as the tensor is live and not resized.
    */
-  virtual IntList sizes() const;
+  IntList sizes() const;
 
   /**
    * Return a reference to the strides of this tensor.  This reference remains
    * valid as long as the tensor is live and not restrided.
    */
-  virtual IntList strides() const;
+  IntList strides() const;
 
   /**
    * Return the number of dimensions of this tensor.  Note that 0-dimension
    * represents a Tensor that is a Scalar, e.g., one that has a single element.
    */
-  virtual int64_t dim() const;
+  int64_t dim() const;
 
   /**
    * Return the underyling storage of a Tensor.  Multiple tensors may share
@@ -355,7 +355,7 @@ struct CAFFE2_API TensorImpl : public c10::intrusive_ptr_target {
    * Avoid using this method if possible; try to use only Tensor APIs to perform
    * operations.
    */
-  virtual const Storage& storage() const;
+  const Storage& storage() const;
 
   // TODO: Delete me.
   friend struct Type;
@@ -368,7 +368,7 @@ struct CAFFE2_API TensorImpl : public c10::intrusive_ptr_target {
    * is no longer true; numel always accurately reports the product
    * of sizes of a tensor.
    */
-  virtual int64_t numel() const {
+  int64_t numel() const {
 #ifdef DEBUG
     AT_ASSERT(compute_numel() == numel_);
 #endif
@@ -382,7 +382,7 @@ struct CAFFE2_API TensorImpl : public c10::intrusive_ptr_target {
    * compute_contiguous() for the exact definition of whether or not
    * a tensor is contiguous or not.
    */
-  virtual bool is_contiguous() const {
+  bool is_contiguous() const {
 #ifdef DEBUG
     AT_ASSERT(compute_contiguous() == is_contiguous_);
 #endif
@@ -432,7 +432,7 @@ struct CAFFE2_API TensorImpl : public c10::intrusive_ptr_target {
    * that correctly handle the 0-dim case, and is just dead code in this case.
    * In the glorious future, this function will be eliminated entirely.
    */
-  virtual TensorImpl* maybe_zero_dim(bool condition_when_zero_dim);
+  TensorImpl* maybe_zero_dim(bool condition_when_zero_dim);
 
   /**
    * True if a tensor was auto-wrapped from a C++ or Python number.
@@ -658,7 +658,7 @@ struct CAFFE2_API TensorImpl : public c10::intrusive_ptr_target {
    *
    * XXX: The only thing stopping this function from being virtual is Variable.
    */
-  virtual int64_t storage_offset() const {
+  int64_t storage_offset() const {
     return storage_offset_;
   }
 
@@ -680,7 +680,7 @@ struct CAFFE2_API TensorImpl : public c10::intrusive_ptr_target {
    * TODO: This should be jettisoned in favor of `set_sizes_and_strides`,
    * which is harder to misuse.
    */
-  virtual void resize_dim(int64_t ndim) {
+  void resize_dim(int64_t ndim) {
     auto old_dim = sizes_.size();
     sizes_.resize(ndim, 0);
     if (old_dim != sizes_.size()) {
@@ -706,7 +706,7 @@ struct CAFFE2_API TensorImpl : public c10::intrusive_ptr_target {
    * TODO: This should be jettisoned in favor of `set_sizes_and_strides`,
    * which is harder to misuse.
    */
-  virtual void set_size(int64_t dim, int64_t new_size) {
+  void set_size(int64_t dim, int64_t new_size) {
     sizes_.at(dim) = new_size;
     refresh_numel();
     refresh_contiguous();
@@ -718,7 +718,7 @@ struct CAFFE2_API TensorImpl : public c10::intrusive_ptr_target {
    * TODO: This should be jettisoned in favor of `set_sizes_and_strides`,
    * which is harder to misuse.
    */
-  virtual void set_stride(int64_t dim, int64_t new_stride) {
+  void set_stride(int64_t dim, int64_t new_stride) {
     strides_[dim] = new_stride;
     refresh_numel();
     refresh_contiguous();
@@ -731,7 +731,7 @@ struct CAFFE2_API TensorImpl : public c10::intrusive_ptr_target {
    * location at the storage; the caller is responsible for checking this
    * (and resizing if necessary.)
    */
-  virtual void set_storage_offset(int64_t storage_offset) {
+  void set_storage_offset(int64_t storage_offset) {
     storage_offset_ = storage_offset;
   }
 
@@ -806,12 +806,12 @@ struct CAFFE2_API TensorImpl : public c10::intrusive_ptr_target {
   /**
    * Return the size of a tensor at some dimension.
    */
-  virtual int64_t size(int64_t d) const;
+  int64_t size(int64_t d) const;
 
   /**
    * Return the stride of a tensor at some dimension.
    */
-  virtual int64_t stride(int64_t d) const;
+  int64_t stride(int64_t d) const;
 
   /**
    * True if a tensor is a variable.  See Note [Tensor versus Variable in C++]

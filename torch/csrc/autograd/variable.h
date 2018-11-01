@@ -290,21 +290,6 @@ struct TORCH_API Variable::Impl : public at::TensorImpl {
 
   ~Impl() override;
 
-  int64_t numel() const override;
-  at::IntList sizes() const override;
-  at::IntList strides() const override;
-  bool is_contiguous() const override;
-  int64_t size(int64_t d) const override;
-  int64_t stride(int64_t d) const override;
-  void resize_dim(int64_t ndim) override;
-  void set_size(int64_t dim, int64_t new_size) override;
-  void set_stride(int64_t dim, int64_t new_stride) override;
-  void set_storage_offset(int64_t storage_offset) override;
-
-  int64_t dim() const override;
-  const at::Storage& storage() const override;
-  void* slow_data() const override;
-
   std::shared_ptr<Function> get_grad_accumulator();
   virtual std::shared_ptr<Function>& get_grad_fn() {
     return grad_fn_;
@@ -374,8 +359,6 @@ struct TORCH_API Variable::Impl : public at::TensorImpl {
   // state are still thread-safe. Used by get_grad_fn and
   // get_grad_accumulator.
   std::mutex mutex_;
-
-  int64_t storage_offset() const override;
  private:
   int64_t get_device_slow() const override;
 };
