@@ -343,7 +343,7 @@ struct CAFFE2_API TensorImpl : public c10::intrusive_ptr_target {
     // could not have been created without initializing the Type first.
     // TODO: This is not actually true via the Caffe2 codepath!  Make
     // it so.
-    return *globalLegacyTypeDispatch().getTypeRaw(tensorTypeIdToBackend(type_id()), typeMetaToScalarType(dtype()), is_variable());
+    return *globalLegacyTypeDispatch().getTypeRaw(tensorTypeIdToBackend(type_id()), typeMetaToScalarType(dtype()), is_variable() && at::GradMode::is_enabled());
   }
 
   /**
@@ -526,7 +526,6 @@ struct CAFFE2_API TensorImpl : public c10::intrusive_ptr_target {
    * See Note [We regret making Variable hold a Tensor]
    */
   bool is_wrapped_number() const {
-    AT_ASSERT(!is_variable());
     return is_wrapped_number_;
   }
 
@@ -539,7 +538,6 @@ struct CAFFE2_API TensorImpl : public c10::intrusive_ptr_target {
    * See Note [We regret making Variable hold a Tensor]
    */
   void set_wrapped_number(bool value) {
-    AT_ASSERT(!is_variable());
     AT_ASSERT(dim() == 0);
     is_wrapped_number_ = value;
   }
@@ -586,9 +584,16 @@ struct CAFFE2_API TensorImpl : public c10::intrusive_ptr_target {
    *
    * It is only valid to call this method on a Variable.
    * See Note [Tensor versus Variable in C++].
+   *
+   * This should be true for leaf variables that want to accumulate gradients,
+   * and false for all other variables.
    */
-  virtual void set_requires_grad(bool requires_grad) {
-    AT_ERROR("set_requires_grad is not implemented for Tensor");
+  void set_requires_grad(bool requires_grad) {
+    // set_requires_grad also checks error conditions.
+    AT_CHECK(
+        !requires_grad || at::isFloatingType(at::typeMetaToScalarType(dtype())),
+        "Only Tensors of floating point dtype can require gradients");
+    autograd_meta_->set_requires_grad(requires_grad);
   }
 
   /**
@@ -601,8 +606,8 @@ struct CAFFE2_API TensorImpl : public c10::intrusive_ptr_target {
    * It is only valid to call this method on a Variable.
    * See Note [Tensor versus Variable in C++].
    */
-  virtual bool requires_grad() const {
-    AT_ERROR("requires_grad is not implemented for Tensor");
+  bool requires_grad() const {
+    return autograd_meta_->requires_grad();
   }
 
   /**
@@ -641,7 +646,6 @@ struct CAFFE2_API TensorImpl : public c10::intrusive_ptr_target {
    */
   template <typename T>
   inline T * data() const {
-    AT_ASSERT(!is_variable());
     AT_ASSERTM(
         storage_initialized(),
         "The tensor has a non-zero number of elements, but its data is not allocated yet. "
@@ -672,7 +676,6 @@ struct CAFFE2_API TensorImpl : public c10::intrusive_ptr_target {
    * See Note [We regret making Variable hold a Tensor]
    */
   inline void* data() const {
-    AT_ASSERT(!is_variable());
     AT_ASSERT(storage_initialized());
     AT_ASSERT(dtype_initialized());
     return static_cast<void*>(
@@ -808,7 +811,6 @@ struct CAFFE2_API TensorImpl : public c10::intrusive_ptr_target {
    */
   void set_sizes_contiguous(at::IntList new_size) {
     AT_CHECK(allow_tensor_metadata_change(), "set_sizes_contiguous is not allowed on Tensor created from .data or .detach()");
-    AT_ASSERT(!is_variable());
     auto old_dim = sizes_.size();
     auto new_dim = new_size.size();
 
@@ -833,7 +835,6 @@ struct CAFFE2_API TensorImpl : public c10::intrusive_ptr_target {
    */
   void set_sizes_and_strides(at::IntList new_size, at::IntList new_stride) {
     AT_CHECK(allow_tensor_metadata_change(), "set_sizes_and_strides is not allowed on Tensor created from .data or .detach()");
-    AT_ASSERT(!is_variable());
     AT_CHECK(
         new_size.size() == new_stride.size(),
         "dimensionality of sizes (",
@@ -888,6 +889,15 @@ struct CAFFE2_API TensorImpl : public c10::intrusive_ptr_target {
   bool is_variable() const { return is_variable_; };
 
   /**
+   * Set whether a tensor is a variable.  See Note [Tensor versus Variable in C++]
+   * NOTE: this function is temporary and will be removed once we get rid of is_variable_ and 
+   * change is_variable() to check whether autograd_meta_ pointer is NULL instead.
+   */
+  void set_is_variable(bool value) {
+    is_variable_ = value;
+  }
+
+  /**
    * Set whether a tensor allows changes to its metadata (e.g. sizes / strides / storage / storage_offset).
    */
   virtual void set_allow_tensor_metadata_change(bool value) {
@@ -904,14 +914,14 @@ struct CAFFE2_API TensorImpl : public c10::intrusive_ptr_target {
   /**
    * Set the pointer to autograd metadata.
    */
-  void set_autograd_meta(void* autograd_meta) {
+  void set_autograd_meta(AutogradMetaInterface* autograd_meta) {
     autograd_meta_ = autograd_meta;
   }
 
   /**
    * Return the pointer to autograd metadata.
    */
-  void* autograd_meta() const {
+  AutogradMetaInterface* autograd_meta() const {
     return autograd_meta_;
   }
 
@@ -949,7 +959,6 @@ struct CAFFE2_API TensorImpl : public c10::intrusive_ptr_target {
    * The device type of a Tensor, e.g., DeviceType::CPU or DeviceType::CUDA.
    */
   at::DeviceType device_type() const {
-    AT_ASSERT(!is_variable());
     return storage_.device_type();
   }
 
@@ -975,7 +984,6 @@ struct CAFFE2_API TensorImpl : public c10::intrusive_ptr_target {
    * 'async' parameter triggers async copy for CUDA tensors
    */
   void CopyFrom(const TensorImpl& src, bool async = false) {
-    AT_ASSERT(!is_variable());
     AT_ASSERTM(
         src.is_contiguous(),
         "Right now only copy of contiguous source Tensor is supported.");
@@ -1473,7 +1481,6 @@ protected:
    * Recompute the cached numel of a tensor.  Call this if you modify sizes.
    */
   void refresh_numel() {
-    AT_ASSERT(!is_variable());
     numel_ = compute_numel();
   }
 
@@ -1482,7 +1489,6 @@ protected:
    * or strides.
    */
   void refresh_contiguous() {
-    AT_ASSERT(!is_variable());
     is_contiguous_ = compute_contiguous();
   }
 
@@ -1493,7 +1499,7 @@ protected:
   // because we don't want to expose autograd types to libATen.
   // This pointer always has unique ownership (meaning only one TensorImpl can own it
   // at a time).
-  void* autograd_meta_ = nullptr;
+  at::AutogradMetaInterface* autograd_meta_ = nullptr;
 
   // We could save a word or two by combining the SmallVector structs,
   // since their size is redundant, and if we need to overflow the buffer space

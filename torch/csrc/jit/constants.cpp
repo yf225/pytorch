@@ -17,9 +17,6 @@ Value* insertConstant(
     if(!ref.defined()) {
       return insertConstant(g, val, loc, scope);
     }
-    if (ref.is_variable()) {
-      ref = autograd::Variable(ref).data();
-    }
     n->output()->inferTypeFrom(ref); // note: before t_ because of std::move(ref)
     n->t_(attr::value, std::move(ref));
   } else if(val.isInt()) {
@@ -40,7 +37,7 @@ Value* insertConstant(
     n->output()->setType(ListType::ofInts());
   } else if(val.isTensorList()) {
     n->ts_(attr::value, fmap(val.toTensorList()->elements(), [](const at::Tensor & t) {
-      return autograd::Variable(t).data();
+      return static_cast<const at::Tensor &>(autograd::Variable(t));
     }));
     n->output()->setType(ListType::ofTensors());
   } else if(val.isString()) {

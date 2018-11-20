@@ -70,7 +70,7 @@ static PyObject * THPGenerator_getState(THPGenerator *self)
   HANDLE_TH_ERRORS
   THGenerator *generator = THPGenerator_TH_CData(self);
   Variable var = torch::empty({0}, at::device(at::kCPU).dtype(at::kByte));
-  THByteTensor_getRNGState(generator, (THByteTensor*)(var.data().unsafeGetTensorImpl()));
+  THByteTensor_getRNGState(generator, (THByteTensor*)(var.unsafeGetTensorImpl()));
   return THPVariable_Wrap(std::move(var));
   END_HANDLE_TH_ERRORS
 }
@@ -78,11 +78,12 @@ static PyObject * THPGenerator_getState(THPGenerator *self)
 static PyObject * THPGenerator_setState(THPGenerator *self, PyObject *_new_state)
 {
   using namespace torch::autograd;
+  at::AutoGradMode grad_mode(false);
   HANDLE_TH_ERRORS
   if (!THPVariable_Check(_new_state)) {
     throw TypeError("expected a torch.ByteTensor, but got %s", Py_TYPE(_new_state)->tp_name);
   }
-  auto& tensor = ((THPVariable*)_new_state)->cdata.data();
+  auto& tensor = ((THPVariable*)_new_state)->cdata;
   if (tensor.type() != CPU(kByte)) {
     auto type_name = torch::utils::type_to_string(tensor.type());
     throw TypeError("expected a torch.ByteTensor, but got %s", type_name.c_str());

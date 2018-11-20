@@ -25,6 +25,7 @@
 from __future__ import print_function
 import os
 import sys
+import re
 from .utils import CodeTemplate, nested_dict, write, uninplace_api_name
 from .gen_autograd import VIEW_FUNCTIONS
 from .gen_autograd_functions import uses_single_grad
@@ -591,9 +592,28 @@ def emit_body(declaration):
                 call, extra_wrapping_stmts = wrap_output(call)
         else:
             call = CALL_VIA_TYPE.substitute(declaration)
-        if not modifies_arguments and not returns_void:
-            call = '{} = {}'.format(tie_return_values(), call)
-        call = call + ';'
+
+        if strategy == 'use_derived':
+            code_block = ''
+            if not modifies_arguments and not returns_void:
+                code_block += 'decltype({}) tmp;\n'.format(call)
+                code_block += '{\n'
+                code_block += '  ' + set_no_grad_guard_raii() + '\n'
+                code_block += '  ' + 'tmp = {};\n'.format(call)
+                code_block += '}\n'
+                code_block += '{} = tmp;'.format(tie_return_values())
+            else:
+                code_block += '{\n'
+                code_block += '  ' + set_no_grad_guard_raii() + '\n'
+                code_block += '  ' + '{};\n'.format(call)
+                code_block += '}\n'
+            call = code_block;
+        else:
+            if not modifies_arguments and not returns_void:
+                call = '{} = {}'.format(tie_return_values(), call)
+            call = call + ';'
+        print("here4 call: ", call)
+        print("extra_wrapping_stmts: ", extra_wrapping_stmts)
         for stmt in extra_wrapping_stmts:
             call += '\n' + stmt
         return call
@@ -648,6 +668,9 @@ def emit_body(declaration):
         if not modifies_arguments:
             return []
         return ['increment_version({});'.format(arg['name']) for arg in differentiable_outputs]
+
+    def set_no_grad_guard_raii():
+        return 'at::AutoGradMode grad_mode(false);'
 
     env = {}
     combined = nested_dict(env, declaration)

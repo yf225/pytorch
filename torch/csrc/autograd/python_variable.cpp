@@ -145,7 +145,7 @@ static PyObject* THPVariable_make_subclass(PyObject* _ignored, PyObject* args, P
   if (!PyType_Check(cls)) {
     throw TypeError("cls must be a type (got %s)", Py_TYPE(cls)->tp_name);
   }
-  auto& data = as_variable_ref(r.tensor(1)).data();
+  auto& data = as_variable_ref(r.tensor(1));
   auto var = make_variable(data, r.toBool(2));
   return THPVariable_NewWithVar((PyTypeObject*)cls, std::move(var));
   END_HANDLE_TH_ERRORS
@@ -158,7 +158,7 @@ PyObject *THPVariable_get_cdata(THPVariable *self)
 {
   HANDLE_TH_ERRORS
   auto& var = self->cdata;
-  return PyLong_FromVoidPtr(var.data().unsafeGetTensorImpl());
+  return PyLong_FromVoidPtr(var.unsafeGetTensorImpl());
   END_HANDLE_TH_ERRORS
 }
 
@@ -200,10 +200,10 @@ static PyObject *THPVariable_is_leaf(THPVariable *self)
 static PyObject * THPVariable_get_data(THPVariable *self)
 {
   HANDLE_TH_ERRORS
-  auto var = make_variable(self->cdata.data(), false);
+  auto var = make_variable(self->cdata, false);
   /// NOTE: we need to set `allow_tensor_metadata_change_` to false, to prevent users from
   /// changing size or storage of `tensor.data`, because those changes will not update `tensor`.
-  var.data().unsafeGetTensorImpl()->set_allow_tensor_metadata_change(false);
+  var.unsafeGetTensorImpl()->set_allow_tensor_metadata_change(false);
   return THPVariable_Wrap(var);
   END_HANDLE_TH_ERRORS
 }
@@ -214,7 +214,7 @@ int THPVariable_set_data(THPVariable *self, PyObject *data)
   if (!THPVariable_Check(data)) {
     throw torch::TypeError("Variable data has to be a tensor, but got %s", Py_TYPE(data)->tp_name);
   }
-  self->cdata.set_data(THPVariable_UnpackData(data));
+  self->cdata.set_data(THPVariable_Unpack(data));
   return 0;
   END_HANDLE_TH_ERRORS_RET(-1)
 }
@@ -245,8 +245,11 @@ int THPVariable_set_grad(THPVariable *self, PyObject *py_grad)
   auto backend = var.is_cuda() ? Backend::SparseCUDA : Backend::SparseCPU;
   auto typeOpt = at::globalContext().getNonVariableTypeOpt(backend, var.type().scalarType());  
   if (typeOpt) {
-       auto& sparseType = at::globalContext().getNonVariableType(backend, var.type().scalarType());
-       gradIsSparse = grad.type() == sparseType;
+    auto& sparseType = at::globalContext().getNonVariableType(backend, var.type().scalarType());
+    {
+      at::AutoGradMode grad_mode(false);
+      gradIsSparse = grad.type() == sparseType;
+    } 
   }
 
   THPUtils_assertRet(-1, grad.type() == var.type() || gradIsSparse,

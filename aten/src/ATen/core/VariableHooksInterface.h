@@ -9,6 +9,42 @@ namespace at {
   struct Type;
 }
 
+namespace at {
+struct AutogradMetaInterface {
+  virtual void set_requires_grad(bool requires_grad) {
+    AT_ERROR("set_requires_grad is not implemented for Tensor");
+  }
+  virtual bool requires_grad() const {
+    AT_ERROR("requires_grad is not implemented for Tensor");
+  }
+  virtual Tensor& grad() {
+    AT_ERROR("grad is not implemented for Tensor");
+  }
+  virtual const Tensor& grad() const {
+    AT_ERROR("grad is not implemented for Tensor");
+  }
+  virtual ~AutogradMetaInterface() {}
+};
+}
+
+namespace at {
+struct CAFFE2_API GradMode {
+  static bool is_enabled();
+  static void set_enabled(bool enabled);
+};
+// A RAII, thread local (!) guard that enables or disables grad mode upon
+// construction, and sets it back to the original value upon destruction.
+struct CAFFE2_API AutoGradMode {
+  AutoGradMode(bool enabled) : prev_mode(GradMode::is_enabled()) {
+    GradMode::set_enabled(enabled);
+  }
+  ~AutoGradMode() {
+    GradMode::set_enabled(prev_mode);
+  }
+  bool prev_mode;
+};
+}
+
 // NB: Registry class not actually in the namespace detail, due to limitations
 // of Registry.h
 namespace at {
