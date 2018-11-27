@@ -448,10 +448,48 @@ def _graph_op(g, opname, *raw_args, **kwargs):
         else:
             return g.op("Constant", value_z=arg)
 
+    print("raw_args: ", raw_args)
+    print("kwargs: ", kwargs)
+    value_t_tmp = kwargs['value_t']
+    print("value_t_tmp: ", value_t_tmp)
+    print("value_t_tmp.type(): ", value_t_tmp.type())
+    print("value_t_tmp.data: ", value_t_tmp.data)
     args = list(const_if_tensor(arg) for arg in raw_args)
-    n = g.insertNode(_newNode(g, opname, outputs, *args, **kwargs))
+    print("args: ", args)
+    print("_graph_op here10")
+    new_node_tmp = _newNode(g, opname, outputs, *args, **kwargs)
+    print("_graph_op new_node_tmp['value']: ", new_node_tmp["value"])
+    print("dir(new_node_tmp['value']): ", dir(new_node_tmp['value']))
+    # new_node_tmp["value"].isTensor()
+    # print("_graph_op here101")
+    # print("new_node_tmp['value'].isTensor(): ", new_node_tmp["value"].isTensor())
+    print("new_node_tmp['value'].type(): ", new_node_tmp["value"].type())
+    n = g.insertNode(new_node_tmp)
+    print("_graph_op n['value']: ", n["value"])
+    print("_graph_op dir(n): ", dir(n))
+    print("n['value'].type(): ", n['value'].type())
+    print("n['value'].data: ", n['value'].data)
+    # print("n.isTensor(): ", n.isTensor())
+    # print("n.type(): ", n.type())
+    print("_graph_op here11")
     if outputs == 1:
-        return n.output()
+        print("_graph_op here111")
+        n_output_tmp = n.output()
+        print("_graph_op n.output(): ", n_output_tmp)
+        print("_graph_op here112")
+        print("_graph_op n.output(): ", n_output_tmp)
+        print("_graph_op here113")
+        print("dir(n_output_tmp): ", dir(n_output_tmp))
+        print("n_output_tmp.isTensor(): ", n_output_tmp.isTensor())
+        print("n_output_tmp.type(): ", n_output_tmp.type())
+        print("n_output_tmp.node(): ", n_output_tmp.node())
+        n_output_tmp["value"]
+        print("_graph_op here1131")
+        tmp_val = n_output_tmp["value"]
+        print("_graph_op here114")
+        print("_graph_op n.output()['value']: ", tmp_val)
+        return n_output_tmp
+    print("_graph_op here12")
     return tuple(o for o in n.outputs())
 
 

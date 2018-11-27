@@ -125,6 +125,9 @@ void BlockToONNX(Block* old_block, Block* new_block, ::torch::onnx::OperatorExpo
 
     WithInsertPoint insert_point_guard(ctx.block);
     WithCurrentScope scope_guard(*ctx.block->owningGraph(), n->scope());
+    std::cout << "here0" << "\n";
+    std::cout << "here1: n->t(attr::value): " << n->t(attr::value) << "\n";
+    std::cout << "here2" << "\n";
     py::object raw_output = onnx.attr("_run_symbolic_function")(ctx.block->owningGraph(), n, py_inputs, env, operator_export_type);
 
     // TODO: Assert it's an ATen identifier???
