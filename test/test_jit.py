@@ -268,6 +268,8 @@ class JitTestCase(TestCase):
             torch._C._jit_import_methods(sm, ppv, constant_table)
             pp2, _ = sm._python_print()
             if pp != pp2:
+                print(pp)
+                print(pp2)
                 self.assertMultiLineEqual(pp, pp2)
 
     def getExportImportCopy(self, m, also_test_file=True, map_location=None):
