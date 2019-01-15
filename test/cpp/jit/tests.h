@@ -2067,6 +2067,17 @@ void testAliasAnalysis() {
         usesB->node(), mutatesAliasOfB->node()));
   }
 }
+
+void testEvalModeForLoadedModule() {
+  std::string module_path = "dropout_model.pt";
+  std::shared_ptr<torch::jit::script::Module> module = torch::jit::load(module_path);
+  // Test eval mode
+  module->eval();
+  JIT_ASSERT(!module->get_module("dropout")->is_training());
+  // Test train mode
+  module->train();
+  JIT_ASSERT(module->get_module("dropout")->is_training());
+}
 } // namespace
 } // namespace jit
 } // namespace torch

@@ -481,6 +481,18 @@ struct Module {
     }
     fn(*this);
   }
+  void train(bool on = true) {
+    for (auto& submod : get_modules()) {
+      submod.value()->train(on);
+    }
+    this.training = on;
+  }
+  void eval() {
+    train(/*on=*/false);
+  }
+  bool is_training() const noexcept {
+    return this.training;
+  }
 
   /// Recursively casts all parameters to the given `dtype` and `device`.
   ///

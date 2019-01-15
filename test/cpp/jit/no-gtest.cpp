@@ -29,6 +29,7 @@ std::string runJITCPPTests() {
   testTopologicalIndex();
   testTopologicalMove();
   testSubgraphUtils();
+  testEvalModeForLoadedModule();
   return out.str();
 }
 
