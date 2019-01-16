@@ -496,6 +496,7 @@ struct Module {
       return (*p->slot()).item().toLong() == 1;
     } else {
       // We are in training mode by default
+      train(/*on=*/true);
       return true;
     }
   }
