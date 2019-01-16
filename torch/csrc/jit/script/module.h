@@ -486,13 +486,18 @@ struct Module {
       submod.value().module->train(on);
     }
     auto t = autograd::make_variable(at::full({}, on ? 1 : 0, at::kLong));
-    set_parameter("training", std::move(t));
+    register_parameter("training", std::move(t), true);
   }
   void eval() {
     train(/*on=*/false);
   }
   bool is_training() const noexcept {
-    return get_parameter("training").item().toLong() == 1;
+    if (auto p = find_parameter("training")) {
+      return (*p->slot()).item().toLong() == 1;
+    } else {
+      // We are in training mode by default
+      return true;
+    }
   }
 
   /// Recursively casts all parameters to the given `dtype` and `device`.
