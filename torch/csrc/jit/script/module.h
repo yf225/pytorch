@@ -492,7 +492,7 @@ struct Module {
     train(/*on=*/false);
   }
   bool is_training() const noexcept {
-    return get_parameter("training").item() == 1;
+    return get_parameter("training").item().toLong() == 1;
   }
 
   /// Recursively casts all parameters to the given `dtype` and `device`.
