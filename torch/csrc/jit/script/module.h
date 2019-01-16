@@ -491,7 +491,7 @@ struct Module {
   void eval() {
     train(/*on=*/false);
   }
-  bool is_training() const noexcept {
+  bool is_training() {
     if (auto p = find_parameter("training")) {
       return (*p->slot()).item().toLong() == 1;
     } else {
