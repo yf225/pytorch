@@ -1,8 +1,5 @@
-import argparse
-import os.path
-import sys
-
 import torch
+
 
 def testEvalModeForLoadedModule_setup():
     class Model(torch.jit.ScriptModule):
