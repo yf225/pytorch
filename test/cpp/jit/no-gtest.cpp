@@ -18,6 +18,7 @@ std::string runJITCPPTests() {
   testDifferentiate(out);
   testDifferentiateWithRequiresGrad(out);
   testDynamicDAG();
+  testEvalModeForLoadedModule();
   testFromQualString();
   testFusion();
   testGraphExecutor();
@@ -29,7 +30,6 @@ std::string runJITCPPTests() {
   testTopologicalIndex();
   testTopologicalMove();
   testSubgraphUtils();
-  testEvalModeForLoadedModule();
   return out.str();
 }
 
