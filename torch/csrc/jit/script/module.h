@@ -485,13 +485,14 @@ struct Module {
     for (auto& submod : get_modules()) {
       submod.value().module->train(on);
     }
-    this->training = on;
+    auto t = autograd::make_variable(at::full({}, on ? 1 : 0, at::kLong));
+    set_parameter("training", std::move(t));
   }
   void eval() {
     train(/*on=*/false);
   }
   bool is_training() const noexcept {
-    return this->training;
+    return get_parameter("training").item() == 1;
   }
 
   /// Recursively casts all parameters to the given `dtype` and `device`.
