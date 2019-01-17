@@ -16,9 +16,9 @@ def testEvalModeForLoadedModule_setup():
     model.save('dropout_model.pt')
 
 
-def main():
+def setup():
     testEvalModeForLoadedModule_setup()
 
 
 if __name__ == "__main__":
-    main()
+    setup()

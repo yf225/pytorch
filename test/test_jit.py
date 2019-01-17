@@ -1261,6 +1261,8 @@ class TestJit(JitTestCase):
     @unittest.skipIf(not RUN_CUDA, "cpp tests require CUDA")
     @skipIfRocm
     def test_cpp_cuda(self):
+        import cpp.jit.tests_setup
+        tests_setup.setup()
         # rather than rebuild assertExpected in cpp,
         # just glob all the cpp outputs into one file for now
         self.assertExpected(torch._C._jit_run_cpp_tests())
