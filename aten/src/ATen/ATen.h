@@ -1,5 +1,28 @@
 #pragma once
 
+#include <cstdlib>
+
+constexpr bool test_debug_flag() {
+  if (std::getenv("DEBUG") && std::string(std::getenv("DEBUG")) == "1") {
+#if !(defined(DEBUG))
+    return false;
+#endif
+  }
+  return true;
+};
+
+constexpr bool test_ndebug_flag() {
+  if (std::getenv("NDEBUG") && std::string(std::getenv("NDEBUG")) == "1") {
+#if !(defined(NDEBUG))
+    return false;
+#endif
+  }
+  return true;
+};
+
+static_assert(test_debug_flag(), "DEBUG is defined as env var but not C macro constant.");
+static_assert(test_ndebug_flag(), "NDEBUG is defined as env var but not C macro constant.");
+
 #include <c10/core/Allocator.h>
 #include <ATen/CPUGeneral.h>
 #include <ATen/Context.h>
