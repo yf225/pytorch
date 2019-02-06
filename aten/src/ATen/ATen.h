@@ -1,5 +1,9 @@
 #pragma once
 
+#ifdef NDEBUG
+throw std::runtime_error("NDEBUG is defined properly.")
+#endif
+
 #include <c10/core/Allocator.h>
 #include <ATen/CPUGeneral.h>
 #include <ATen/Context.h>
