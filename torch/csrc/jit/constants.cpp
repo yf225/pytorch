@@ -25,6 +25,7 @@ Value* insertConstant(
     if (!ref.is_variable()) {
       ref = autograd::make_variable(ref, /*requires_grad=*/false);
     } else {
+      std::cout << "ref.requires_grad(): " << ref.requires_grad() << "\n";
       AT_CHECK(!ref.requires_grad(), "We should not use a gradient recording tensor as a constant in a trace. ",
         "You likely wanted to trace the module rather than a function calling the module.");
     }
