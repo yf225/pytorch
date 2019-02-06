@@ -119,10 +119,10 @@ baseType->${method_prefix_derived}${base_name}(${unpacked_args})""")
 
 # If the `baseType` operation has return values, we use the `tmp` variable to hold the
 # values temporarily and pass the values to the return variables outside of the
-# `at::AutoNonVariableTypeMode` guard block.
+# `torch::NoGradGuard` guard block.
 DISPATCH_TO_NON_VAR_TYPE_WITH_RETURN_VALUES = CodeTemplate("""\
 auto tmp = ([&]() {
-  at::AutoNonVariableTypeMode non_var_type_mode(true);
+  torch::NoGradGuard guard;
   return ${base_type_call};
 })();
 ${return_values} = ${rhs_value};
@@ -130,7 +130,7 @@ ${return_values} = ${rhs_value};
 
 DISPATCH_TO_NON_VAR_TYPE_WITHOUT_RETURN_VALUES = CodeTemplate("""\
 {
-  at::AutoNonVariableTypeMode non_var_type_mode(true);
+  torch::NoGradGuard guard;
   ${base_type_call};
 }
 """)
@@ -604,7 +604,7 @@ def emit_body(declaration):
         combined = nested_dict(env, declaration)
         extra_wrapping_stmts = []
         if strategy == 'use_derived':
-            # We only care about adding `at::AutoNonVariableTypeMode` guard for `baseType` dispatch
+            # We only care about using `torch::NoGradGuard` guard for `baseType` dispatch
             # (which corresponds to 'use_derived' strategy). The purpose of this guard is to make sure
             # the baseType operations still dispatch to non-Variable type, even if the arguments passed
             # in are now Variables.

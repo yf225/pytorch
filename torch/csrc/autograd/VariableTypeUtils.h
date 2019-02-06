@@ -15,6 +15,7 @@
 
 #include <torch/csrc/utils/variadic.h>
 #include <torch/csrc/autograd/functions/utils.h>
+#include <torch/utils.h>
 
 #include <ATen/core/VariableHooksInterface.h>
 
