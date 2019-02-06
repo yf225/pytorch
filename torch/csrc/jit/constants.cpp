@@ -25,7 +25,8 @@ Value* insertConstant(
     if (!ref.is_variable()) {
       ref = autograd::make_variable(ref, /*requires_grad=*/false);
     } else {
-      ref = autograd::make_variable(autograd::Variable(ref).data(), /*requires_grad=*/false);
+      AT_CHECK(!ref.requires_grad(), "We should not use a gradient recording tensor as a constant in a trace. ",
+        "You likely wanted to trace the module rather than a function calling the module.");
     }
     n->output()->inferTypeFrom(
         ref); // note: before t_ because of std::move(ref)
