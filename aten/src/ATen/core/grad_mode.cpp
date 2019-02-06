@@ -1,3 +1,5 @@
+#include <ATen/core/grad_mode.h>
+
 namespace at {
 
 /// NOTE [ Treating Variables as non-Variables in type dispatch ]

@@ -339,9 +339,9 @@ struct TraceableFunction : public Function {
 
 namespace detail {
 // Implementation of `collect_next_edges` (see below).
-struct MakeNextFunctionList : IterArgs<MakeNextFunctionList> {
+struct MakeNextFunctionList : at::IterArgs<MakeNextFunctionList> {
   edge_list next_edges;
-  using IterArgs<MakeNextFunctionList>::operator();
+  using at::IterArgs<MakeNextFunctionList>::operator();
   void operator()(const Variable& variable) {
     if (variable.defined()) {
       next_edges.push_back(variable.gradient_edge());

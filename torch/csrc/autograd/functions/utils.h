@@ -26,28 +26,6 @@ TORCH_API variable_list wrap_outputs(const variable_list& inputs, tensor_list&& 
 /// items are not nullptr. If not specified, `required_args` defaults to `args`.
 TORCH_API void check_input_variables(const char* name, const variable_list& inputs, int args, int required_args=-1);
 
-struct ComputeRequiresGrad : IterArgs<ComputeRequiresGrad> {
-  bool out = false;
-  using IterArgs<ComputeRequiresGrad>::operator();
-  void operator()(const at::Tensor& tensor) {
-    const auto& var = static_cast<const Variable&>(tensor);
-    if (var.defined() && var.requires_grad()) {
-      out = true;
-    }
-  }
-  bool short_circuit() {
-    return out;
-  }
-};
-
-template <typename... Args>
-inline bool compute_requires_grad(Args&&... args) {
-  if (!GradMode::is_enabled()) {
-    return false;
-  }
-  return ComputeRequiresGrad().apply(std::forward<Args>(args)...).out;
-}
-
 inline void set_history(
     at::Tensor& variable,
     const std::shared_ptr<Function>& grad_fn) {
