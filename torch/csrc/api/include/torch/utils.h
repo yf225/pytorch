@@ -1,17 +1,10 @@
 #pragma once
 
-#include <torch/csrc/autograd/grad_mode.h>
-
-#include <cstdint>
+#include <ATen/core/grad_mode.h>
 
 namespace torch {
-using autograd::AutoGradMode;
 
-// A RAII, thread local (!) guard that stops future operations from building
-// gradients.
-struct TORCH_API NoGradGuard : public AutoGradMode {
-  NoGradGuard() : AutoGradMode(/*enabled=*/false) {}
-};
+using at::NoGradGuard;
 
 /// Sets the global random seed for all newly created CPU and CUDA tensors.
 using at::manual_seed;

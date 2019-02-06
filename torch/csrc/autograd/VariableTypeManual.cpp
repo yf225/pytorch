@@ -273,7 +273,7 @@ Tensor & VariableType::s_copy_(Tensor & self, const Tensor & src, bool non_block
     grad_fn->src_device = src.device();
   }
   {
-    at::AutoNonVariableTypeMode non_var_type_mode(true);
+    torch::autograd::AutoGradMode auto_grad_mode(false);
     if (self.is_sparse() && src.is_sparse()) baseType->copy_sparse_to_sparse_(self_, src_, non_blocking);
     else if (!self.is_sparse() && !src.is_sparse()) baseType->s_copy_(self_, src_, non_blocking);
     else AT_ERROR("copy_() between dense and sparse Tensors is not implemented! Found self type = ", self.type(), " and src type = ", src.type());
@@ -301,7 +301,7 @@ Tensor & VariableType::resize_(Tensor & self, IntArrayRef size) const {
     jit::tracer::delValueTrace(self);
   }
   {
-    at::AutoNonVariableTypeMode non_var_type_mode(true);
+    torch::autograd::AutoGradMode auto_grad_mode(false);
     baseType->resize_(self_, size);
   }
   return self;
@@ -318,7 +318,7 @@ Tensor & VariableType::resize_as_(Tensor & self, const Tensor & the_template) co
     jit::tracer::delValueTrace(self);
   }
   {
-    at::AutoNonVariableTypeMode non_var_type_mode(true);
+    torch::autograd::AutoGradMode auto_grad_mode(false);
     baseType->resize_as_(self_, the_template_);
   }
   return self;
