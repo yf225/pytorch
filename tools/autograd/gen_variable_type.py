@@ -111,25 +111,25 @@ for (size_t i=0; i<${tensorlist_name}.size(); i++) {
 """)
 
 SAVE_TENSOR_IMPL = CodeTemplate("""\
-c10::optional<TensorImpl> ${tensor_name}_impl_saved =
-  ${tensor_name}.defined() ? c10::optional<TensorImpl>(${tensor_name}.unsafeGetTensorImpl()) : c10::nullopt;
+auto ${tensor_name}_impl_saved = c10::optional<TensorImpl&>();
+if (${tensor_name}.defined()) ${tensor_name}_impl_saved = c10::make_optional(*${tensor_name}.unsafeGetTensorImpl());
 """)
 
 ENFORCE_SAME_TENSOR_IMPL = CodeTemplate("""\
-if (${tensor_name}_impl_saved) AT_ASSERT(${tensor_name}_impl_saved == ${tensor_name}.unsafeGetTensorImpl());
+if (${tensor_name}_impl_saved.has_value()) AT_ASSERT(${tensor_name}_impl_saved.value() == ${tensor_name}.unsafeGetTensorImpl());
 """)
 
 SAVE_TENSORLIST_IMPL = CodeTemplate("""\
-std::vector<c10::optional<TensorImpl>> ${tensorlist_name}_impl_saved(${tensorlist_name}.size());
+std::vector<c10::optional<TensorImpl&>> ${tensorlist_name}_impl_saved(${tensorlist_name}.size());
 for (Tensor tensor : ${tensorlist_name})
   ${tensorlist_name}_impl_saved.push_back(
-    tensor.defined() ? c10::optional<TensorImpl>(tensor.unsafeGetTensorImpl()) : c10::nullopt);
+    tensor.defined() ? c10::optional<TensorImpl&>(tensor.unsafeGetTensorImpl()) : c10::nullopt);
 """)
 
 ENFORCE_SAME_TENSORLIST_IMPL = CodeTemplate("""\
 for (size_t i=0; i<${tensorlist_name}.size(); i++) {
-  if (${tensorlist_name}_impl_saved[i])
-    AT_ASSERT(${tensorlist_name}_impl_saved[i] == ${tensorlist_name}[i].unsafeGetTensorImpl());
+  if (${tensorlist_name}_impl_saved[i].has_value())
+    AT_ASSERT(${tensorlist_name}_impl_saved[i].value() == *${tensorlist_name}[i].unsafeGetTensorImpl());
 }
 """)
 
