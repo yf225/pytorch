@@ -220,7 +220,7 @@ struct TORCH_API Variable : public at::Tensor {
       bool create_graph) const;
 
   /// Sets the type of the Variable.
-  void set_data(Tensor new_data) const;
+  void set_data_tmp(Tensor new_data) const;
 
   /// Set the gradient edge -- i.e. `grad_fn` and `input_nr` -- of the
   /// `Variable`.
@@ -410,7 +410,7 @@ struct TORCH_API Variable::Impl : public at::TensorImpl {
   const at::Storage& storage() const override;
   void* slow_data() const override;
 
-  void set_data(Tensor new_data);
+  void set_data_tmp(Tensor new_data);
 
   /// Reset all expensive fields to free up resources
   void release_resources() override;
@@ -643,8 +643,8 @@ inline Variable Variable::detach() const {
   return var;
 }
 
-inline void Variable::set_data(Tensor new_data) const {
-  get()->set_data(std::move(new_data));
+inline void Variable::set_data_tmp(Tensor new_data) const {
+  get()->set_data_tmp(std::move(new_data));
 }
 
 inline void Variable::set_gradient_edge(Edge edge) noexcept {

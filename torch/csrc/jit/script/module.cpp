@@ -128,7 +128,7 @@ void Module::to_impl(
         device.value_or(data.device()),
         dtype.value_or(data.scalar_type()),
         non_blocking);
-    variable.set_data(new_data);
+    // variable.set_data(new_data);  // yf225 TODO: used set_data()
   }
 }
 

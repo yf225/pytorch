@@ -235,9 +235,10 @@ void VariableType::backward(
   as_variable_ref(self).backward(gradient, keep_graph, create_graph);
 }
 
-void VariableType::set_data(Tensor & self, Tensor new_data) const {
-  as_variable_ref(self).set_data(new_data);
-}
+// yf225 TODO: used set_data()
+// void VariableType::set_data(Tensor & self, Tensor new_data) const {
+//   as_variable_ref(self).set_data(new_data);
+// }
 Tensor & VariableType::s_copy_(Tensor & self, const Tensor & src, bool non_blocking) const {
   jit::Value* output = nullptr;
   if(torch::jit::tracer::isTracing()) {

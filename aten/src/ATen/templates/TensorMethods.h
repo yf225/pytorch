@@ -53,10 +53,6 @@ inline void Tensor::backward(
   type().backward(*this, std::move(gradient), keep_graph, create_graph);
 }
 
-inline void Tensor::set_data(Tensor new_data) {
-  type().set_data(*this, new_data);
-}
-
 // all static inline to allow for inlining of the non-dynamic part of dispatch
 ${tensor_method_definitions}
 

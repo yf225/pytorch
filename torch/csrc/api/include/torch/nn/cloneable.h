@@ -49,8 +49,9 @@ class Cloneable : public virtual Module {
         "and not the constructor?");
     for (const auto& parameter : parameters_) {
       auto data = autograd::Variable(*parameter).data().clone();
-      copy->parameters_[parameter.key()].set_data(
-          device ? data.to(*device) : data);
+      // yf225 TODO: used set_data()
+      // copy->parameters_[parameter.key()].set_data(
+      //     device ? data.to(*device) : data);
     }
     AT_CHECK(
         copy->buffers_.size() == buffers_.size(),
@@ -60,7 +61,7 @@ class Cloneable : public virtual Module {
         "and not the constructor?");
     for (const auto& buffer : buffers_) {
       auto data = autograd::Variable(*buffer).data().clone();
-      copy->buffers_[buffer.key()].set_data(device ? data.to(*device) : data);
+      // copy->buffers_[buffer.key()].set_data(device ? data.to(*device) : data);  // yf225 TODO: used set_data()
     }
     AT_CHECK(
         copy->children_.size() == children_.size(),

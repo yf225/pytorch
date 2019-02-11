@@ -292,7 +292,7 @@ class CAFFE2_API Tensor {
     return impl_->grad();
   }
 
-  void set_data(Tensor new_data);
+  void set_data_tmp(Tensor new_data);
 
   /// Computes the gradient of current tensor w.r.t. graph leaves.
   void backward(
