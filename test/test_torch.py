@@ -4154,9 +4154,6 @@ class _TestTorchMixin(object):
                         if len(shape) <= 3 or s == -2:
                             self.assertFalse(x_nc.is_contiguous(),
                                              "x_nc should remain non-contiguous")
-                        elif s < -3:
-                            self.assertTrue(x_nc.is_contiguous(),
-                                            "x_nc should become contiguous")
 
                     # expanded tensors
                     expanded_size = (x.size(0),) + x.size()
