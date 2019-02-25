@@ -175,7 +175,6 @@ static inline TypeExtendedInterface& getNonVariableType(DeviceType p, ScalarType
   return globalContext().getNonVariableType(deviceTypeToBackend(p), s);
 }
 
-CAFFE2_API TypeExtendedInterface& getType(TensorOptions options);
 CAFFE2_API TypeExtendedInterface& getType(const TensorImpl*);
 CAFFE2_API TypeExtendedInterface& getType(const Tensor&);
 
@@ -238,5 +237,11 @@ static inline void manual_seed(uint64_t seed) {
     globalContext().defaultGenerator(DeviceType::CUDA).manualSeedAll(seed);
   }
 }
+
+namespace detail {
+
+CAFFE2_API TypeExtendedInterface& getType(TensorOptions options);
+
+} // namespace detail
 
 } // namespace at

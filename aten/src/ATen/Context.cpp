@@ -149,11 +149,13 @@ struct LegacyDeviceTypeInit : public LegacyDeviceTypeInitInterface {
 };
 REGISTER_LEGACY_TYPE_INIT(LegacyDeviceTypeInit);
 
-namespace details {
+namespace detail {
+
 TypeExtendedInterface& getType(TensorOptions options) {
   return globalContext().getType(
             options.backend(), typeMetaToScalarType(options.dtype()), false);
 }
+
 }
 
 }
