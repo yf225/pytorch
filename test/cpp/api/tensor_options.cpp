@@ -33,7 +33,7 @@ TEST(TensorOptionsTest, DefaultsToTheRightValues) {
 TEST(TensorOptionsTest, ReturnsTheCorrectType) {
   auto options = TensorOptions().device(kCPU).dtype(kInt).layout(kSparse);
   ASSERT_TRUE(
-      at::getType(options) == getNonVariableType(Backend::SparseCPU, kInt));
+      at::detail::getType(options) == getNonVariableType(Backend::SparseCPU, kInt));
 }
 
 TEST(TensorOptionsTest, UtilityFunctionsReturnTheRightTensorOptions) {

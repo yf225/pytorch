@@ -1141,7 +1141,7 @@ def create_generic(top_env, declarations):
             if dispatch_tensor:
                 option['inferred_type'] = 'detail::infer_type({})'.format(dispatch_tensor)
             elif dispatch_options:
-                option['inferred_type'] = 'at::getType({})'.format(dispatch_options['name'])
+                option['inferred_type'] = 'at::detail::getType({})'.format(dispatch_options['name'])
             else:
                 # doesn't depend on a specific type, use undefined float
                 option['inferred_type'] = 'at::getNonVariableType(at::Backend::Undefined, at::ScalarType::Float)'

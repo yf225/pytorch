@@ -50,7 +50,7 @@ void window_function_checks(
 
 // FIXME: point to LegacyTHDispatcher.
 const TypeExtendedInterface& getFactoryType(const TensorOptions& options) {
-  return at::getType(options);
+  return at::detail::getType(options);
 }
 
 } // namespace
