@@ -110,6 +110,15 @@ class SequentialImpl : public Cloneable<SequentialImpl> {
     }
   }
 
+  template <typename ModuleType>
+  void push_back(std::shared_ptr<ModuleType> module_ptr, optional<std::string> name = nullopt);
+
+  template <typename M, typename = torch::detail::enable_if_module_t<M>>
+  void push_back(M&& module, optional<std::string> name = nullopt);
+
+  template <typename M>
+  void push_back(const ModuleHolder<M>& module_holder, optional<std::string> name = nullopt);
+
   /// Special cloning function for `Sequential` because it does not use
   /// `reset()`.
   std::shared_ptr<Module> clone(
@@ -182,7 +191,7 @@ class SequentialImpl : public Cloneable<SequentialImpl> {
 
   /// Adds a new (boxed) `Module` to the `Sequential` container.
   template <typename ModuleType>
-  void push_back(std::shared_ptr<ModuleType> module_ptr, optional<std::string> name = nullopt) {
+  void push_back(std::shared_ptr<ModuleType> module_ptr, optional<std::string> name) {
     // Nesting Sequential doesn't work because `forward()`'s return type is
     // templatized, so it'll give a nasty compiler error.
     static_assert(
@@ -203,7 +212,7 @@ class SequentialImpl : public Cloneable<SequentialImpl> {
   /// `Sequential(Module(3, 4))` instead of
   /// `Sequential(std::make_shared<Module>(3, 4))`.
   template <typename M, typename = torch::detail::enable_if_module_t<M>>
-  void push_back(M&& module, optional<std::string> name = nullopt) {
+  void push_back(M&& module, optional<std::string> name) {
     // Need to get rid of any reference components for make_unique.
     using Type = typename std::remove_reference<M>::type;
     // Here we move (or copy) the module into a new shared_ptr.
@@ -213,7 +222,7 @@ class SequentialImpl : public Cloneable<SequentialImpl> {
   /// Unwraps the contained module of a `ModuleHolder` and adds it to the
   /// `Sequential`.
   template <typename M>
-  void push_back(const ModuleHolder<M>& module_holder, optional<std::string> name = nullopt) {
+  void push_back(const ModuleHolder<M>& module_holder, optional<std::string> name) {
     push_back(module_holder.ptr(), name);
   }
 
