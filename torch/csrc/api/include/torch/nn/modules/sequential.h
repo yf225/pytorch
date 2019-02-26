@@ -103,7 +103,7 @@ class SequentialImpl : public Cloneable<SequentialImpl> {
   }
 
   template <typename Module>
-  explicit SequentialImpl(std::vector<std::pair<std::string, Module>> named_modules) {
+  SequentialImpl(std::vector<std::pair<std::string, Module>> named_modules) {
     modules_.reserve(named_modules.size());
     for (const auto& named_module : named_modules) {
       push_back(named_module.second, /*name=*/named_module.first);
@@ -319,7 +319,7 @@ class SequentialImpl : public Cloneable<SequentialImpl> {
   }
 
   /// Adds a type-erased `AnyModule` to the `Sequential`.
-  void push_back(AnyModule any_module, optional<std::string> name) {
+  void push_back(AnyModule any_module, optional<std::string> name = nullopt) {
     modules_.push_back(std::move(any_module));
     const auto index = modules_.size() - 1;
     register_module(name ? *name : std::to_string(index), modules_[index].ptr());
