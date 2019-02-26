@@ -102,6 +102,14 @@ class SequentialImpl : public Cloneable<SequentialImpl> {
     push_back(std::forward<Modules>(modules)...);
   }
 
+  template <typename Module>
+  explicit SequentialImpl(std::vector<std::pair<std::string, Module>> named_modules) {
+    modules_.reserve(named_modules.size());
+    for (const auto& named_module : named_modules) {
+      push_back(named_module.second, /*name=*/named_module.first);
+    }
+  }
+
   /// Special cloning function for `Sequential` because it does not use
   /// `reset()`.
   std::shared_ptr<Module> clone(
@@ -174,7 +182,7 @@ class SequentialImpl : public Cloneable<SequentialImpl> {
 
   /// Adds a new (boxed) `Module` to the `Sequential` container.
   template <typename ModuleType>
-  void push_back(std::shared_ptr<ModuleType> module_ptr) {
+  void push_back(std::shared_ptr<ModuleType> module_ptr, optional<std::string> name = nullopt) {
     // Nesting Sequential doesn't work because `forward()`'s return type is
     // templatized, so it'll give a nasty compiler error.
     static_assert(
@@ -186,7 +194,7 @@ class SequentialImpl : public Cloneable<SequentialImpl> {
     static_assert(
         torch::detail::has_forward<ModuleType>::value,
         "Can only add modules with a forward() method to Sequential");
-    push_back(AnyModule(std::move(module_ptr)));
+    push_back(AnyModule(std::move(module_ptr)), name);
   }
 
   /// Adds a new `Module` to the `Sequential` container, moving or copying it
@@ -195,18 +203,18 @@ class SequentialImpl : public Cloneable<SequentialImpl> {
   /// `Sequential(Module(3, 4))` instead of
   /// `Sequential(std::make_shared<Module>(3, 4))`.
   template <typename M, typename = torch::detail::enable_if_module_t<M>>
-  void push_back(M&& module) {
+  void push_back(M&& module, optional<std::string> name = nullopt) {
     // Need to get rid of any reference components for make_unique.
     using Type = typename std::remove_reference<M>::type;
     // Here we move (or copy) the module into a new shared_ptr.
-    push_back(std::make_shared<Type>(std::forward<M>(module)));
+    push_back(std::make_shared<Type>(std::forward<M>(module)), name);
   }
 
   /// Unwraps the contained module of a `ModuleHolder` and adds it to the
   /// `Sequential`.
   template <typename M>
-  void push_back(const ModuleHolder<M>& module_holder) {
-    push_back(module_holder.ptr());
+  void push_back(const ModuleHolder<M>& module_holder, optional<std::string> name = nullopt) {
+    push_back(module_holder.ptr(), name);
   }
 
   /// Iterates over the container and calls `push_back()` on each value.
@@ -311,10 +319,10 @@ class SequentialImpl : public Cloneable<SequentialImpl> {
   }
 
   /// Adds a type-erased `AnyModule` to the `Sequential`.
-  void push_back(AnyModule any_module) {
+  void push_back(AnyModule any_module, optional<std::string> name) {
     modules_.push_back(std::move(any_module));
     const auto index = modules_.size() - 1;
-    register_module(std::to_string(index), modules_[index].ptr());
+    register_module(name ? *name : std::to_string(index), modules_[index].ptr());
   }
 
   /// The base case, when the list of modules is empty.
