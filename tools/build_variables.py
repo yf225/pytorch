@@ -42,7 +42,6 @@ libtorch_sources = [
     "torch/csrc/autograd/functions/basic_ops.cpp",
     "torch/csrc/autograd/functions/tensor.cpp",
     "torch/csrc/autograd/functions/utils.cpp",
-    "torch/csrc/autograd/grad_mode.cpp",
     "torch/csrc/autograd/input_buffer.cpp",
     "torch/csrc/autograd/profiler.cpp",
     "torch/csrc/autograd/saved_variable.cpp",
