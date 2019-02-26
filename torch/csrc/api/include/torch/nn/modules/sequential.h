@@ -102,6 +102,7 @@ class SequentialImpl : public Cloneable<SequentialImpl> {
     push_back(std::forward<Modules>(modules)...);
   }
 
+  // yf225 TODO: we might want to use torch::OrderedDict for simpler initialization!
   template <typename Module>
   SequentialImpl(std::vector<std::pair<std::string, Module>> named_modules) {
     modules_.reserve(named_modules.size());
@@ -316,6 +317,10 @@ class SequentialImpl : public Cloneable<SequentialImpl> {
     // Recursively calls this method, until the parameter pack only thas this
     // entry left. Then calls `push_back()` a final time (above).
     push_back(std::forward<Second>(second), std::forward<Rest>(rest)...);
+  }
+
+  void push_back(optional<std::string> name) {
+    AT_ERROR("Not implemented");
   }
 
   /// Adds a type-erased `AnyModule` to the `Sequential`.
