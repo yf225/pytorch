@@ -46,6 +46,7 @@ TEST_F(SequentialTest, ConstructsFromConcreteType) {
   Sequential sequential(M(1), M(2), M(3));
   ASSERT_EQ(sequential->size(), 3);
 }
+
 TEST_F(SequentialTest, ConstructsFromModuleHolder) {
   struct MImpl : torch::nn::Module {
     explicit MImpl(int value_) : value(value_) {}
@@ -64,6 +65,81 @@ TEST_F(SequentialTest, ConstructsFromModuleHolder) {
   ASSERT_EQ(sequential->size(), 3);
 }
 
+TEST_F(SequentialTest, ConstructsFromSharedPointerWithName) {
+  struct M : torch::nn::Module {
+    explicit M(int value_) : value(value_) {}
+    int value;
+    int forward() {
+      return value;
+    }
+  };
+
+  Sequential sequential(
+    "m1", std::make_shared<M>(1),
+    "m2", std::make_shared<M>(2),
+    "m3", std::make_shared<M>(3)
+  );
+  ASSERT_EQ(sequential->size(), 3);
+}
+
+TEST_F(SequentialTest, ConstructsFromConcreteTypeWithName) {
+  struct M : torch::nn::Module {
+    explicit M(int value_) : value(value_) {}
+    int value;
+    int forward() {
+      return value;
+    }
+  };
+
+  Sequential sequential(
+    "m1", M(1),
+    "m2", M(2),
+    "m3", M(3)
+  );
+  ASSERT_EQ(sequential->size(), 3);
+}
+
+TEST_F(SequentialTest, ConstructsFromModuleHolderWithName) {
+  struct MImpl : torch::nn::Module {
+    explicit MImpl(int value_) : value(value_) {}
+    int forward() {
+      return value;
+    }
+    int value;
+  };
+
+  struct M : torch::nn::ModuleHolder<MImpl> {
+    using torch::nn::ModuleHolder<MImpl>::ModuleHolder;
+    using torch::nn::ModuleHolder<MImpl>::get;
+  };
+
+  Sequential sequential(
+    "m1", M(1),
+    "m2", M(2),
+    "m3", M(3)
+  );
+  ASSERT_EQ(sequential->size(), 3);
+}
+
+TEST_F(SequentialTest, ConstructsSubmodulesWithAndWithoutName) {
+  struct M : torch::nn::Module {
+    explicit M(int value_) : value(value_) {}
+    int value;
+    int forward() {
+      return value;
+    }
+  };
+
+  Sequential sequential(
+    std::make_shared<M>(1),
+    "m2", std::make_shared<M>(2),
+    M(3),
+    std::string("m4"), M(4),
+    Linear(3, 4)
+  );
+  ASSERT_EQ(sequential->size(), 5);
+}
+
 TEST_F(SequentialTest, PushBackAddsAnElement) {
   struct M : torch::nn::Module {
     explicit M(int value_) : value(value_) {}
@@ -80,6 +156,25 @@ TEST_F(SequentialTest, PushBackAddsAnElement) {
   sequential->push_back(std::make_shared<M>(1));
   ASSERT_EQ(sequential->size(), 2);
   sequential->push_back(M(2));
+  ASSERT_EQ(sequential->size(), 3);
+}
+
+TEST_F(SequentialTest, PushBackAddsAnElementWithName) {
+  struct M : torch::nn::Module {
+    explicit M(int value_) : value(value_) {}
+    int forward() {
+      return value;
+    }
+    int value;
+  };
+  Sequential sequential;
+  ASSERT_EQ(sequential->size(), 0);
+  ASSERT_TRUE(sequential->is_empty());
+  sequential->push_back("linear", Linear(3, 4));
+  ASSERT_EQ(sequential->size(), 1);
+  sequential->push_back(std::string("m1"), std::make_shared<M>(1));
+  ASSERT_EQ(sequential->size(), 2);
+  sequential->push_back("m2", M(2));
   ASSERT_EQ(sequential->size(), 3);
 }
 
@@ -341,5 +436,26 @@ TEST_F(SequentialTest, PrettyPrintSequential) {
       "  (3): torch::nn::BatchNorm(features=5, eps=1e-05, momentum=0.1, affine=true, stateful=true)\n"
       "  (4): torch::nn::Embedding(count=4, dimension=10)\n"
       "  (5): torch::nn::LSTM(input_size=4, hidden_size=5, layers=1, dropout=0)\n"
+      ")");
+}
+
+TEST_F(SequentialTest, PrettyPrintSequentialNamedSubmodules) {
+  Sequential sequential(
+      "linear", Linear(10, 3),
+      "conv2d", Conv2d(1, 2, 3),
+      "dropout", Dropout(0.5),
+      "batchnorm", BatchNorm(5),
+      "embedding", Embedding(4, 10),
+      "lstm", LSTM(4, 5)
+  );
+  ASSERT_EQ(
+      c10::str(sequential),
+      "torch::nn::Sequential(\n"
+      "  (linear): torch::nn::Linear(in=10, out=3, with_bias=true)\n"
+      "  (conv2d): torch::nn::Conv2d(input_channels=1, output_channels=2, kernel_size=[3, 3], stride=[1, 1])\n"
+      "  (dropout): torch::nn::Dropout(rate=0.5)\n"
+      "  (batchnorm): torch::nn::BatchNorm(features=5, eps=1e-05, momentum=0.1, affine=true, stateful=true)\n"
+      "  (embedding): torch::nn::Embedding(count=4, dimension=10)\n"
+      "  (lstm): torch::nn::LSTM(input_size=4, hidden_size=5, layers=1, dropout=0)\n"
       ")");
 }

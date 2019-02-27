@@ -173,40 +173,50 @@ class SequentialImpl : public Cloneable<SequentialImpl> {
   }
 
   /// Adds a new (boxed) `Module` to the `Sequential` container.
+  ///
+  /// See `add_to_modules(std::shared_ptr<ModuleType> module_ptr)` for
+  /// implementation detail.
   template <typename ModuleType>
   void push_back(std::shared_ptr<ModuleType> module_ptr) {
-    // Nesting Sequential doesn't work because `forward()`'s return type is
-    // templatized, so it'll give a nasty compiler error.
-    static_assert(
-        !std::is_same<SequentialImpl, ModuleType>::value,
-        "Sequential is not nestable");
-    static_assert(
-        torch::detail::is_module<ModuleType>::value,
-        "Can only add objects derived from nn::Module to Sequential");
-    static_assert(
-        torch::detail::has_forward<ModuleType>::value,
-        "Can only add modules with a forward() method to Sequential");
-    push_back(AnyModule(std::move(module_ptr)));
+    auto index = add_to_modules(module_ptr);
+    register_module(std::to_string(index), modules_[index].ptr());
   }
 
-  /// Adds a new `Module` to the `Sequential` container, moving or copying it
-  /// into a `shared_ptr` internally. This method allows passing value types,
-  /// and letting the container deal with the boxing. This means you can write
+  /// Adds a new `Module` to the `Sequential` container.
+  /// This method allows passing value types, and letting the container
+  /// deal with the boxing. This means you can write
   /// `Sequential(Module(3, 4))` instead of
   /// `Sequential(std::make_shared<Module>(3, 4))`.
+  ///
+  /// See `add_to_modules(M&& module)` for implementation detail.
   template <typename M, typename = torch::detail::enable_if_module_t<M>>
   void push_back(M&& module) {
-    // Need to get rid of any reference components for make_unique.
-    using Type = typename std::remove_reference<M>::type;
-    // Here we move (or copy) the module into a new shared_ptr.
-    push_back(std::make_shared<Type>(std::forward<M>(module)));
+    auto index = add_to_modules(module);
+    register_module(std::to_string(index), modules_[index].ptr());
   }
 
   /// Unwraps the contained module of a `ModuleHolder` and adds it to the
   /// `Sequential`.
+  ///
+  /// See `add_to_modules(const ModuleHolder<M>& module_holder)` for implementation detail.
   template <typename M>
   void push_back(const ModuleHolder<M>& module_holder) {
-    push_back(module_holder.ptr());
+    auto index = add_to_modules(module_holder);
+    register_module(std::to_string(index), modules_[index].ptr());
+  }
+
+  /// Adds a new named module to the `Sequential` container, with name of `std::string` type.
+  template <typename M>
+  void push_back(std::string name, M module) {
+    auto index = add_to_modules(module);
+    register_module(name, modules_[index].ptr());
+  }
+
+  /// Adds a new named module to the `Sequential` container, with name of `const char*` type.
+  template <typename M>
+  void push_back(const char* name, M module) {
+    auto index = add_to_modules(module);
+    register_module(name, modules_[index].ptr());
   }
 
   /// Iterates over the container and calls `push_back()` on each value.
@@ -298,6 +308,22 @@ class SequentialImpl : public Cloneable<SequentialImpl> {
   }
 
  private:
+  /// Matches `Sequential(std::string("m1"), Module(1), ...)` case
+  template <typename Module, typename... Rest>
+  void push_back(std::string name, Module&& module, Rest&&... rest) {
+    auto index = add_to_modules(module);
+    register_module(name, modules_[index].ptr());
+    push_back(std::forward<Rest>(rest)...);
+  }
+
+  /// Matches `Sequential("m1", Module(1), ...)` case
+  template <typename Module, typename... Rest>
+  void push_back(const char* name, Module&& module, Rest&&... rest) {
+    auto index = add_to_modules(module);
+    register_module(std::string(name), modules_[index].ptr());
+    push_back(std::forward<Rest>(rest)...);
+  }
+
   /// Takes a First *and* Second parameter, to avoid ambiguity when a parameter
   /// pack has only one type, in which case the template would be preferred,
   /// even if the other `push_back` functions are better fits (e.g. `unique_ptr`
@@ -311,14 +337,61 @@ class SequentialImpl : public Cloneable<SequentialImpl> {
   }
 
   /// Adds a type-erased `AnyModule` to the `Sequential`.
+  ///
+  /// See `add_to_modules(AnyModule any_module)` for implementation detail.
   void push_back(AnyModule any_module) {
-    modules_.push_back(std::move(any_module));
-    const auto index = modules_.size() - 1;
+    auto index = add_to_modules(any_module);
     register_module(std::to_string(index), modules_[index].ptr());
   }
 
   /// The base case, when the list of modules is empty.
   void push_back() {}
+
+  /// Adds a new (boxed) `Module` to the `Sequential` container, and returns
+  /// its index in `modules_`.
+  template <typename ModuleType>
+  size_t add_to_modules(std::shared_ptr<ModuleType> module_ptr) {
+    // Nesting Sequential doesn't work because `forward()`'s return type is
+    // templatized, so it'll give a nasty compiler error.
+    static_assert(
+        !std::is_same<SequentialImpl, ModuleType>::value,
+        "Sequential is not nestable");
+    static_assert(
+        torch::detail::is_module<ModuleType>::value,
+        "Can only add objects derived from nn::Module to Sequential");
+    static_assert(
+        torch::detail::has_forward<ModuleType>::value,
+        "Can only add modules with a forward() method to Sequential");
+    return add_to_modules(AnyModule(std::move(module_ptr)));
+  }
+
+  /// Adds a new `Module` to the `Sequential` container, moving or copying it
+  /// into a `shared_ptr` internally, and returns its index in `modules_`.
+  //// This method allows passing value types,
+  /// and letting the container deal with the boxing. This means you can write
+  /// `Sequential(Module(3, 4))` instead of
+  /// `Sequential(std::make_shared<Module>(3, 4))`.
+  template <typename M, typename = torch::detail::enable_if_module_t<M>>
+  size_t add_to_modules(M&& module) {
+    // Need to get rid of any reference components for make_unique.
+    using Type = typename std::remove_reference<M>::type;
+    // Here we move (or copy) the module into a new shared_ptr.
+    return add_to_modules(std::make_shared<Type>(std::forward<M>(module)));
+  }
+
+  /// Unwraps the contained module of a `ModuleHolder` and adds it to the
+  /// `Sequential`, and returns its index in `modules_`.
+  template <typename M>
+  size_t add_to_modules(const ModuleHolder<M>& module_holder) {
+    return add_to_modules(module_holder.ptr());
+  }
+
+  /// Adds a type-erased `AnyModule` to the `Sequential`, and returns its index
+  /// in `modules_`.
+  size_t add_to_modules(AnyModule any_module) {
+    modules_.push_back(std::move(any_module));
+    return modules_.size() - 1;
+  }
 
   // Box the AnyModules to give Sequential reference semantics, like the rest of
   // the API. Note that this is not required otherwise, this could just be a
