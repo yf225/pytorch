@@ -114,9 +114,9 @@ TEST_F(SequentialTest, ConstructsNamedSubmodulesFromModuleHolder) {
   };
 
   Sequential sequential(
-    std::make_pair("m1", M(1)),
-    std::make_pair("m2", M(2)),
-    std::make_pair("m3", M(3))
+    "m1", M(1),
+    "m2", M(2),
+    "m3", M(3)
   );
   ASSERT_EQ(sequential->size(), 3);
 }

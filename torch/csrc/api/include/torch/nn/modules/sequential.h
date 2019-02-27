@@ -312,16 +312,22 @@ class SequentialImpl : public Cloneable<SequentialImpl> {
   }
 
  private:
-  // // yf225 TODO: add comment!
-  // template <typename Module>
-  // void push_back(Module&& module, std::string name) {
-  //   push_back(std::forward<Module>(module), make_optional(name));
-  // }
+  // yf225 TODO: add comment!
+  template <typename Module>
+  void push_back(Module&& module, std::string name) {
+    push_back(module, make_optional(name));
+  }
 
   // yf225 TODO: add comment!
   template <typename Module, typename... Rest>
   void push_back(std::string name, Module&& module, Rest&&... rest) {
-    push_back(std::forward<Module>(module), make_optional(name));
+    push_back(std::forward<Module>(module), name);
+    push_back(std::forward<Rest>(rest)...);
+  }
+
+  template <typename Module, typename... Rest>
+  void push_back(const char* name, Module&& module, Rest&&... rest) {
+    push_back(std::forward<Module>(module), std::string(name));
     push_back(std::forward<Rest>(rest)...);
   }
 
