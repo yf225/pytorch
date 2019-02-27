@@ -106,7 +106,7 @@ class SequentialImpl : public Cloneable<SequentialImpl> {
   template <typename Module>
   SequentialImpl(std::vector<std::pair<std::string, Module>> named_modules) {
     modules_.reserve(named_modules.size());
-    for (const auto& named_module : named_modules) {
+    for (const std::pair<std::string, Module>& named_module : named_modules) {
       push_back(named_module.second, /*name=*/named_module.first);
     }
   }
@@ -307,21 +307,24 @@ class SequentialImpl : public Cloneable<SequentialImpl> {
   }
 
  private:
+  // yf225 TODO: add comment!
+  template <typename Module>
+  void push_back(Module&& module, std::string name) {
+    // yf225 TODO: do we need to explicitly cast `second` to optional<std::string> here??
+    std::cout << "here0" << "\n";
+    push_back(std::forward<Module>(module), make_optional(name));
+  }
+
   /// Takes a First *and* Second parameter, to avoid ambiguity when a parameter
   /// pack has only one type, in which case the template would be preferred,
   /// even if the other `push_back` functions are better fits (e.g. `unique_ptr`
   /// -> `shared_ptr` overload).
   template <typename First, typename Second, typename... Rest>
   void push_back(First&& first, Second&& second, Rest&&... rest) {
-    if (std::is_same<Second, std::string>::value && (sizeof...(Rest) == 0)) {
-      // yf225 TODO: do we need to explicitly cast `second` to optional<std::string> here??
-      push_back(std::forward<First>(first), std::forward<Second>(second));
-    } else {
-      push_back(std::forward<First>(first));
-      // Recursively calls this method, until the parameter pack only thas this
-      // entry left. Then calls `push_back()` a final time (above).
-      push_back(std::forward<Second>(second), std::forward<Rest>(rest)...);
-    }
+    push_back(std::forward<First>(first));
+    // Recursively calls this method, until the parameter pack only thas this
+    // entry left. Then calls `push_back()` a final time (above).
+    push_back(std::forward<Second>(second), std::forward<Rest>(rest)...);
   }
 
   void push_back(optional<std::string> name) {
