@@ -181,46 +181,42 @@ class SequentialImpl : public Cloneable<SequentialImpl> {
         c10::demangle(typeid(ReturnType).name()));
   }
 
-  /// Adds a new (boxed) `Module` to the `Sequential` container.
+  // yf225 TODO HIGHEST PRIORITY: this is not easy to get right. We should just have a method that only does
+  // push_back and return an index, and then we register_module and decide whether to use this index or the module's name
+
+  // // yf225 TODO: improve comment
+  // // COMPILATION TOO SLOW!!!!!!!!!!
+  // template <typename M>
+  // void push_back(M module) {
+  //   push_back(std::make_tuple(optional<std::string>(), module));
+  // }
+
   template <typename ModuleType>
-  void push_back(std::shared_ptr<ModuleType> module_ptr, optional<std::string> name = nullopt) {
-    // Nesting Sequential doesn't work because `forward()`'s return type is
-    // templatized, so it'll give a nasty compiler error.
-    static_assert(
-        !std::is_same<SequentialImpl, ModuleType>::value,
-        "Sequential is not nestable");
-    static_assert(
-        torch::detail::is_module<ModuleType>::value,
-        "Can only add objects derived from nn::Module to Sequential");
-    static_assert(
-        torch::detail::has_forward<ModuleType>::value,
-        "Can only add modules with a forward() method to Sequential");
-    push_back(AnyModule(std::move(module_ptr)), name);
+  void push_back(std::shared_ptr<ModuleType> module_ptr) {
+    push_back(std::make_tuple(optional<std::string>(), module_ptr));
   }
 
+  // yf225 TODO: improve comment
   /// Adds a new `Module` to the `Sequential` container, moving or copying it
   /// into a `shared_ptr` internally. This method allows passing value types,
   /// and letting the container deal with the boxing. This means you can write
   /// `Sequential(Module(3, 4))` instead of
   /// `Sequential(std::make_shared<Module>(3, 4))`.
   template <typename M, typename = torch::detail::enable_if_module_t<M>>
-  void push_back(M&& module, optional<std::string> name = nullopt) {
-    // Need to get rid of any reference components for make_unique.
-    using Type = typename std::remove_reference<M>::type;
-    // Here we move (or copy) the module into a new shared_ptr.
-    push_back(std::make_shared<Type>(std::forward<M>(module)), name);
+  void push_back(M&& module) {
+    push_back(std::make_tuple(optional<std::string>(), std::reference_wrapper<M>(module)));
   }
 
   /// Unwraps the contained module of a `ModuleHolder` and adds it to the
   /// `Sequential`.
   template <typename M>
-  void push_back(const ModuleHolder<M>& module_holder, optional<std::string> name = nullopt) {
-    push_back(module_holder.ptr(), name);
+  void push_back(const ModuleHolder<M>& module_holder) {
+    push_back(std::make_tuple(optional<std::string>(), std::reference_wrapper<const ModuleHolder<M>>(module_holder)));
   }
 
   template <typename M>
   void push_back(std::string name, M module) {
-    push_back(module, make_optional(name));
+    push_back(std::make_tuple(make_optional(name), module));
   }
 
   /// Iterates over the container and calls `push_back()` on each value.
@@ -312,22 +308,53 @@ class SequentialImpl : public Cloneable<SequentialImpl> {
   }
 
  private:
-  // yf225 TODO: add comment!
-  template <typename Module>
-  void push_back(Module&& module, std::string name) {
-    push_back(module, make_optional(name));
+  /// Adds a new (boxed) `Module` to the `Sequential` container.
+  template <typename ModuleType>
+  void push_back(std::tuple<optional<std::string>, std::shared_ptr<ModuleType>> named_module_ptr) {
+    // Nesting Sequential doesn't work because `forward()`'s return type is
+    // templatized, so it'll give a nasty compiler error.
+    static_assert(
+        !std::is_same<SequentialImpl, ModuleType>::value,
+        "Sequential is not nestable");
+    static_assert(
+        torch::detail::is_module<ModuleType>::value,
+        "Can only add objects derived from nn::Module to Sequential");
+    static_assert(
+        torch::detail::has_forward<ModuleType>::value,
+        "Can only add modules with a forward() method to Sequential");
+    push_back(std::make_tuple(std::get<0>(named_module_ptr), AnyModule(std::move(std::get<1>(named_module_ptr)))));
+  }
+
+  /// Adds a new `Module` to the `Sequential` container, moving or copying it
+  /// into a `shared_ptr` internally. This method allows passing value types,
+  /// and letting the container deal with the boxing. This means you can write
+  /// `Sequential(Module(3, 4))` instead of
+  /// `Sequential(std::make_shared<Module>(3, 4))`.
+  template <typename M, typename = torch::detail::enable_if_module_t<M>>
+  void push_back(std::tuple<optional<std::string>, M&> named_module) {
+    // Need to get rid of any reference components for make_unique.
+    using Type = typename std::remove_reference<M>::type;
+    // Here we move (or copy) the module into a new shared_ptr.
+    push_back(std::make_tuple(std::get<0>(named_module), std::make_shared<Type>(std::forward<M>(std::get<1>(named_module)))));
+  }
+
+  /// Unwraps the contained module of a `ModuleHolder` and adds it to the
+  /// `Sequential`.
+  template <typename M>
+  void push_back(std::tuple<optional<std::string>, const ModuleHolder<M>&> named_module_holder) {
+    push_back(std::make_tuple(std::get<0>(named_module_holder), std::get<1>(named_module_holder).ptr()));
   }
 
   // yf225 TODO: add comment!
   template <typename Module, typename... Rest>
   void push_back(std::string name, Module&& module, Rest&&... rest) {
-    push_back(std::forward<Module>(module), name);
+    push_back(std::make_tuple(make_optional(name), std::reference_wrapper<Module>(module)));
     push_back(std::forward<Rest>(rest)...);
   }
 
   template <typename Module, typename... Rest>
   void push_back(const char* name, Module&& module, Rest&&... rest) {
-    push_back(std::forward<Module>(module), std::string(name));
+    push_back(std::make_tuple(make_optional(std::string(name)), std::reference_wrapper<Module>(module)));
     push_back(std::forward<Rest>(rest)...);
   }
 
@@ -343,18 +370,17 @@ class SequentialImpl : public Cloneable<SequentialImpl> {
     push_back(std::forward<Second>(second), std::forward<Rest>(rest)...);
   }
 
-  // void push_back(const char*& name) {
-  //   AT_ERROR("Not implemented");
-  // }
-
-  // void push_back(optional<std::string> name) {
-  //   AT_ERROR("Not implemented");
-  // }
+  // yf225 TODO: comment!!
+  /// Adds a type-erased `AnyModule` to the `Sequential`.
+  void push_back(AnyModule any_module) {
+    push_back(std::make_tuple(optional<std::string>(), any_module));
+  }
 
   /// Adds a type-erased `AnyModule` to the `Sequential`.
-  void push_back(AnyModule any_module, optional<std::string> name = nullopt) {
-    modules_.push_back(std::move(any_module));
+  void push_back(std::tuple<optional<std::string>, AnyModule> named_any_module) {
+    modules_.push_back(std::move(std::get<1>(named_any_module)));
     const auto index = modules_.size() - 1;
+    auto name = std::get<0>(named_any_module);
     register_module(name ? *name : std::to_string(index), modules_[index].ptr());
   }
 

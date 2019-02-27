@@ -138,8 +138,6 @@ TEST_F(SequentialTest, ConstructsNamedSubmodulesFromModuleHolder) {
 //   ASSERT_EQ(sequential->size(), 3);
 // }
 
-// yf225 TODO: add test case for seq.push_back("name", module)
-
 TEST_F(SequentialTest, PushBackAddsAnElement) {
   struct M : torch::nn::Module {
     explicit M(int value_) : value(value_) {}
@@ -158,6 +156,8 @@ TEST_F(SequentialTest, PushBackAddsAnElement) {
   sequential->push_back(M(2));
   ASSERT_EQ(sequential->size(), 3);
 }
+
+// yf225 TODO: add test case for seq.push_back("name", module)
 
 TEST_F(SequentialTest, AccessWithAt) {
   struct M : torch::nn::Module {
