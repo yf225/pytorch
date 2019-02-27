@@ -313,10 +313,15 @@ class SequentialImpl : public Cloneable<SequentialImpl> {
   /// -> `shared_ptr` overload).
   template <typename First, typename Second, typename... Rest>
   void push_back(First&& first, Second&& second, Rest&&... rest) {
-    push_back(std::forward<First>(first));
-    // Recursively calls this method, until the parameter pack only thas this
-    // entry left. Then calls `push_back()` a final time (above).
-    push_back(std::forward<Second>(second), std::forward<Rest>(rest)...);
+    if (std::is_same<Second, std::string>::value && (sizeof...(Rest) == 0)) {
+      // yf225 TODO: do we need to explicitly cast `second` to optional<std::string> here??
+      push_back(std::forward<First>(first), std::forward<Second>(second));
+    } else {
+      push_back(std::forward<First>(first));
+      // Recursively calls this method, until the parameter pack only thas this
+      // entry left. Then calls `push_back()` a final time (above).
+      push_back(std::forward<Second>(second), std::forward<Rest>(rest)...);
+    }
   }
 
   void push_back(optional<std::string> name) {
