@@ -102,13 +102,14 @@ class SequentialImpl : public Cloneable<SequentialImpl> {
     push_back(std::forward<Modules>(modules)...);
   }
 
-  template <typename Module>
-  SequentialImpl(OrderedDict<std::string, Module> named_modules) {
-    modules_.reserve(named_modules.size());
-    for (auto& named_module : named_modules) {
-      push_back(named_module.value(), /*name=*/named_module.key());
-    }
-  }
+  // // yf225 TODO: can we write constructor for initializer_list??
+  // template <typename Module>
+  // SequentialImpl(OrderedDict<std::string, Module> named_modules) {
+  //   modules_.reserve(named_modules.size());
+  //   for (auto& named_module : named_modules) {
+  //     push_back(named_module.value(), /*name=*/named_module.key());
+  //   }
+  // }
 
   /// Special cloning function for `Sequential` because it does not use
   /// `reset()`.
@@ -217,6 +218,16 @@ class SequentialImpl : public Cloneable<SequentialImpl> {
     push_back(module_holder.ptr(), name);
   }
 
+  template <typename M>
+  void push_back(std::pair<std::string, M> named_module) {
+    push_back(named_module.second, make_optional(named_module.first));
+  }
+
+  template <typename M>
+  void push_back(std::pair<const char*, M> named_module) {
+    push_back(named_module.second, make_optional(std::string(named_module.first)));
+  }
+
   /// Iterates over the container and calls `push_back()` on each value.
   template <typename Container>
   void extend(const Container& container) {
@@ -306,11 +317,11 @@ class SequentialImpl : public Cloneable<SequentialImpl> {
   }
 
  private:
-  // yf225 TODO: add comment!
-  template <typename Module>
-  void push_back(Module&& module, std::string name) {
-    push_back(std::forward<Module>(module), make_optional(name));
-  }
+  // // yf225 TODO: add comment!
+  // template <typename Module>
+  // void push_back(Module&& module, std::string name) {
+  //   push_back(std::forward<Module>(module), make_optional(name));
+  // }
 
   /// Takes a First *and* Second parameter, to avoid ambiguity when a parameter
   /// pack has only one type, in which case the template would be preferred,
@@ -324,9 +335,13 @@ class SequentialImpl : public Cloneable<SequentialImpl> {
     push_back(std::forward<Second>(second), std::forward<Rest>(rest)...);
   }
 
-  void push_back(optional<std::string> name) {
-    AT_ERROR("Not implemented");
-  }
+  // void push_back(const char*& name) {
+  //   AT_ERROR("Not implemented");
+  // }
+
+  // void push_back(optional<std::string> name) {
+  //   AT_ERROR("Not implemented");
+  // }
 
   /// Adds a type-erased `AnyModule` to the `Sequential`.
   void push_back(AnyModule any_module, optional<std::string> name = nullopt) {

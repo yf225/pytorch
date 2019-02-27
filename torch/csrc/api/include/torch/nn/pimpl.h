@@ -69,8 +69,8 @@ class ModuleHolder : torch::detail::ModuleHolderIndicator {
   // template <typename Key, typename Value>
   // ModuleHolder(torch::OrderedDict<Key, Value> dict) : impl_(std::forward<Key, Value>(dict)) {}
 
-  template<typename T>
-  ModuleHolder(std::initializer_list<T>&& t) : impl_(t) {}
+  // template<typename T>
+  // ModuleHolder(std::initializer_list<T>&& t) : impl_(t) {}
 
   /// Constructs the `ModuleHolder` from a pointer to the contained type.
   /// Example: `Linear(std::make_shared<LinearImpl>(...))`.
