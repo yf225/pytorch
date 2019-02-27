@@ -219,13 +219,8 @@ class SequentialImpl : public Cloneable<SequentialImpl> {
   }
 
   template <typename M>
-  void push_back(std::pair<std::string, M> named_module) {
-    push_back(named_module.second, make_optional(std::string(named_module.first)));
-  }
-
-  template <typename M>
-  void push_back(std::pair<const char*, M> named_module) {
-    push_back(named_module.second, make_optional(std::string(named_module.first)));
+  void push_back(std::string name, M module) {
+    push_back(module, make_optional(name));
   }
 
   /// Iterates over the container and calls `push_back()` on each value.
@@ -322,6 +317,13 @@ class SequentialImpl : public Cloneable<SequentialImpl> {
   // void push_back(Module&& module, std::string name) {
   //   push_back(std::forward<Module>(module), make_optional(name));
   // }
+
+  // yf225 TODO: add comment!
+  template <typename Module, typename... Rest>
+  void push_back(std::string name, Module&& module, Rest&&... rest) {
+    push_back(std::forward<Module>(module), make_optional(name));
+    push_back(std::forward<Rest>(rest)...);
+  }
 
   /// Takes a First *and* Second parameter, to avoid ambiguity when a parameter
   /// pack has only one type, in which case the template would be preferred,

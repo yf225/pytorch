@@ -75,9 +75,9 @@ TEST_F(SequentialTest, ConstructsNamedSubmodulesFromSharedPointer) {
   };
 
   Sequential sequential(
-    std::make_pair("m1", std::make_shared<M>(1)),
-    std::make_pair("m2", std::make_shared<M>(2)),
-    std::make_pair("m3", std::make_shared<M>(3))
+    "m1", std::make_shared<M>(1),
+    "m2", std::make_shared<M>(2),
+    "m3", std::make_shared<M>(3)
   );
   ASSERT_EQ(sequential->size(), 3);
 }
@@ -92,9 +92,9 @@ TEST_F(SequentialTest, ConstructsNamedSubmodulesFromConcreteType) {
   };
 
   Sequential sequential(
-    std::make_pair("m1", M(1)),
-    std::make_pair("m2", M(2)),
-    std::make_pair("m3", M(3))
+    "m1", M(1),
+    "m2", M(2),
+    "m3", M(3)
   );
   ASSERT_EQ(sequential->size(), 3);
 }
@@ -137,6 +137,8 @@ TEST_F(SequentialTest, ConstructsNamedSubmodulesFromModuleHolder) {
 //   );
 //   ASSERT_EQ(sequential->size(), 3);
 // }
+
+// yf225 TODO: add test case for seq.push_back("name", module)
 
 TEST_F(SequentialTest, PushBackAddsAnElement) {
   struct M : torch::nn::Module {
