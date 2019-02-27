@@ -2,6 +2,7 @@
 
 #include <torch/arg.h>
 #include <torch/detail/static.h>
+#include <torch/ordered_dict.h>
 #include <torch/serialize/archive.h>
 #include <torch/types.h>
 
@@ -64,6 +65,12 @@ class ModuleHolder : torch::detail::ModuleHolderIndicator {
       : impl_(new Contained(
             std::forward<Head>(head),
             std::forward<Tail>(tail)...)) {}
+
+  // template <typename Key, typename Value>
+  // ModuleHolder(torch::OrderedDict<Key, Value> dict) : impl_(std::forward<Key, Value>(dict)) {}
+
+  template<typename T>
+  ModuleHolder(std::initializer_list<T>&& t) : impl_(t) {}
 
   /// Constructs the `ModuleHolder` from a pointer to the contained type.
   /// Example: `Linear(std::make_shared<LinearImpl>(...))`.

@@ -102,12 +102,11 @@ class SequentialImpl : public Cloneable<SequentialImpl> {
     push_back(std::forward<Modules>(modules)...);
   }
 
-  // yf225 TODO: we might want to use torch::OrderedDict for simpler initialization!
   template <typename Module>
-  SequentialImpl(std::vector<std::pair<std::string, Module>> named_modules) {
+  SequentialImpl(OrderedDict<std::string, Module> named_modules) {
     modules_.reserve(named_modules.size());
-    for (const std::pair<std::string, Module>& named_module : named_modules) {
-      push_back(named_module.second, /*name=*/named_module.first);
+    for (auto& named_module : named_modules) {
+      push_back(named_module.value(), /*name=*/named_module.key());
     }
   }
 
@@ -310,8 +309,6 @@ class SequentialImpl : public Cloneable<SequentialImpl> {
   // yf225 TODO: add comment!
   template <typename Module>
   void push_back(Module&& module, std::string name) {
-    // yf225 TODO: do we need to explicitly cast `second` to optional<std::string> here??
-    std::cout << "here0" << "\n";
     push_back(std::forward<Module>(module), make_optional(name));
   }
 

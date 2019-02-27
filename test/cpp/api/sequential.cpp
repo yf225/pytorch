@@ -73,12 +73,17 @@ TEST_F(SequentialTest, ConstructsNamedSubmodulesFromSharedPointer) {
       return value;
     }
   };
-  std::vector<std::pair<std::string, std::shared_ptr<M>>> named_modules;
-  named_modules.push_back(std::make_pair("m1", std::make_shared<M>(1)));
-  named_modules.push_back(std::make_pair("m2", std::make_shared<M>(2)));
-  named_modules.push_back(std::make_pair("m3", std::make_shared<M>(3)));
- 
-  Sequential sequential(named_modules);
+
+  // std::vector<std::pair<std::string, std::shared_ptr<M>>> named_modules;
+  // named_modules.push_back(std::make_pair("m1", std::make_shared<M>(1)));
+  // named_modules.push_back(std::make_pair("m2", std::make_shared<M>(2)));
+  // named_modules.push_back(std::make_pair("m3", std::make_shared<M>(3)));
+
+  Sequential sequential({
+    {"m1", std::make_shared<M>(1)},
+    {"m2", std::make_shared<M>(2)},
+    {"m3", std::make_shared<M>(3)}
+  });
   ASSERT_EQ(sequential->size(), 3);
 }
 
