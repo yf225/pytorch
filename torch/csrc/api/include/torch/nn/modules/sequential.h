@@ -220,7 +220,7 @@ class SequentialImpl : public Cloneable<SequentialImpl> {
 
   template <typename M>
   void push_back(std::pair<std::string, M> named_module) {
-    push_back(named_module.second, make_optional(named_module.first));
+    push_back(named_module.second, make_optional(std::string(named_module.first)));
   }
 
   template <typename M>
