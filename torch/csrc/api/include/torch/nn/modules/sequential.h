@@ -205,6 +205,24 @@ class SequentialImpl : public Cloneable<SequentialImpl> {
     register_module(std::to_string(index), modules_[index].ptr());
   }
 
+  // template <typename ModuleType>
+  // void push_back(std::pair<const char*, std::shared_ptr<ModuleType>> named_module_ptr) {
+  //   auto index = add_to_modules(module_ptr);
+  //   register_module(std::to_string(index), modules_[index].ptr());
+  // }
+
+  template <typename M, typename = torch::detail::enable_if_module_t<M>>
+  void push_back(std::pair<const char*, M&&> named_module) {
+    auto index = add_to_modules(named_module.second);
+    register_module(std::string(named_module.first), modules_[index].ptr());
+  }
+
+  // template <typename M>
+  // void push_back(std::pair<const char*, const ModuleHolder<M>&> named_module_holder) {
+  //   auto index = add_to_modules(module_holder);
+  //   register_module(std::to_string(index), modules_[index].ptr());
+  // }
+
   /// Adds a new named module to the `Sequential` container, with name of `std::string` type.
   template <typename M>
   void push_back(std::string name, M module) {
@@ -308,19 +326,19 @@ class SequentialImpl : public Cloneable<SequentialImpl> {
   }
 
  private:
-  /// Matches `Sequential(std::string("m1"), Module(1), ...)` case
-  template <typename Module, typename... Rest>
-  void push_back(std::string name, Module&& module, Rest&&... rest) {
-    auto index = add_to_modules(module);
-    register_module(name, modules_[index].ptr());
-    push_back(std::forward<Rest>(rest)...);
-  }
+  // /// Matches `Sequential(std::string("m1"), Module(1), ...)` case
+  // template <typename Module, typename... Rest>
+  // void push_back(std::string name, Module&& module, Rest&&... rest) {
+  //   auto index = add_to_modules(module);
+  //   register_module(name, modules_[index].ptr());
+  //   push_back(std::forward<Rest>(rest)...);
+  // }
 
-  /// Matches `Sequential("m1", Module(1), ...)` case
+  /// Matches `Sequential(std::make_pair("m1", Module(1)), ...)` case
   template <typename Module, typename... Rest>
-  void push_back(const char* name, Module&& module, Rest&&... rest) {
-    auto index = add_to_modules(module);
-    register_module(std::string(name), modules_[index].ptr());
+  void push_back(std::pair<const char*, Module&&> named_module, Rest&&... rest) {
+    auto index = add_to_modules(named_module.second);
+    register_module(std::string(named_module.first), modules_[index].ptr());
     push_back(std::forward<Rest>(rest)...);
   }
 

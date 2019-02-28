@@ -75,9 +75,9 @@ TEST_F(SequentialTest, ConstructsFromSharedPointerWithName) {
   };
 
   Sequential sequential(
-    "m1", std::make_shared<M>(1),
-    "m2", std::make_shared<M>(2),
-    "m3", std::make_shared<M>(3)
+    std::make_pair("m1", std::make_shared<M>(1)),
+    std::make_pair("m2", std::make_shared<M>(2)),
+    std::make_pair("m3", std::make_shared<M>(3))
   );
   ASSERT_EQ(sequential->size(), 3);
 }
@@ -92,9 +92,9 @@ TEST_F(SequentialTest, ConstructsFromConcreteTypeWithName) {
   };
 
   Sequential sequential(
-    "m1", M(1),
-    "m2", M(2),
-    "m3", M(3)
+    std::make_pair("m1", M(1)),
+    std::make_pair("m2", M(2)),
+    std::make_pair("m3", M(3))
   );
   ASSERT_EQ(sequential->size(), 3);
 }
@@ -114,30 +114,11 @@ TEST_F(SequentialTest, ConstructsFromModuleHolderWithName) {
   };
 
   Sequential sequential(
-    "m1", M(1),
-    "m2", M(2),
-    "m3", M(3)
+    std::make_pair("m1", M(1)),
+    std::make_pair("m2", M(2)),
+    std::make_pair("m3", M(3))
   );
   ASSERT_EQ(sequential->size(), 3);
-}
-
-TEST_F(SequentialTest, ConstructsSubmodulesWithAndWithoutName) {
-  struct M : torch::nn::Module {
-    explicit M(int value_) : value(value_) {}
-    int value;
-    int forward() {
-      return value;
-    }
-  };
-
-  Sequential sequential(
-    std::make_shared<M>(1),
-    "m2", std::make_shared<M>(2),
-    M(3),
-    std::string("m4"), M(4),
-    Linear(3, 4)
-  );
-  ASSERT_EQ(sequential->size(), 5);
 }
 
 TEST_F(SequentialTest, PushBackAddsAnElement) {
@@ -441,12 +422,12 @@ TEST_F(SequentialTest, PrettyPrintSequential) {
 
 TEST_F(SequentialTest, PrettyPrintSequentialNamedSubmodules) {
   Sequential sequential(
-      "linear", Linear(10, 3),
-      "conv2d", Conv2d(1, 2, 3),
-      "dropout", Dropout(0.5),
-      "batchnorm", BatchNorm(5),
-      "embedding", Embedding(4, 10),
-      "lstm", LSTM(4, 5)
+      std::make_pair("linear", Linear(10, 3)),
+      std::make_pair("conv2d", Conv2d(1, 2, 3)),
+      std::make_pair("dropout", Dropout(0.5)),
+      std::make_pair("batchnorm", BatchNorm(5)),
+      std::make_pair("embedding", Embedding(4, 10)),
+      std::make_pair("lstm", LSTM(4, 5))
   );
   ASSERT_EQ(
       c10::str(sequential),
