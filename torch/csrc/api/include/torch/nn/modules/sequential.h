@@ -195,6 +195,42 @@ class SequentialImpl : public Cloneable<SequentialImpl> {
     register_module(std::to_string(index), modules_[index].ptr());
   }
 
+  // yf225 TODO: using `M` here is OK, because http://www.cplusplus.com/reference/utility/make_pair/ says
+  // "If T1 and/or T2 are rvalue references, the objects are moved and x and/or y are left in an undefined but valid state."
+  // So no copying is done in std::make_pair(), which is good
+  
+  template <typename M>
+  void push_back(std::pair<std::string, M>&& named_module) {
+    if (torch::detail::is_module<M>::value) {
+      auto index = add_to_modules(std::move(named_module.second));
+      register_module(named_module.first, modules_[index].ptr());
+    } else if (torch::detail::is_module_holder<M>::value) {
+      auto index = add_to_modules(named_module.second);
+      register_module(named_module.first, modules_[index].ptr());
+    } else {  // shared_ptr<M> type. How do we check this properly??
+      auto index = add_to_modules(named_module.second);
+      register_module(named_module.first, modules_[index].ptr());
+    }
+  }
+
+  // yf225 TODO: using `M` here is OK, because http://www.cplusplus.com/reference/utility/make_pair/ says
+  // "If T1 and/or T2 are rvalue references, the objects are moved and x and/or y are left in an undefined but valid state."
+  // So no copying is done in std::make_pair(), which is good
+  
+  template <typename M>
+  void push_back(std::pair<const char*, M>&& named_module) {
+    if (torch::detail::is_module<M>::value) {
+      auto index = add_to_modules(std::move(named_module.second));
+      register_module(named_module.first, modules_[index].ptr());
+    } else if (torch::detail::is_module_holder<M>::value) {
+      auto index = add_to_modules(named_module.second);
+      register_module(named_module.first, modules_[index].ptr());
+    } else {  // shared_ptr<M> type. How do we check this properly??
+      auto index = add_to_modules(named_module.second);
+      register_module(named_module.first, modules_[index].ptr());
+    }
+  }
+
   /// Unwraps the contained module of a `ModuleHolder` and adds it to the
   /// `Sequential`.
   ///
@@ -203,20 +239,6 @@ class SequentialImpl : public Cloneable<SequentialImpl> {
   void push_back(const ModuleHolder<M>& module_holder) {
     auto index = add_to_modules(module_holder);
     register_module(std::to_string(index), modules_[index].ptr());
-  }
-
-  /// Adds a new named module to the `Sequential` container, with name of `std::string` type.
-  template <typename M>
-  void push_back(std::string name, M module) {
-    auto index = add_to_modules(module);
-    register_module(name, modules_[index].ptr());
-  }
-
-  /// Adds a new named module to the `Sequential` container, with name of `const char*` type.
-  template <typename M>
-  void push_back(const char* name, M module) {
-    auto index = add_to_modules(module);
-    register_module(name, modules_[index].ptr());
   }
 
   /// Iterates over the container and calls `push_back()` on each value.
@@ -308,22 +330,6 @@ class SequentialImpl : public Cloneable<SequentialImpl> {
   }
 
  private:
-  /// Matches `Sequential(std::string("m1"), Module(1), ...)` case
-  template <typename Module, typename... Rest>
-  void push_back(std::string name, Module&& module, Rest&&... rest) {
-    auto index = add_to_modules(module);
-    register_module(name, modules_[index].ptr());
-    push_back(std::forward<Rest>(rest)...);
-  }
-
-  /// Matches `Sequential("m1", Module(1), ...)` case
-  template <typename Module, typename... Rest>
-  void push_back(const char* name, Module&& module, Rest&&... rest) {
-    auto index = add_to_modules(module);
-    register_module(std::string(name), modules_[index].ptr());
-    push_back(std::forward<Rest>(rest)...);
-  }
-
   /// Takes a First *and* Second parameter, to avoid ambiguity when a parameter
   /// pack has only one type, in which case the template would be preferred,
   /// even if the other `push_back` functions are better fits (e.g. `unique_ptr`
