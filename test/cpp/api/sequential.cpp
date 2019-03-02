@@ -32,6 +32,13 @@ TEST_F(SequentialTest, ConstructsFromSharedPointer) {
   Sequential sequential(
       std::make_shared<M>(1), std::make_shared<M>(2), std::make_shared<M>(3));
   ASSERT_EQ(sequential->size(), 3);
+
+  Sequential sequential_named_modules(
+    std::make_pair("m1", std::make_shared<M>(1)),
+    std::make_pair(std::string("m2"), std::make_shared<M>(2)),
+    std::make_pair("m3", std::make_shared<M>(3))
+  );
+  ASSERT_EQ(sequential_named_modules->size(), 3);
 }
 
 TEST_F(SequentialTest, ConstructsFromConcreteType) {
@@ -45,6 +52,13 @@ TEST_F(SequentialTest, ConstructsFromConcreteType) {
 
   Sequential sequential(M(1), M(2), M(3));
   ASSERT_EQ(sequential->size(), 3);
+
+  Sequential sequential_named_modules(
+    std::make_pair("m1", M(1)),
+    std::make_pair(std::string("m2"), M(2)),
+    std::make_pair("m3", M(3))
+  );
+  ASSERT_EQ(sequential_named_modules->size(), 3);
 }
 
 TEST_F(SequentialTest, ConstructsFromModuleHolder) {
@@ -63,62 +77,13 @@ TEST_F(SequentialTest, ConstructsFromModuleHolder) {
 
   Sequential sequential(M(1), M(2), M(3));
   ASSERT_EQ(sequential->size(), 3);
-}
 
-TEST_F(SequentialTest, ConstructsFromSharedPointerWithName) {
-  struct M : torch::nn::Module {
-    explicit M(int value_) : value(value_) {}
-    int value;
-    int forward() {
-      return value;
-    }
-  };
-
-  Sequential sequential(
-    std::make_pair("m1", std::make_shared<M>(1)),
-    std::make_pair(std::string("m2"), std::make_shared<M>(2)),
-    std::make_pair("m3", std::make_shared<M>(3))
-  );
-  ASSERT_EQ(sequential->size(), 3);
-}
-
-TEST_F(SequentialTest, ConstructsFromModuleHolderWithName) {
-  struct MImpl : torch::nn::Module {
-    explicit MImpl(int value_) : value(value_) {}
-    int forward() {
-      return value;
-    }
-    int value;
-  };
-
-  struct M : torch::nn::ModuleHolder<MImpl> {
-    using torch::nn::ModuleHolder<MImpl>::ModuleHolder;
-    using torch::nn::ModuleHolder<MImpl>::get;
-  };
-
-  Sequential sequential(
+  Sequential sequential_named_modules(
     std::make_pair("m1", M(1)),
     std::make_pair(std::string("m2"), M(2)),
     std::make_pair("m3", M(3))
   );
-  ASSERT_EQ(sequential->size(), 3);
-}
-
-TEST_F(SequentialTest, ConstructsFromConcreteTypeWithName) {
-  struct M : torch::nn::Module {
-    explicit M(int value_) : value(value_) {}
-    int value;
-    int forward() {
-      return value;
-    }
-  };
-
-  Sequential sequential(
-    std::make_pair("m1", M(1)),
-    std::make_pair(std::string("m2"), M(2)),
-    std::make_pair("m3", M(3))
-  );
-  ASSERT_EQ(sequential->size(), 3);
+  ASSERT_EQ(sequential_named_modules->size(), 3);
 }
 
 TEST_F(SequentialTest, PushBackAddsAnElement) {
