@@ -33,12 +33,12 @@ TEST_F(SequentialTest, ConstructsFromSharedPointer) {
       std::make_shared<M>(1), std::make_shared<M>(2), std::make_shared<M>(3));
   ASSERT_EQ(sequential->size(), 3);
 
-  Sequential sequential_named_modules(
+  Sequential sequential_named(
     std::make_pair("m1", std::make_shared<M>(1)),
     std::make_pair(std::string("m2"), std::make_shared<M>(2)),
     std::make_pair("m3", std::make_shared<M>(3))
   );
-  ASSERT_EQ(sequential_named_modules->size(), 3);
+  ASSERT_EQ(sequential_named->size(), 3);
 }
 
 TEST_F(SequentialTest, ConstructsFromConcreteType) {
@@ -53,12 +53,12 @@ TEST_F(SequentialTest, ConstructsFromConcreteType) {
   Sequential sequential(M(1), M(2), M(3));
   ASSERT_EQ(sequential->size(), 3);
 
-  Sequential sequential_named_modules(
+  Sequential sequential_named(
     std::make_pair("m1", M(1)),
     std::make_pair(std::string("m2"), M(2)),
     std::make_pair("m3", M(3))
   );
-  ASSERT_EQ(sequential_named_modules->size(), 3);
+  ASSERT_EQ(sequential_named->size(), 3);
 }
 
 TEST_F(SequentialTest, ConstructsFromModuleHolder) {
@@ -78,12 +78,12 @@ TEST_F(SequentialTest, ConstructsFromModuleHolder) {
   Sequential sequential(M(1), M(2), M(3));
   ASSERT_EQ(sequential->size(), 3);
 
-  Sequential sequential_named_modules(
+  Sequential sequential_named(
     std::make_pair("m1", M(1)),
     std::make_pair(std::string("m2"), M(2)),
     std::make_pair("m3", M(3))
   );
-  ASSERT_EQ(sequential_named_modules->size(), 3);
+  ASSERT_EQ(sequential_named->size(), 3);
 }
 
 TEST_F(SequentialTest, PushBackAddsAnElement) {
@@ -103,27 +103,32 @@ TEST_F(SequentialTest, PushBackAddsAnElement) {
   ASSERT_EQ(sequential->size(), 2);
   sequential->push_back(M(2));
   ASSERT_EQ(sequential->size(), 3);
-}
 
-// yf225 TODO: should we add push_back("linear", Linear(3, 4)) API?
-// TEST_F(SequentialTest, PushBackAddsAnElementWithName) {
-//   struct M : torch::nn::Module {
-//     explicit M(int value_) : value(value_) {}
-//     int forward() {
-//       return value;
-//     }
-//     int value;
-//   };
-//   Sequential sequential;
-//   ASSERT_EQ(sequential->size(), 0);
-//   ASSERT_TRUE(sequential->is_empty());
-//   sequential->push_back("linear", Linear(3, 4));
-//   ASSERT_EQ(sequential->size(), 1);
-//   sequential->push_back(std::string("m1"), std::make_shared<M>(1));
-//   ASSERT_EQ(sequential->size(), 2);
-//   sequential->push_back("m2", M(2));
-//   ASSERT_EQ(sequential->size(), 3);
-// }
+  Sequential sequential_named;
+  ASSERT_EQ(sequential_named->size(), 0);
+  ASSERT_TRUE(sequential_named->is_empty());
+
+  sequential_named->push_back(std::make_pair("linear1", Linear(3, 4)));
+  ASSERT_EQ(sequential_named->size(), 1);
+  ASSERT_EQ(sequential_named->ptr(0)->name(), "linear1");
+  sequential_named->push_back(std::make_pair(std::string("linear2"), Linear(3, 4)));
+  ASSERT_EQ(sequential_named->size(), 2);
+  ASSERT_EQ(sequential_named->ptr(1)->name(), "linear2");
+
+  sequential_named->push_back(std::make_pair("shared_m1", std::make_shared<M>(1)));
+  ASSERT_EQ(sequential_named->size(), 3);
+  ASSERT_EQ(sequential_named->ptr(2)->name(), "shared_m1");
+  sequential_named->push_back(std::make_pair(std::string("shared_m2"), std::make_shared<M>(1)));
+  ASSERT_EQ(sequential_named->size(), 4);
+  ASSERT_EQ(sequential_named->ptr(3)->name(), "shared_m2");
+
+  sequential_named->push_back(std::make_pair("m1", M(1)));
+  ASSERT_EQ(sequential_named->size(), 5);
+  ASSERT_EQ(sequential_named->ptr(4)->name(), "m1");
+  sequential_named->push_back(std::make_pair(std::string("m2"), M(1)));
+  ASSERT_EQ(sequential_named->size(), 6);
+  ASSERT_EQ(sequential_named->ptr(5)->name(), "m2");
+}
 
 TEST_F(SequentialTest, AccessWithAt) {
   struct M : torch::nn::Module {

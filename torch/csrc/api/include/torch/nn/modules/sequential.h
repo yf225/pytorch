@@ -195,10 +195,19 @@ class SequentialImpl : public Cloneable<SequentialImpl> {
     register_module(std::to_string(index), modules_[index].ptr());
   }
 
+  /// Unwraps the contained module of a `ModuleHolder` and adds it to the
+  /// `Sequential`.
+  ///
+  /// See `add_to_modules(const ModuleHolder<M>& module_holder)` for implementation detail.
+  template <typename M>
+  void push_back(const ModuleHolder<M>& module_holder) {
+    auto index = add_to_modules(module_holder);
+    register_module(std::to_string(index), modules_[index].ptr());
+  }
+
   // yf225 TODO: using `M` here is OK, because http://www.cplusplus.com/reference/utility/make_pair/ says
   // "If T1 and/or T2 are rvalue references, the objects are moved and x and/or y are left in an undefined but valid state."
   // So no copying is done in std::make_pair(), which is good
-  
   template <typename M>
   void push_back(std::pair<std::string, M>&& named_module) {
     if (torch::detail::is_module<M>::value) {
@@ -216,7 +225,6 @@ class SequentialImpl : public Cloneable<SequentialImpl> {
   // yf225 TODO: using `M` here is OK, because http://www.cplusplus.com/reference/utility/make_pair/ says
   // "If T1 and/or T2 are rvalue references, the objects are moved and x and/or y are left in an undefined but valid state."
   // So no copying is done in std::make_pair(), which is good
-  
   template <typename M>
   void push_back(std::pair<const char*, M>&& named_module) {
     if (torch::detail::is_module<M>::value) {
@@ -229,16 +237,6 @@ class SequentialImpl : public Cloneable<SequentialImpl> {
       auto index = add_to_modules(named_module.second);
       register_module(named_module.first, modules_[index].ptr());
     }
-  }
-
-  /// Unwraps the contained module of a `ModuleHolder` and adds it to the
-  /// `Sequential`.
-  ///
-  /// See `add_to_modules(const ModuleHolder<M>& module_holder)` for implementation detail.
-  template <typename M>
-  void push_back(const ModuleHolder<M>& module_holder) {
-    auto index = add_to_modules(module_holder);
-    register_module(std::to_string(index), modules_[index].ptr());
   }
 
   /// Iterates over the container and calls `push_back()` on each value.
