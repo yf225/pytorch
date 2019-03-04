@@ -88,6 +88,13 @@ namespace nn {
 ///   must accept a single argument. If your modules need to take multiple
 ///   arguments, you should define them to take and return tuples.
 /// \endrst
+
+template<class T>
+struct is_shared_ptr : std::false_type {};
+
+template<class T>
+struct is_shared_ptr<std::shared_ptr<T>> : std::true_type {};
+
 class SequentialImpl : public Cloneable<SequentialImpl> {
  public:
   using Iterator = std::vector<AnyModule>::iterator;
@@ -216,7 +223,7 @@ class SequentialImpl : public Cloneable<SequentialImpl> {
     } else if (torch::detail::is_module_holder<M>::value) {
       auto index = add_to_modules(named_module.second);
       register_module(named_module.first, modules_[index].ptr());
-    } else {  // shared_ptr<M> type. How do we check this properly??
+    } else if (is_shared_ptr<M>::value) {  // yf225 TODO: shared_ptr<M> type. How do we check this properly??
       auto index = add_to_modules(named_module.second);
       register_module(named_module.first, modules_[index].ptr());
     }
@@ -233,7 +240,7 @@ class SequentialImpl : public Cloneable<SequentialImpl> {
     } else if (torch::detail::is_module_holder<M>::value) {
       auto index = add_to_modules(named_module.second);
       register_module(named_module.first, modules_[index].ptr());
-    } else {  // shared_ptr<M> type. How do we check this properly??
+    } else if (is_shared_ptr<M>::value) {  // yf225 TODO: shared_ptr<M> type. How do we check this properly??
       auto index = add_to_modules(named_module.second);
       register_module(named_module.first, modules_[index].ptr());
     }
