@@ -224,16 +224,7 @@ class SequentialImpl : public Cloneable<SequentialImpl> {
   /// Adds a new named `Module` to the `Sequential` container, with name of type `const char*`.
   template <typename M>
   void push_back(std::pair<const char*, M>&& named_module) {
-    if (torch::detail::is_shared_ptr<M>::value) {
-      auto index = add_to_modules(named_module.second);
-      register_module(named_module.first, modules_[index].ptr());
-    } else if (torch::detail::is_module<M>::value) {
-      auto index = add_to_modules(std::move(named_module.second));
-      register_module(named_module.first, modules_[index].ptr());
-    } else if (torch::detail::is_module_holder<M>::value) {
-      auto index = add_to_modules(named_module.second);
-      register_module(named_module.first, modules_[index].ptr());
-    }
+    push_back(std::make_pair(std::string(named_module.first), std::move(named_module.second)));
   }
 
   /// Iterates over the container and calls `push_back()` on each value.
