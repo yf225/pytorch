@@ -88,7 +88,6 @@ namespace nn {
 ///   must accept a single argument. If your modules need to take multiple
 ///   arguments, you should define them to take and return tuples.
 /// \endrst
-
 class SequentialImpl : public Cloneable<SequentialImpl> {
  public:
   using Iterator = std::vector<AnyModule>::iterator;
@@ -192,7 +191,7 @@ class SequentialImpl : public Cloneable<SequentialImpl> {
   /// See `add_to_modules(M&& module)` for implementation detail.
   template <typename M, typename = torch::detail::enable_if_module_t<M>>
   void push_back(M&& module) {
-    auto index = add_to_modules(module);
+    auto index = add_to_modules(std::forward<M>(module));
     register_module(std::to_string(index), modules_[index].ptr());
   }
 
@@ -211,20 +210,20 @@ class SequentialImpl : public Cloneable<SequentialImpl> {
   void push_back(std::pair<std::string, M>&& named_module) {
     if (torch::detail::is_shared_ptr<M>::value) {
       auto index = add_to_modules(named_module.second);
-      register_module(named_module.first, modules_[index].ptr());
+      register_module(std::move(named_module.first), modules_[index].ptr());
     } else if (torch::detail::is_module<M>::value) {
-      auto index = add_to_modules(std::move(named_module.second));
-      register_module(named_module.first, modules_[index].ptr());
+      auto index = add_to_modules(std::forward<M>(named_module.second));  // yf225 TODO: should we use move() or forward() here??
+      register_module(std::move(named_module.first), modules_[index].ptr());
     } else if (torch::detail::is_module_holder<M>::value) {
       auto index = add_to_modules(named_module.second);
-      register_module(named_module.first, modules_[index].ptr());
+      register_module(std::move(named_module.first), modules_[index].ptr());
     }
   }
 
   /// Adds a new named `Module` to the `Sequential` container, with name of type `const char*`.
   template <typename M>
   void push_back(std::pair<const char*, M>&& named_module) {
-    push_back(std::make_pair(std::string(named_module.first), std::move(named_module.second)));
+    push_back(std::make_pair(std::string(named_module.first), std::forward<M>(named_module.second)));
   }
 
   /// Iterates over the container and calls `push_back()` on each value.

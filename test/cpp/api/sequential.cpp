@@ -44,6 +44,9 @@ TEST_F(SequentialTest, ConstructsFromSharedPointer) {
 TEST_F(SequentialTest, ConstructsFromConcreteType) {
   struct M : torch::nn::Module {
     explicit M(int value_) : value(value_) {}
+    // Delete the copy constructor to make sure we are not
+    // copying the submodule in `nn::Sequential` construction.
+    M(const M&) = delete;
     int value;
     int forward() {
       return value;
@@ -59,6 +62,16 @@ TEST_F(SequentialTest, ConstructsFromConcreteType) {
     std::make_pair("m3", M(3))
   );
   ASSERT_EQ(sequential_named->size(), 3);
+
+  M m1 = M(1);
+  M m2 = M(2);
+  M m3 = M(3);
+  Sequential sequential_named_lvalue(
+    std::make_pair("m1", m1),
+    std::make_pair(std::string("m2"), m2),
+    std::make_pair("m3", m3)
+  )
+  ASSERT_EQ(sequential_named_lvalue->size(), 3);
 }
 
 TEST_F(SequentialTest, ConstructsFromModuleHolder) {
