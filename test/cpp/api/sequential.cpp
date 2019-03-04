@@ -94,6 +94,8 @@ TEST_F(SequentialTest, PushBackAddsAnElement) {
     }
     int value;
   };
+
+  // Test unnamed submodules
   Sequential sequential;
   ASSERT_EQ(sequential->size(), 0);
   ASSERT_TRUE(sequential->is_empty());
@@ -104,6 +106,7 @@ TEST_F(SequentialTest, PushBackAddsAnElement) {
   sequential->push_back(M(2));
   ASSERT_EQ(sequential->size(), 3);
 
+  // Test named submodules
   Sequential sequential_named;
   ASSERT_EQ(sequential_named->size(), 0);
   ASSERT_TRUE(sequential_named->is_empty());
