@@ -72,3 +72,9 @@ using return_type_of_forward = return_type_of_forward_impl<
 template <typename C, typename... Args>
 using return_type_of_forward_t =
     typename return_type_of_forward<C, Args...>::type;
+
+template<class T>
+struct is_shared_ptr : std::false_type {};
+
+template<class T>
+struct is_shared_ptr<std::shared_ptr<T>> : std::true_type {};
