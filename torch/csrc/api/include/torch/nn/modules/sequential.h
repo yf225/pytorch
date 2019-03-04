@@ -207,11 +207,27 @@ class SequentialImpl : public Cloneable<SequentialImpl> {
 
   /// Adds a new named `Module` to the `Sequential` container, with name of type `std::string`.
   template <typename M>
-  void push_back(std::pair<std::string, M>&& named_module) {
-    if (torch::detail::is_shared_ptr<M>::value) {
-      auto index = add_to_modules(named_module.second);
-      register_module(std::move(named_module.first), modules_[index].ptr());
-    } else if (torch::detail::is_module<M>::value) {
+  void push_back(std::tuple<std::string&&, std::shared_ptr<M>&&> named_module) {
+    auto index = add_to_modules(std::get<1>(named_module));
+    register_module(std::move(std::get<0>(named_module)), modules_[index].ptr());
+  }
+
+  /// Adds a new named `Module` to the `Sequential` container, with name of type `std::string`.
+  template <typename M>
+  void push_back(std::tuple<std::string&&, M&&> named_module) {
+    if (torch::detail::is_module<M>::value) {
+      auto index = add_to_modules(std::forward<M>(std::get<1>(named_module)));  // yf225 TODO: should we use move() or forward() here??
+      register_module(std::move(std::get<0>(named_module)), modules_[index].ptr());
+    } else if (torch::detail::is_module_holder<M>::value) {
+      auto index = add_to_modules(std::get<1>(named_module));
+      register_module(std::move(std::get<0>(named_module)), modules_[index].ptr());
+    }
+  }
+
+  /// Adds a new named `Module` to the `Sequential` container, with name of type `std::string`.
+  template <typename M>
+  void push_back(std::pair<std::string, M> named_module) {
+    if (torch::detail::is_module<M>::value) {
       auto index = add_to_modules(std::forward<M>(named_module.second));  // yf225 TODO: should we use move() or forward() here??
       register_module(std::move(named_module.first), modules_[index].ptr());
     } else if (torch::detail::is_module_holder<M>::value) {
@@ -220,11 +236,12 @@ class SequentialImpl : public Cloneable<SequentialImpl> {
     }
   }
 
-  /// Adds a new named `Module` to the `Sequential` container, with name of type `const char*`.
-  template <typename M>
-  void push_back(std::pair<const char*, M>&& named_module) {
-    push_back(std::make_pair(std::string(named_module.first), std::forward<M>(named_module.second)));
-  }
+  // yf225 TODO: try to make `const char *` to work!!
+  // /// Adds a new named `Module` to the `Sequential` container, with name of type `const char*`.
+  // template <typename M>
+  // void push_back(std::tuple<std::string&, M&&>&& named_module) {
+  //   push_back(std::make_pair(std::string(named_module.first), std::forward<M>(named_module.second)));
+  // }
 
   /// Iterates over the container and calls `push_back()` on each value.
   template <typename Container>
