@@ -206,35 +206,31 @@ class SequentialImpl : public Cloneable<SequentialImpl> {
     register_module(std::to_string(index), modules_[index].ptr());
   }
 
-  // yf225 TODO: using `M` here is OK, because http://www.cplusplus.com/reference/utility/make_pair/ says
-  // "If T1 and/or T2 are rvalue references, the objects are moved and x and/or y are left in an undefined but valid state."
-  // So no copying is done in std::make_pair(), which is good
+  /// Adds a new named `Module` to the `Sequential` container, with name of type `std::string`.
   template <typename M>
   void push_back(std::pair<std::string, M>&& named_module) {
-    if (torch::detail::is_module<M>::value) {
+    if (torch::detail::is_shared_ptr<M>::value) {
+      auto index = add_to_modules(named_module.second);
+      register_module(named_module.first, modules_[index].ptr());
+    } else if (torch::detail::is_module<M>::value) {
       auto index = add_to_modules(std::move(named_module.second));
       register_module(named_module.first, modules_[index].ptr());
     } else if (torch::detail::is_module_holder<M>::value) {
-      auto index = add_to_modules(named_module.second);
-      register_module(named_module.first, modules_[index].ptr());
-    } else if (torch::detail::is_shared_ptr<M>::value) {  // yf225 TODO: shared_ptr<M> type. How do we check this properly??
       auto index = add_to_modules(named_module.second);
       register_module(named_module.first, modules_[index].ptr());
     }
   }
 
-  // yf225 TODO: using `M` here is OK, because http://www.cplusplus.com/reference/utility/make_pair/ says
-  // "If T1 and/or T2 are rvalue references, the objects are moved and x and/or y are left in an undefined but valid state."
-  // So no copying is done in std::make_pair(), which is good
+  /// Adds a new named `Module` to the `Sequential` container, with name of type `const char*`.
   template <typename M>
   void push_back(std::pair<const char*, M>&& named_module) {
-    if (torch::detail::is_module<M>::value) {
+    if (torch::detail::is_shared_ptr<M>::value) {
+      auto index = add_to_modules(named_module.second);
+      register_module(named_module.first, modules_[index].ptr());
+    } else if (torch::detail::is_module<M>::value) {
       auto index = add_to_modules(std::move(named_module.second));
       register_module(named_module.first, modules_[index].ptr());
     } else if (torch::detail::is_module_holder<M>::value) {
-      auto index = add_to_modules(named_module.second);
-      register_module(named_module.first, modules_[index].ptr());
-    } else if (torch::detail::is_shared_ptr<M>::value) {  // yf225 TODO: shared_ptr<M> type. How do we check this properly??
       auto index = add_to_modules(named_module.second);
       register_module(named_module.first, modules_[index].ptr());
     }
