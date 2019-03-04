@@ -110,24 +110,24 @@ TEST_F(SequentialTest, PushBackAddsAnElement) {
 
   sequential_named->push_back(std::make_pair("linear1", Linear(3, 4)));
   ASSERT_EQ(sequential_named->size(), 1);
-  ASSERT_EQ(sequential_named->ptr(0)->name(), "linear1");
+  ASSERT_EQ(sequential_named->named_children()[0].key(), "linear1");
   sequential_named->push_back(std::make_pair(std::string("linear2"), Linear(3, 4)));
   ASSERT_EQ(sequential_named->size(), 2);
-  ASSERT_EQ(sequential_named->ptr(1)->name(), "linear2");
+  ASSERT_EQ(sequential_named->named_children()[1].key(), "linear2");
 
   sequential_named->push_back(std::make_pair("shared_m1", std::make_shared<M>(1)));
   ASSERT_EQ(sequential_named->size(), 3);
-  ASSERT_EQ(sequential_named->ptr(2)->name(), "shared_m1");
+  ASSERT_EQ(sequential_named->named_children()[2].key(), "shared_m1");
   sequential_named->push_back(std::make_pair(std::string("shared_m2"), std::make_shared<M>(1)));
   ASSERT_EQ(sequential_named->size(), 4);
-  ASSERT_EQ(sequential_named->ptr(3)->name(), "shared_m2");
+  ASSERT_EQ(sequential_named->named_children()[3].key(), "shared_m2");
 
   sequential_named->push_back(std::make_pair("m1", M(1)));
   ASSERT_EQ(sequential_named->size(), 5);
-  ASSERT_EQ(sequential_named->ptr(4)->name(), "m1");
+  ASSERT_EQ(sequential_named->named_children()[4].key(), "m1");
   sequential_named->push_back(std::make_pair(std::string("m2"), M(1)));
   ASSERT_EQ(sequential_named->size(), 6);
-  ASSERT_EQ(sequential_named->ptr(5)->name(), "m2");
+  ASSERT_EQ(sequential_named->named_children()[5].key(), "m2");
 }
 
 TEST_F(SequentialTest, AccessWithAt) {
