@@ -250,7 +250,6 @@ size_t perftest() {
   auto constant1_0 = graph.insertConstant(IValue(1.0));
   auto constant2_0 = graph.insertConstant(IValue(2.0));
 
-/*
   auto B = A * constant2_0;
   auto C = B + constant1_0;
   auto D = C * constant2_0;
@@ -260,10 +259,6 @@ size_t perftest() {
   auto H = G + C;
   auto I = H * constant2_0;
   auto J = I.exp();
-*/
-  auto B = A * constant2_0;
-  auto C = B + constant1_0;
-  auto J = C.exp();
   J.addAsOutput();
 
   std::chrono::high_resolution_clock::time_point t1 = std::chrono::high_resolution_clock::now();
