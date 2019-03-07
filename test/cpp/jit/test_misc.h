@@ -245,23 +245,25 @@ void testFusion() {
 }
 
 size_t perftest() {
-  // auto A = torch::randn({1000, 1000}, device=device).set_requires_grad(true); 
-  // auto B = 2.0 * A; 
-  // auto C = 1.0 + B; 
-  // auto D = torch::exp(C);
-
   Graph graph;
   Var A = Var::asNewInput(graph);
-  auto constant1 = graph.insertConstant(IValue(2.0));
-  auto B = A * constant1;
-  auto constant2 = graph.insertConstant(IValue(1.0));
-  auto C = B + constant2;
-  auto D = C.exp();
-  D.addAsOutput();
+  auto constant1_0 = graph.insertConstant(IValue(1.0));
+  auto constant2_0 = graph.insertConstant(IValue(2.0));
+
+  auto B = A * constant2_0;
+  auto C = B + constant1_0;
+  auto D = C * constant2_0;
+  auto E = D + constant2_0;
+  auto F = E * constant2_0;
+  auto G = F + E;
+  auto H = G + C;
+  auto I = H * constant2_0;
+  auto J = I.exp();
+  J.addAsOutput();
 
   std::chrono::high_resolution_clock::time_point t1 = std::chrono::high_resolution_clock::now();
 
-  auto a = at::rand({1000, 1000}, at::kCUDA);
+  auto a = torch::ones({1000, 1000}, at::kCUDA).set_requires_grad(true);
   auto outputs = debugLaunchGraph(graph, {a});
 
   auto time_elapsed = std::chrono::duration_cast<std::chrono::microseconds>( std::chrono::high_resolution_clock::now() - t1 ).count();
