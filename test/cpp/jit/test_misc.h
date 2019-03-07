@@ -57,6 +57,9 @@
 #include <utility>
 #include <vector>
 
+#include <chrono>
+using namespace std::chrono;
+
 namespace torch {
 namespace jit {
 namespace {
@@ -240,6 +243,40 @@ void testFusion() {
   testConcat(0);
   testConcat(1);
   testConcat(2);
+}
+
+size_t perftest() {
+  high_resolution_clock::time_point t1 = high_resolution_clock::now();
+
+  // auto A = torch::randn({1000, 1000}, device=device).set_requires_grad(true); 
+  // auto B = 2.0 * A; 
+  // auto C = 1.0 + B; 
+  // auto D = torch::exp(C);
+
+  Graph graph;
+  Var A = Var::asNewInput(graph);
+  auto B = 2.0 * A;
+  auto C = 1.0 + B;
+  auot D = C.exp();
+  D.addAsOutput();
+  auto a = at::rand({1000, 1000}, at::kCUDA);
+  auto outputs = debugLaunchGraph(graph, {a});
+
+  auto time_elapsed = duration_cast<microseconds>( high_resolution_clock::now() - t1 ).count();
+  std::cout << outputs[0].sum() << "\n";
+  std::cout << "time_elapsed: " << time_elapsed << "\n";
+  return time_elapsed;
+}
+
+void testFusionPerf() {
+  int num_epochs = 100;
+  size_t total_time = 0;
+  test();
+  test();
+  for (size_t epoch = 1; epoch <= 100; ++epoch) {
+    total_time += test();
+  }
+  std::cout << "avg time: " << total_time*1.0 / num_epochs << "\n";
 }
 
 void testAttributes() {
