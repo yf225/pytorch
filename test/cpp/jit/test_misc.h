@@ -58,7 +58,6 @@
 #include <vector>
 
 #include <chrono>
-using namespace std::chrono;
 
 namespace torch {
 namespace jit {
@@ -246,7 +245,7 @@ void testFusion() {
 }
 
 size_t perftest() {
-  high_resolution_clock::time_point t1 = high_resolution_clock::now();
+  std::chrono::high_resolution_clock::time_point t1 = std::chrono::high_resolution_clock::now();
 
   // auto A = torch::randn({1000, 1000}, device=device).set_requires_grad(true); 
   // auto B = 2.0 * A; 
@@ -262,7 +261,7 @@ size_t perftest() {
   auto a = at::rand({1000, 1000}, at::kCUDA);
   auto outputs = debugLaunchGraph(graph, {a});
 
-  auto time_elapsed = duration_cast<microseconds>( high_resolution_clock::now() - t1 ).count();
+  auto time_elapsed = std::chrono::duration_cast<std::chrono::microseconds>( std::chrono::high_resolution_clock::now() - t1 ).count();
   std::cout << outputs[0].sum() << "\n";
   std::cout << "time_elapsed: " << time_elapsed << "\n";
   return time_elapsed;
