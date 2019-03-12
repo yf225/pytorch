@@ -76,7 +76,7 @@ Tensor embedding_sparse_backward(
   }
 
   auto index = indices.reshape({1, -1});
-  auto values = grad.reshape({-1, num_features});
+  auto values = grad.reshape({-1, num_features}).clone();
   return at::_sparse_coo_tensor_unsafe(index, values, weight_size);
 }
 
