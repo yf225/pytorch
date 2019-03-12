@@ -108,6 +108,14 @@ int64_t Variable::Impl::get_device_slow() const {
   return data_.get_device();
 }
 
+c10::intrusive_ptr<at::TensorImpl> Variable::Impl::shallow_copy_and_detach() const {
+  return c10::make_intrusive<Variable::Impl>(
+    /*data=*/at::Tensor(data_.getIntrusivePtr()->shallow_copy_and_detach()),
+    /*autograd_meta=*/c10::guts::make_unique<Variable::AutogradMeta>(),
+    /*requires_grad=*/false,
+    /*gradient_edge=*/Edge());
+}
+
 std::shared_ptr<Function> Variable::grad_accumulator() const {
   auto autograd_meta = get_autograd_meta();
   if (autograd_meta->grad_fn_) {

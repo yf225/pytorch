@@ -433,6 +433,8 @@ struct TORCH_API Variable::Impl : public at::TensorImpl {
 
   int64_t storage_offset() const override;
 
+  c10::intrusive_ptr<at::TensorImpl> shallow_copy_and_detach() const override;
+
   /// The underlying data tensor for this Variable.
   /// This field will be removed once VariableImpl and TensorImpl are merged.
   at::Tensor data_;
