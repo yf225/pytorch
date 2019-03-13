@@ -403,8 +403,7 @@ struct C10_API TensorOptions {
   /// Mutably set the `is_variable` property of `TensorOptions`.
   void set_is_variable(c10::optional<bool> is_variable) & noexcept {
     if (is_variable) {
-      // is_variable_ = *is_variable;
-      is_variable = false;  // DEBUG: try to always set it to false
+      is_variable_ = *is_variable;
       has_is_variable_ = true;
     } else {
       has_is_variable_ = false;
