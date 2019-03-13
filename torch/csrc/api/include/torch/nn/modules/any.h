@@ -416,10 +416,17 @@ struct AnyModule::Holder : public AnyModule::Placeholder {
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ AnyModule ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 template <typename ModuleType>
-AnyModule::AnyModule(std::shared_ptr<ModuleType> module)
-    : content_(make_holder(
+AnyModule::AnyModule(std::shared_ptr<ModuleType> module) {
+  static_assert(
+      torch::detail::is_module<ModuleType>::value,
+      "Can only store object derived from nn::Module into AnyModule");
+  static_assert(
+      torch::detail::has_forward<ModuleType>::value,
+      "Can only store module with a forward() method into AnyModule");
+  content_ = make_holder(
           std::move(module),
-          &std::remove_reference<ModuleType>::type::forward)) {}
+          &std::remove_reference<ModuleType>::type::forward);
+}
 
 template <typename ModuleType, typename>
 AnyModule::AnyModule(ModuleType&& module)
