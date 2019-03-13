@@ -28,6 +28,7 @@ Tensor & TypeDefault::copy_(Tensor & self, const Tensor & src, bool non_blocking
 }
 
 Tensor TypeDefault::copy(const Tensor & src, bool non_blocking, optional<Device> to_device) const {
+  debug_flag_yf225 = 1;
   AT_CHECK(src.defined(), "attempt to copy an undefined tensor");
   Tensor r;
   if (is_sparse()) {

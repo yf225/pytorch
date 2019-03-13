@@ -7,6 +7,8 @@
 
 #include <iostream>
 
+int debug_flag_yf225 = 0;
+
 namespace c10 {
 
 std::ostream& operator<<(

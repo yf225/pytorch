@@ -14,6 +14,8 @@
 #include <iosfwd>
 #include <utility>
 
+extern C10_API int debug_flag_yf225;
+
 namespace c10 {
 /// A class to encapsulate construction axes of an Tensor.  TensorOptions was
 /// designed to support the Python style API for specifying construction options
