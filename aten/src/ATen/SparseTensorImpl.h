@@ -100,8 +100,8 @@ public:
       AT_CHECK(sparse_dim == sparse_dim_,
         "changing the number of sparse dimensions (from ", sparse_dim_, " to ", sparse_dim, ") on a non-empty sparse tensor is not supported.\n", alt_options_msg);
 
-      AT_CHECK(dense_dim == dense_dim_,
-        "changing the number of dense dimensions (from ", dense_dim_, " to ", dense_dim, ") on a non-empty sparse tensor is not supported.\n", alt_options_msg);
+      // AT_CHECK(dense_dim == dense_dim_,
+      //   "changing the number of dense dimensions (from ", dense_dim_, " to ", dense_dim, ") on a non-empty sparse tensor is not supported.\n", alt_options_msg);
 
       bool shrinking_sparse_dims = false;
       bool shrinking_dense_dim = false;
@@ -125,8 +125,8 @@ public:
       AT_CHECK(!shrinking_sparse_dims,
         "shrinking the size of sparse dimensions (from ", sparse_size_original, " to ", sparse_size_new, ") on a non-empty sparse tensor is not supported.\n", alt_options_msg);
 
-      AT_CHECK(!shrinking_dense_dim,
-        "shrinking the size of dense dimensions (from ", dense_size_original, " to ", dense_size_new, ") on a non-empty sparse tensor is not supported.\n", alt_options_msg);
+      // AT_CHECK(!shrinking_dense_dim,
+      //   "shrinking the size of dense dimensions (from ", dense_size_original, " to ", dense_size_new, ") on a non-empty sparse tensor is not supported.\n", alt_options_msg);
     }
 
     if ((!size.equals(sizes_)) || (sparse_dim != sparse_dim_) || (dense_dim != dense_dim_)) {
