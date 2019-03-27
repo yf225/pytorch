@@ -36,6 +36,7 @@ bool GradMode::is_enabled() {
 }
 
 void GradMode::set_enabled(bool enabled) {
+  std::cout << "GradMode::set_enabled: " << enabled << std::endl;
   GradMode_enabled = enabled;
 }
 

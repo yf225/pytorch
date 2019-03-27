@@ -3017,7 +3017,10 @@ def add_test(
                     self_variable.requires_grad = False
                 # need to record this because methods can change the size (e.g. unsqueeze)
                 args_variable, kwargs_variable = create_input(args, requires_grad=not is_inplace, call_kwargs=kwargs)
-                self_tensor = deepcopy(self_variable.data)
+                print("test_autograd.py here1")
+                self_variable_data = self_variable.data
+                print("test_autograd.py here2")
+                self_tensor = deepcopy(self_variable_data)
                 args_tensor = deepcopy(unpack_variables(args_variable))
                 output_variable = getattr(self_variable, name)(*args_variable, **kwargs_variable)
                 if not exclude_tensor_method(name, test_name):

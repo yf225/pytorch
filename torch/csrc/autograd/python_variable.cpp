@@ -49,11 +49,16 @@ static const char* VOLATILE_WARNING =
 // have a PyObject* associated with it.
 static PyObject* THPVariable_NewWithVar(PyTypeObject* type, Variable var)
 {
+  std::cout << "THPVariable_NewWithVar here1" << std::endl;
   PyObject* obj = type->tp_alloc(type, 0);
+  std::cout << "THPVariable_NewWithVar here2" << std::endl;
   if (obj) {
+    std::cout << "THPVariable_NewWithVar here3" << std::endl;
     auto v = (THPVariable*) obj;
     new (&v->cdata) Variable(std::move(var));
+    std::cout << "THPVariable_NewWithVar here4" << std::endl;
     v->cdata.set_pyobj(obj);
+    std::cout << "THPVariable_NewWithVar here5" << std::endl;
     if (auto fn = dynamic_cast<PyFunction*>(v->cdata.grad_fn_unsafe())) {
       // Create a new reference to the THPFunction. This ensures that ref count
       // of the THPFunction is at least the number of referring THPVariables.
@@ -61,20 +66,24 @@ static PyObject* THPVariable_NewWithVar(PyTypeObject* type, Variable var)
       auto grad_fn = THPFunction_asFunction((THPFunction*)fn->obj);
       v->cdata.set_gradient_edge({std::move(grad_fn), output_nr});
     }
+    std::cout << "THPVariable_NewWithVar here6" << std::endl;
   }
   return obj;
 }
 
 PyObject * THPVariable_Wrap(Variable var)
 {
+  std::cout << "THPVariable_Wrap here1" << std::endl;
   if (!var.defined()) {
     Py_RETURN_NONE;
   }
+  std::cout << "THPVariable_Wrap here2" << std::endl;
 
   if (auto obj = var.pyobj()) {
     Py_INCREF(obj);
     return obj;
   }
+  std::cout << "THPVariable_Wrap here3" << std::endl;
 
   return THPVariable_NewWithVar((PyTypeObject *)THPVariableClass, std::move(var));
 }

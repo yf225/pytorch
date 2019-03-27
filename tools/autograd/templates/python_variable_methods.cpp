@@ -485,7 +485,9 @@ static PyObject * THPVariable_new(PyObject* self, PyObject* args, PyObject* kwar
   HANDLE_TH_ERRORS
   auto& self_ = reinterpret_cast<THPVariable*>(self)->cdata;
   OptionalDeviceGuard device_guard(device_of(self_));
-  return THPVariable_Wrap(torch::utils::legacy_tensor_new(self_.type(), args, kwargs));
+  std::cout << "at::GradMode::is_enabled(): " << at::GradMode::is_enabled() << "\n";
+  auto tmp = torch::utils::legacy_tensor_new(self_.type(), args, kwargs);
+  return THPVariable_Wrap(tmp);
   END_HANDLE_TH_ERRORS
 }
 
