@@ -29,6 +29,7 @@ class Tensor(torch._C._TensorBase):
                 new_tensor = self.clone()
             else:
                 new_storage = self.storage().__deepcopy__(memo)
+                # yf225 TODO COMMENT: we should allow creation of Variable even in a `torch.no_grad()` block
                 new_tensor = self.new()
                 new_tensor.set_(new_storage, self.storage_offset(), self.size(), self.stride())
             memo[id(self)] = new_tensor

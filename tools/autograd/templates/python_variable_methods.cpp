@@ -486,6 +486,10 @@ static PyObject * THPVariable_new(PyObject* self, PyObject* args, PyObject* kwar
   auto& self_ = reinterpret_cast<THPVariable*>(self)->cdata;
   OptionalDeviceGuard device_guard(device_of(self_));
   std::cout << "at::GradMode::is_enabled(): " << at::GradMode::is_enabled() << "\n";
+  // yf225 TODO COMMENT: this function might be called in a `torch.no_grad()` block (e.g. 
+  // torch/tensor.py:"new_tensor = self.new()"), and
+  // in those scenarios `self_.type()` should still return a Variable type so that
+  // `new_tensor = self.new()` can work
   auto tmp = torch::utils::legacy_tensor_new(self_.type(), args, kwargs);
   return THPVariable_Wrap(tmp);
   END_HANDLE_TH_ERRORS
