@@ -86,7 +86,7 @@ class NamedAnyModule {
 // figuring out the types of its elements and do the matching to the correct
 // module type.
 torch::OrderedDict<std::string, AnyModule> modules_ordered_dict(
-  std::initializer_list<NamedAnyModule> named_modules);
+  std::initializer_list<std::pair<std::string, AnyModule>> named_modules);
 
 } // namespace nn
 } // namespace torch
