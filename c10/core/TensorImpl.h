@@ -533,6 +533,43 @@ struct C10_API TensorImpl : public c10::intrusive_ptr_target {
    * It is only valid to call this method on a Variable.
    * See Note [Tensor versus Variable in C++].
    */
+  // yf225 TODO IMPORTANT: if there is no autograd_meta and requires_grad=true, this function should create autograd_meta!
+  // But how can we make it work on Variable without making Tensor's set_requires_grad() virtual? (Maybe AutogradMetaInterface -> AutogradMeta -> AutogradMetaInternal ?)
+  /* yf225 TODO NOTE:
+
+In Python (every tensor is of Variable class):
+- Calling set_requires_grad(…) on tensor that doesn't have autograd meta
+    - Expected behavior: tensor.set_requires_grad(…) should work, and it should create autograd meta on the fly, and set requires_grad to true
+- Calling set_requires_grad(…) on tensor that has autograd meta
+    - Expected behavior: tensor.set_requires_grad(…) should work, and it should set requires_grad to true
+
+In C++ (tensors may or may not be of Variable class):
+- tensor is non-Variable at::Tensor
+    - Calling set_requires_grad(…) on tensor that doesn't have autograd meta
+        - Expected behavior: the user should first call torch::autograd::as_variable(tensor) to convert the tensor to Variable, and then call set_requires_grad(…), and it should create autograd meta on the fly, and set requires_grad to true
+    - Calling set_requires_grad(…) on tensor that has autograd meta
+        - Expected behavior: the user should first call torch::autograd::as_variable(tensor) to convert the tensor to Variable, and then call set_requires_grad(…), and it should set requires_grad to true
+- tensor is Variable at::Tensor
+    - Calling set_requires_grad(…) on tensor that doesn't have autograd meta
+        - Expected behavior: the user should first call torch::autograd::as_variable_ref(tensor) to cast the tensor to Variable, and then call set_requires_grad(…), and it should create autograd meta on the fly, and set requires_grad to true
+    - Calling set_requires_grad(…) on tensor that has autograd meta
+        - Expected behavior: the user should first call torch::autograd::as_variable_ref(tensor) to cast the tensor to Variable, and then call set_requires_grad(…), and it should set requires_grad to true
+- tensor is Variable
+    - Calling set_requires_grad(…) on variable that doesn't have autograd meta
+        - Expected behavior: the user should call set_requires_grad(…), and it should create autograd meta on the fly, and set requires_grad to true
+    - Calling set_requires_grad(…) on variable that has autograd meta
+        - Expected behavior: the user should call set_requires_grad(…), and it should set requires_grad to true
+
+IMPORTANT: In essense, `.set_requires_grad(...)` on Variable has to be able to create autograd meta on the fly.
+
+Problem:
+1. We need to let Variable.set_requires_grad(…) have different behavior from Tensor.set_requires_grad(…), but we can't make Tensor.set_requires_grad(…) virtual
+    1. One solution is to dispatch on AutogradMeta, and have a special AutogradMeta in Variable vs. in Tensor, e.g. do AutogradMetaInterface -> AutogradMeta -> AutogradMetaInternal(can be null when no autograd metadata)
+
+Other questions:
+1. Can we merge as_variable() and as_variable_ref(), and do things intelligently based on whether the tensor is already a Variable (in order to unify/simplify API)?
+
+*/
   void set_requires_grad(bool requires_grad) {
     if (autograd_meta()) {
       autograd_meta()->set_requires_grad(requires_grad, this);
@@ -551,6 +588,7 @@ struct C10_API TensorImpl : public c10::intrusive_ptr_target {
    * It is only valid to call this method on a Variable.
    * See Note [Tensor versus Variable in C++].
    */
+  // yf225 TODO: return false if there is no autograd_meta
   bool requires_grad() const {
     if (autograd_meta()) {
       return autograd_meta()->requires_grad();

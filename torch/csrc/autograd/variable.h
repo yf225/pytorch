@@ -327,7 +327,7 @@ struct TORCH_API Variable : public at::Tensor {
 /// Each `Variable` has one unique `AutogradMeta` struct, which stores autograd
 /// metadata fields that are necessary for tracking the Variable's autograd history.
 
-struct TORCH_API Variable::AutogradMeta : public c10::AutogradMetaInterface {
+struct TORCH_API Variable::AutogradMetaInternal {
   std::string name;
 
   Variable grad_;
@@ -351,6 +351,12 @@ struct TORCH_API Variable::AutogradMeta : public c10::AutogradMetaInterface {
   // state are still thread-safe. Used by grad_fn() and
   // grad_accumulator().
   std::mutex mutex_;
+};
+
+struct TORCH_API Variable::AutogradMeta : public c10::AutogradMetaInterface {
+  // yf225 TODO: make better comment
+  // yf225 COMMENT: for Variable that doesn't require grad, this can be null, to save memory.
+  std::unique_ptr<c10::AutogradMetaInternal> internal_ = nullptr;
 
   /// Sets the `requires_grad` property of `Variable`. This should be true for
   /// leaf variables that want to accumulate gradients, and false for all other
@@ -359,28 +365,34 @@ struct TORCH_API Variable::AutogradMeta : public c10::AutogradMetaInterface {
     AT_CHECK(
       !requires_grad || at::isFloatingType(at::typeMetaToScalarType(self_impl->dtype())),
       "Only Tensors of floating point dtype can require gradients");
+    // yf225 TODO: if need to set requires_grad to true and internal_ is empty, internal_ should be initialized
     requires_grad_ = requires_grad;
   }
 
   bool requires_grad() const override {
+    // yf225 TODO: if internal_ is empty, it should return false
     return requires_grad_ || grad_fn_;
   }
 
   /// Accesses the gradient `Variable` of this `Variable`.
   Variable& grad() override {
+    // yf225 TODO: if internal_ is empty, it should throw error
     return grad_;
   }
 
   const Variable& grad() const override {
+    // yf225 TODO: if internal_ is empty, it should throw error
     return grad_;
   }
+
+  // yf225 TODO: we should abstract acccess to internal_'s internal fields through member functions in AutogradMeta and DifferentiableViewMeta
 };
 
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 //                        Variable::DifferentiableViewMeta
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-struct TORCH_API Variable::DifferentiableViewMeta : public Variable::AutogradMeta {
+struct TORCH_API Variable::DifferentiableViewMetaInternal : public Variable::AutogradMetaInternal {
   /// The base `Variable` (never a view).
   Variable base_;
 
@@ -388,8 +400,11 @@ struct TORCH_API Variable::DifferentiableViewMeta : public Variable::AutogradMet
   /// grad_fn field is stale if attr_version !=
   /// version_counter.current_version().
   uint32_t attr_version;
+};
 
+struct TORCH_API Variable::DifferentiableViewMeta : public Variable::AutogradMeta {
   bool requires_grad() const override {
+    // yf225 TODO: if internal_ is empty, it should return false
     return requires_grad_ || grad_fn_ || (is_view_ && base_.requires_grad());
   }
 };
@@ -582,7 +597,9 @@ inline Variable make_variable(
     auto data_impl_copy = data.getIntrusivePtr()->shallow_copy_and_detach();
     data_impl_copy->set_allow_tensor_metadata_change(allow_tensor_metadata_change);
     auto data_copy = at::Tensor(data_impl_copy);
-    auto autograd_meta = c10::guts::make_unique<Variable::AutogradMeta>();
+    // yf225 TODO: if requires_grad=false, we should create AutogradMeta with internal_=nullptr
+    std::unique_ptr<Variable::AutogradMeta> autograd_meta = nullptr;
+    if (requires_grad) autograd_meta = c10::guts::make_unique<Variable::AutogradMeta>();
     return Variable(c10::make_intrusive<Variable::Impl>(data_copy, std::move(autograd_meta), requires_grad));
   }
   return Variable();
@@ -598,7 +615,9 @@ inline Variable make_variable_consuming(
   if (data.defined()) {
     AT_ASSERT(data.getIntrusivePtr().use_count() == 1);
     data.unsafeGetTensorImpl()->set_allow_tensor_metadata_change(allow_tensor_metadata_change);
-    auto autograd_meta = c10::guts::make_unique<Variable::AutogradMeta>();
+    // yf225 TODO: if requires_grad=false, we should create AutogradMeta with internal_=nullptr
+    std::unique_ptr<Variable::AutogradMeta> autograd_meta = nullptr;
+    if (requires_grad) autograd_meta = c10::guts::make_unique<Variable::AutogradMeta>();
     return Variable(c10::make_intrusive<Variable::Impl>(std::move(data), std::move(autograd_meta), requires_grad));
   }
   return Variable();
@@ -620,6 +639,8 @@ inline Variable make_variable(
   }
   return Variable();
 }
+
+// yf225 TODO: look at all callsites of make_variable() and make_variable_consuming(), and change them accordingly
 
 // Tensor Conversion
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

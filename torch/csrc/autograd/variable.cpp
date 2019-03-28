@@ -23,21 +23,23 @@ namespace autograd {
 Variable::Impl::Impl(at::Tensor data, std::unique_ptr<Variable::AutogradMeta> autograd_meta, bool requires_grad, Edge gradient_edge)
     : TensorImpl(data.type_id(), data.dtype(), /*allocator=*/nullptr, /* is variable */ true),
       data_(std::move(data)) {
-  autograd_meta->grad_fn_ = std::move(gradient_edge.function);
-  autograd_meta->requires_grad_ = false;
-  autograd_meta->is_view_ = false;
-  autograd_meta->output_nr_ = gradient_edge.input_nr;
-
-  // set_requires_grad also checks error conditions.
-  autograd_meta->set_requires_grad(requires_grad, this);
-  AT_CHECK(
-      !autograd_meta->grad_fn_ || !autograd_meta->requires_grad_,
-      "requires_grad should be false if grad_fn is set");
   if (!data_.defined()) {
     throw std::runtime_error("data is undefined");
   }
+  if (autograd_meta) {
+    autograd_meta->grad_fn_ = std::move(gradient_edge.function);
+    autograd_meta->requires_grad_ = false;
+    autograd_meta->is_view_ = false;
+    autograd_meta->output_nr_ = gradient_edge.input_nr;
 
-  set_autograd_meta(std::move(autograd_meta));
+    // set_requires_grad also checks error conditions.
+    autograd_meta->set_requires_grad(requires_grad, this);
+    AT_CHECK(
+        !autograd_meta->grad_fn_ || !autograd_meta->requires_grad_,
+        "requires_grad should be false if grad_fn is set");
+
+    set_autograd_meta(std::move(autograd_meta));
+  }
 }
 
 Variable::Impl::~Impl() = default;
