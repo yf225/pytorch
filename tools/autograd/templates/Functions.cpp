@@ -1739,16 +1739,16 @@ Tensor slogdet_backward(const Tensor& grad_logabsdet,
 // Reference:
 // https://people.maths.ox.ac.uk/gilesm/files/NA-08-01.pdf
 // Sec. 2.3.1 Matrix inverse product
-std::tuple<Tensor, Tensor> trtrs_backward(
+std::tuple<Tensor, Tensor> triangular_solve_backward(
     const Tensor & grad_x, const Tensor & grad_m,
     const Tensor & b, const Tensor & a, const Tensor & x,
     const bool upper, const bool transpose, const bool unitriangular,
     std::array<bool, 2> output_mask) {
   Tensor grad_b, grad_a;
   if (grad_x.defined()) {
-    grad_b = std::get<0>(grad_x.trtrs(a, upper, !transpose, unitriangular));
+    grad_b = std::get<0>(grad_x.triangular_solve(a, upper, !transpose, unitriangular));
     if (output_mask[1]) {
-      grad_a = transpose ? -x.mm(grad_b.t()) : -grad_b.mm(x.t());
+      grad_a = transpose ? -x.matmul(grad_b.transpose(-1, -2)) : -grad_b.matmul(x.transpose(-1, -2));
       if (upper) {
         grad_a = grad_a.triu((int) unitriangular);
       } else {
@@ -2081,6 +2081,19 @@ Tensor constant_pad_nd_backward(const Tensor& grad, IntArrayRef pad) {
   auto negated_pad = pad.vec();
   std::transform(negated_pad.cbegin(), negated_pad.cend(), negated_pad.begin(), std::negate<int64_t>());
   return at::constant_pad_nd(grad, negated_pad, 0);
+}
+
+Tensor embedding_dense_double_backward(const Tensor & grad, const Tensor & indices) {
+  // since first backward takes care of padding_idx
+  // and scaling by frequency, we don't need to worry
+  // about it here.
+  auto gg_weight = grad.index_select(0, indices.reshape(-1));
+
+  // reshape gradient as per the shape of indices
+  auto size = indices.sizes().vec();
+  size.push_back(-1);
+
+  return gg_weight.view(size);
 }
 
 } // anonymous namespace

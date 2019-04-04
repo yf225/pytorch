@@ -129,7 +129,8 @@ bool isDifferentiable(Node* n) {
     return true;
 
   if (n->matches(
-          "aten::dropout(Tensor input, float p, bool train) -> Tensor", attr::train)) {
+          "aten::dropout(Tensor input, float p, bool train) -> Tensor",
+          attr::train)) {
     return n->get<bool>(attr::train).value();
   }
 
@@ -164,6 +165,14 @@ bool isDifferentiable(Node* n) {
         static_cast<bool (*)(Node*)>(isDifferentiable));
   }
 
+  // formulas are only defined with floating point scalars,
+  // so we fallback to autograd for other cases.
+  for (const Value* input : n->inputs()) {
+    if (input->type() == NumberType::get()) {
+      return false;
+    }
+  }
+
   return false;
 }
 
@@ -189,7 +198,7 @@ bool isDifferentiable(Graph& g) {
 // graph and a backward graph. Forward graph will be used to replace the node in
 // grad_desc.f, and backward graph will be used to construct GradOf(node) in
 // reverse_block. Grad_values(a.k.a gradOutputs) propagated through
-// node->owningGraph() in **reversed** order, thus GradientPair.forward ahould
+// node->owningGraph() in **reversed** order, thus GradientPair.forward should
 // be inserted **after** the node being replaced, so that we don't traverse the
 // graph infinite times.
 //
@@ -204,7 +213,6 @@ static c10::optional<std::vector<Value*>> build_script_grad(
     Node* node,
     const ArrayRef<Value*>& grads) {
   auto graph = node->owningGraph();
-
   auto compiled_graphs = gradientInfoForSchema(node->schema());
   if (!compiled_graphs) {
     return c10::nullopt;
@@ -228,7 +236,7 @@ static c10::optional<std::vector<Value*>> build_script_grad(
   auto bw_graph = compiled_graphs->backward;
   auto grad_vec = grads.vec();
   if (needTrimGrad(node)) {
-    grad_vec.erase(grad_vec.begin()+1, grad_vec.end());
+    grad_vec.erase(grad_vec.begin() + 1, grad_vec.end());
   }
   auto it = grad_vec.begin();
   grad_vec.insert(it, new_outputs.back());
@@ -767,10 +775,10 @@ class GradientHelper {
 // later. It is ok to replace any backward function with known-zero inputs with
 // something that produces known-zero outputs. This function encloses each
 // know-linear backward function in a 'GradOf' sub-block so that we can perform
-// optimizations using this information. In particular, specializeUndef will
-// observe if all the inputs to the linear block are Undef, which the autograd
-// uses to represent zeros, and then propagate the undefs to the outputs of the
-// block.
+// optimizations using this information. In particular, specializeAutogradZero will
+// observe if all the inputs to the linear block are AutogradZeroTensor, which the
+// autograd uses to represent zeros, and then propagate the zeros to the outputs
+// of the block.
 static std::vector<Value*> linearGradientForNode(
     Node* node,
     ArrayRef<Value*> grad_values) {
@@ -787,7 +795,7 @@ static std::vector<Value*> linearGradientForNode(
   WithInsertPoint guard(block);
   auto results = GradientHelper(node).gradient(grad_values);
   return fmap(results, [block, linear](Value* grad) -> Value* {
-    if (!grad)
+    if (!grad || grad->mustBeNone())
       return nullptr;
     block->registerOutput(grad);
     return linear->addOutput()->copyMetadata(grad);
@@ -833,8 +841,8 @@ static ReverseDetails addReverseInline(Gradient& grad_desc) {
   const auto get_grad = [&](Value* v) -> Value* {
     auto it = grad_map.find(v);
     if (it == grad_map.end()) {
-      auto undef = graph.insertNode(graph.createAutogradZero());
-      std::tie(it, std::ignore) = grad_map.emplace(v, undef->output());
+      auto autograd_zero = graph.insertNode(graph.createAutogradZero());
+      std::tie(it, std::ignore) = grad_map.emplace(v, autograd_zero->output());
     }
     return it->second;
   };
