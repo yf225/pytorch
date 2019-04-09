@@ -102,6 +102,7 @@ add_custom_command(
 
 set(TORCH_SRCS
   ${TORCH_SRC_DIR}/csrc/autograd/anomaly_mode.cpp
+  ${TORCH_SRC_DIR}/csrc/autograd/AutogradMetaFactory.cpp
   ${TORCH_SRC_DIR}/csrc/autograd/engine.cpp
   ${TORCH_SRC_DIR}/csrc/autograd/function.cpp
   ${TORCH_SRC_DIR}/csrc/autograd/functions/accumulate_grad.cpp

@@ -10,6 +10,7 @@
 #include <c10/core/TensorTypeId.h>
 #include <c10/core/TensorTypeIdRegistration.h>
 #include <c10/core/CopyBytes.h>
+#include <c10/core/AutogradMetaFactory.h>
 
 #include <c10/util/Exception.h>
 #include <c10/util/Optional.h>
@@ -126,16 +127,6 @@ struct C10_API PlacementDeleteContext {
     placement_dtor_(data_ptr_.get(), size_);
     // original memory will be freed when data_ptr_ is destructed
   }
-};
-
-struct TensorImpl;
-
-struct C10_API AutogradMetaInterface {
-  virtual void set_requires_grad(bool requires_grad, at::TensorImpl* self_impl) = 0;
-  virtual bool requires_grad() const = 0;
-  virtual at::Tensor& grad() = 0;
-  virtual const at::Tensor& grad() const = 0;
-  virtual ~AutogradMetaInterface();
 };
 
 /**
@@ -501,6 +492,7 @@ struct C10_API TensorImpl : public c10::intrusive_ptr_target {
    */
   void set_requires_grad(bool requires_grad) {
     if (autograd_meta()) {
+      c10::AutogradMetaFactory::create_something();
       autograd_meta()->set_requires_grad(requires_grad, this);
     } else {
       AT_ERROR("set_requires_grad is not implemented for Tensor");
