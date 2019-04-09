@@ -157,11 +157,36 @@ struct C10_API AutogradMetaInterface {
 // operations, because it is a useful escape hatch when we want to change the
 // content of a Variable without invalidating it in the autograd graph.
 //
-// NOTE: We explicitly don't put `version_counter_` in AutogradMeta, because
-// after the Variable/Tensor merge, a tensor will not have AutogradMeta when its
-// `requires_grad_` is false, but we still need to keep track of this tensor's
-// version to make sure it's valid in the autograd graph. Hence we put
-// `version_counter_` in TensorImpl instead of AutogradMeta.
+// NOTE: After the Variable/Tensor merge, a tensor will not have AutogradMeta when
+// its `requires_grad_` is false, but we still need to keep track of this tensor's
+// version when it's saved for backward in an autograd graph. There are two possible
+// ways to achieve this goal:
+//
+// Approach 1: Initialize AutogradMeta and create the version counter for a tensor
+// only when it's saved for backward.
+// Pros:
+// 1. `version_counter_` can stay in AutogradMeta, which makes sense semantically
+// because version counter is an autograd concept.
+// Cons:
+// 1. Initializing AutogradMeta of a tensor involves creating extra autograd-related
+// fields such as `grad_` / `grad_fn_` / `grad_accumulator_`, which are not needed for a
+// non-requires-grad tensor to participate in backward computations, and results in
+// unnecessary memory allocations.
+// 2. It breaks the invariant that if a tensor doesn't require gradient, it should not
+// have AutogradMeta.
+//
+// Approach 2: Put the version counter in TensorImpl instead of AutogradMeta, and
+// have it always be available.
+// Pros:
+// 1. When a non-requires-grad tensor is saved for backward, we don't need to initialize
+// its AutogradMeta, which saves memory and cache space.
+// Cons:
+// 1. `version_counter_` takes up two words in TensorImpl, even for tensors that don't
+// participate in autograd.
+//
+// At the moment, we choose Approach 2 because it makes the condition for AutogradMeta's
+// existence in a tensor easier to understand. If the extra two words of `version_counter_`
+// in TensorImpl becomes a perf problem in the future, we will re-evaluate Approach 1.
 struct C10_API VariableVersion {
  public:
   // NOTE: As of C++11 and 14, default-constructing a std::atomic variable
