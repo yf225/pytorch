@@ -256,6 +256,9 @@ class CAFFE2_API Tensor {
   template<typename T>
   T * data() const;
 
+  const at::Tensor& data() const noexcept;
+  at::Tensor& data() noexcept;
+
   template <typename T>
   T item() const;
 
