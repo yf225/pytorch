@@ -361,9 +361,7 @@ fractional_max_pool2d = torch._jit_internal.boolean_dispatch(
     arg_index=4,
     default=False,
     if_true=fractional_max_pool2d_with_indices,
-    if_false=_fractional_max_pool2d,
-    module_name=__name__,
-    func_name='fractional_max_pool2d')
+    if_false=_fractional_max_pool2d)
 
 
 @weak_script
@@ -429,9 +427,7 @@ fractional_max_pool3d = torch._jit_internal.boolean_dispatch(
     arg_index=4,
     default=False,
     if_true=fractional_max_pool3d_with_indices,
-    if_false=_fractional_max_pool3d,
-    module_name=__name__,
-    func_name='fractional_max_pool3d')
+    if_false=_fractional_max_pool3d)
 
 
 @weak_script
@@ -461,9 +457,7 @@ max_pool1d = torch._jit_internal.boolean_dispatch(
     arg_index=6,
     default=False,
     if_true=max_pool1d_with_indices,
-    if_false=_max_pool1d,
-    module_name=__name__,
-    func_name='max_pool1d')
+    if_false=_max_pool1d)
 
 
 @weak_script
@@ -492,9 +486,7 @@ max_pool2d = torch._jit_internal.boolean_dispatch(
     arg_index=6,
     default=False,
     if_true=max_pool2d_with_indices,
-    if_false=_max_pool2d,
-    module_name=__name__,
-    func_name='max_pool2d')
+    if_false=_max_pool2d)
 
 
 @weak_script
@@ -524,9 +516,7 @@ max_pool3d = torch._jit_internal.boolean_dispatch(
     arg_index=6,
     default=False,
     if_true=max_pool3d_with_indices,
-    if_false=_max_pool3d,
-    module_name=__name__,
-    func_name='max_pool3d')
+    if_false=_max_pool3d)
 
 
 @weak_script
@@ -682,9 +672,7 @@ adaptive_max_pool1d = torch._jit_internal.boolean_dispatch(
     arg_index=2,
     default=False,
     if_true=adaptive_max_pool1d_with_indices,
-    if_false=_adaptive_max_pool1d,
-    module_name=__name__,
-    func_name='adaptive_max_pool1d')
+    if_false=_adaptive_max_pool1d)
 
 
 @weak_script
@@ -714,9 +702,7 @@ adaptive_max_pool2d = torch._jit_internal.boolean_dispatch(
     arg_index=2,
     default=False,
     if_true=adaptive_max_pool2d_with_indices,
-    if_false=_adaptive_max_pool2d,
-    module_name=__name__,
-    func_name='adaptive_max_pool2d')
+    if_false=_adaptive_max_pool2d)
 
 
 @weak_script
@@ -746,9 +732,7 @@ adaptive_max_pool3d = torch._jit_internal.boolean_dispatch(
     arg_index=2,
     default=False,
     if_true=adaptive_max_pool3d_with_indices,
-    if_false=_adaptive_max_pool3d,
-    module_name=__name__,
-    func_name='adaptive_max_pool3d')
+    if_false=_adaptive_max_pool3d)
 
 
 adaptive_avg_pool1d = _add_docstr(torch.adaptive_avg_pool1d, r"""

@@ -122,7 +122,7 @@ THCStorage* THCStorage_(newWithDataAndAllocator)(
       size,
       std::move(data),
       allocator,
-      allocator != nullptr).release();
+      true).release();
   return storage;
 }
 

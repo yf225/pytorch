@@ -506,8 +506,7 @@ Y:
         "keepdims",
         "(*int*): set to 1 to keep the reduced dimension(s) (default=1), else set to 0 to not keep the reduced dimension(s)")
     .Input(0, "X", "(*Tensor`<float>`*): input tensor")
-    .Output(0, "Y", "(*Tensor`<float>`*): reduced tensor")
-    .InheritOnnxSchema("ReduceMean");
+    .Output(0, "Y", "(*Tensor`<float>`*): reduced tensor");
 
 OPERATOR_SCHEMA(ReduceL2Gradient).NumInputs(3).NumOutputs(1);
 

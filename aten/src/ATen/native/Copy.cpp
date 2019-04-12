@@ -38,7 +38,7 @@ namespace at {
 namespace native {
 
 Tensor& _s_copy__cpu(Tensor& self, const Tensor& src, bool non_blocking) {
-  if (src.type_id() != CPUTensorId()) {
+  if (src.is_cuda()) {
     _s_copy_from(src, self, non_blocking);
     return self;
   }

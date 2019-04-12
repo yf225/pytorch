@@ -10,8 +10,6 @@
 #define TH_ATOMIC_IPC_REFCOUNT 1
 #endif
 
-#include <c10/core/CPUAllocator.h>
-
 #if HAVE_MMAP
 #include <sys/types.h>
 #include <sys/mman.h>
@@ -21,8 +19,19 @@
 #endif
 /* end of stuff for mapped files */
 
+struct THDefaultAllocator final : public at::Allocator {
+  at::DataPtr allocate(size_t size) const override {
+    auto* ptr = THAlloc(size);
+    return {ptr, ptr, &THFree, at::DeviceType::CPU};
+  }
+  at::DeleterFnPtr raw_deleter() const override {
+    return &THFree;
+  }
+};
+
+static THDefaultAllocator th_default_allocator;
 at::Allocator* getTHDefaultAllocator() {
-  return c10::GetCPUAllocator();
+  return &th_default_allocator;
 }
 
 #if defined(_WIN32) || defined(HAVE_MMAP)

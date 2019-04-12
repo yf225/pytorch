@@ -157,11 +157,3 @@ if [[ "$BUILD_ENVIRONMENT" == *pytorch-linux-xenial-cuda* ]]; then
     fi
   fi
 fi
-
-function get_exit_code() {
-  set +e
-  "$@"
-  retcode=$?
-  set -e
-  return $retcode
-}

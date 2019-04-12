@@ -143,9 +143,7 @@
 
 from __future__ import print_function
 from setuptools import setup, Extension, distutils, Command, find_packages
-from distutils import core, dir_util
-from distutils.core import Distribution
-from distutils.errors import DistutilsArgError
+from distutils import dir_util
 import setuptools.command.build_ext
 import setuptools.command.install
 import distutils.command.clean
@@ -718,18 +716,6 @@ def print_box(msg):
     print('-' * (size + 2))
 
 if __name__ == '__main__':
-    # Parse the command line and check the arguments
-    # before we proceed with building deps and setup
-    dist = Distribution()
-    dist.script_name = sys.argv[0]
-    dist.script_args = sys.argv[1:]
-    try:
-        ok = dist.parse_command_line()
-    except DistutilsArgError as msg:
-        raise SystemExit(core.gen_usage(dist.script_name) + "\nerror: %s" % msg)
-    if not ok:
-        sys.exit()
-
     if RUN_BUILD_DEPS:
         build_deps()
     setup(

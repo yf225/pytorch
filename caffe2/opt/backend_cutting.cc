@@ -346,8 +346,7 @@ void PruneUnrefereredNodes(NNModule* nn) {
 caffe2::NetDef OptimizeForBackend(
     caffe2::NetDef& net,
     std::function<bool(const caffe2::OperatorDef&)> supports,
-    std::function<caffe2::NetDef(const caffe2::NetDef&)> transform_func,
-    bool debug) {
+    std::function<caffe2::NetDef(const caffe2::NetDef&)> transform_func) {
   auto nn = convertToNNModule(net);
   auto& dfg = nn.dataFlow;
 
@@ -413,10 +412,6 @@ caffe2::NetDef OptimizeForBackend(
   // Prune dangling nodes, because after transformation, some weights might be
   // absorbed
   PruneUnrefereredNodes(&nn);
-
-  if (debug) {
-    DumpGraph(&dfg);
-  }
 
   auto new_net = convertToCaffe2Proto(nn);
   new_net.set_name(net.name() + "_opt");

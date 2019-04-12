@@ -328,7 +328,7 @@ class _DataLoaderIter(object):
     #
     # Now let's get back to 1:
     #   how we gracefully exit the workers when the last reference to the
-    #   iterator is gone.
+    #   iteartor is gone.
     #
     # To achieve this, we implement the following logic along with the design
     # choices mentioned above:
