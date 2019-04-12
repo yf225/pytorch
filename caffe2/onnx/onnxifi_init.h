@@ -1,6 +1,6 @@
 #pragma once
 
-#include "foxi/onnxifi_loader.h"
+#include "onnx/onnxifi_loader.h"
 
 namespace caffe2 {
 namespace onnx {

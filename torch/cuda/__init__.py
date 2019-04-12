@@ -321,21 +321,12 @@ def stream(stream):
     if stream is None:
         yield
         return
-    src_prev_stream = current_stream()
-
-    if src_prev_stream.device != stream.device:
-        # The given stream is on a different device; have to restore the
-        # current_stream on that device on exit as well
-        with device(stream.device):
-            dst_prev_stream = current_stream()
-
+    prev_stream = current_stream()
     torch._C._cuda_setStream(stream._cdata)
     try:
         yield
     finally:
-        if src_prev_stream.device != stream.device:
-            torch._C._cuda_setStream(dst_prev_stream._cdata)
-        torch._C._cuda_setStream(src_prev_stream._cdata)
+        torch._C._cuda_setStream(prev_stream._cdata)
 
 
 def device_count():

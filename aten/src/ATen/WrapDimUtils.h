@@ -37,11 +37,10 @@ static inline void maybe_wrap_dims(std::vector<int64_t>& dims, int64_t dim_post_
   int64_t min = -dim_post_expr;
   int64_t max = dim_post_expr - 1;
   for (auto& dim : dims) {
-    if (dim < min || dim > max) {
-      AT_INDEX_ERROR(
+    AT_CHECK(
+        dim >= min && dim <= max,
         "Dimension out of range (expected to be in range of [",
         min, ", ", max, "], but got ", dim, ")");
-    }
     if (dim < 0) dim += dim_post_expr;
   }
 }

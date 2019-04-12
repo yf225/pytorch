@@ -38,11 +38,11 @@ class DistributedSampler : public Sampler<BatchRequest> {
 
   /// Set the epoch for the current enumeration. This can be used to alter the
   /// sample selection and shuffling behavior.
-  void set_epoch(size_t epoch) {
+  TORCH_API void set_epoch(size_t epoch) {
     epoch_ = epoch;
   }
 
-  size_t epoch() const {
+  TORCH_API size_t epoch() const {
     return epoch_;
   }
 

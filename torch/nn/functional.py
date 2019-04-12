@@ -1909,13 +1909,10 @@ def poisson_nll_loss(input, target, log_input=True, full=False, size_average=Non
         loss[mask] += (target * torch.log(target) - target + 0.5 * torch.log(2 * math.pi * target))[mask]
     if reduction == 'none':
         ret = loss
-    elif reduction == 'mean':
+    if reduction == 'mean':
         ret = torch.mean(loss)
-    elif reduction == 'sum':
-        ret = torch.sum(loss)
     else:
-        ret = input
-        raise ValueError(reduction + " is not valid")
+        ret = torch.sum(loss)
     return ret
 
 
