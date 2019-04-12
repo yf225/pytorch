@@ -65,7 +65,9 @@ bool isSimpleMap(Node* node) {
       "aten::neg(Tensor self) -> Tensor",
       "aten::pow(Tensor self, Tensor exponent) -> Tensor",
       "aten::pow(Tensor self, Scalar exponent) -> Tensor",
-      "aten::rand_like(Tensor self) -> Tensor",
+      // See https://github.com/pytorch/pytorch/issues/14674 and make sure you
+      // won't make the same mistake before you reenable this.
+      //"aten::rand_like(Tensor self) -> Tensor",
       "aten::reciprocal(Tensor self) -> Tensor",
       "aten::relu(Tensor self) -> Tensor",
       "aten::threshold(Tensor self, Scalar threshold, Scalar value) -> Tensor",
@@ -136,7 +138,7 @@ c10::optional<bool> isDefined(Value* tensor) {
   if (tensor->type()->isSubtypeOf(TensorType::get())) {
     return true;
   }
-  if (tensor->node()->mustBeNone() ||
+  if (tensor->node()->kind() == prim::None ||
       tensor->node()->kind() == prim::Undefined) {
     return false;
   }

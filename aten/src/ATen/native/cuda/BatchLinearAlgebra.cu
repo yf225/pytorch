@@ -505,12 +505,8 @@ Tensor& triu_tril_cuda_template(Tensor& result, const Tensor& self, int64_t k, c
 }
 
 Tensor& tril_cuda_(Tensor &self, int64_t k) {
-  bool inplace = checkTrilTriuBatchContiguous(self);
-  Tensor self_c = inplace ? self : self.contiguous();
-  Tensor result = inplace ? self : at::empty_like(self);
-  tril_cuda_out(result, self_c, k);
-  if (!inplace) self.copy_(result);
-  return self;
+  if (!checkTrilTriuBatchContiguous(self)) self = self.contiguous();
+  return tril_cuda_out(self, self, k);
 }
 
 Tensor& tril_cuda_out(Tensor &result, const Tensor& self, int64_t k) {
@@ -525,12 +521,8 @@ Tensor& tril_cuda_out(Tensor &result, const Tensor& self, int64_t k) {
 }
 
 Tensor& triu_cuda_(Tensor &self, int64_t k) {
-  bool inplace = checkTrilTriuBatchContiguous(self);
-  Tensor self_c = inplace ? self : self.contiguous();
-  Tensor result = inplace ? self : at::empty_like(self);
-  triu_cuda_out(result, self_c, k);
-  if (!inplace) self.copy_(result);
-  return self;
+  if (!checkTrilTriuBatchContiguous(self)) self = self.contiguous();
+  return triu_cuda_out(self, self, k);
 }
 
 Tensor& triu_cuda_out(Tensor &result, const Tensor& self, int64_t k) {

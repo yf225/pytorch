@@ -97,44 +97,25 @@ static c10::optional<std::vector<int64_t>> canRunKernel(
 // (see above).
 // Note: Arguments are mutated by this call, although map_size is restored
 // to its original value.
-static bool expandArgs(
+static void expandArgs(
     const KernelSpec& spec,
     std::vector<at::Tensor>& args,
-    std::vector<int64_t>& map_size, bool dry_run) {
-  bool has_broadcast = false;
+    std::vector<int64_t>& map_size) {
   for (size_t i = 0; i < args.size(); ++i) {
     auto& arg = args[i];
     const auto& pdesc = spec.inputChunks()[i];
     if (pdesc.nSubTensors() == 1) {
       if (arg.sizes().equals(map_size))
         continue;
-      if (!dry_run) {
-        arg = arg.expand(map_size);
-        has_broadcast = true;
-      } else {
-        return true;
-      }
+      arg = arg.expand(map_size);
     } else {
       map_size.at(pdesc.dim()) *= pdesc.nSubTensors();
       if (!arg.sizes().equals(map_size)) {
-        if (!dry_run) {
-          arg = arg.expand(map_size);
-          has_broadcast = true;
-        } else {
-          return true;
-        }
+        arg = arg.expand(map_size);
       }
       map_size.at(pdesc.dim()) /= pdesc.nSubTensors();
     }
   }
-  return has_broadcast;
-}
-
-static bool shouldExpandArgs(
-    const KernelSpec& spec,
-    std::vector<at::Tensor>& args,
-    std::vector<int64_t>& map_size) {  
-  return expandArgs(spec, args, map_size, /*dry_run=*/true);
 }
 
 // Note: assumes that inputs are 32-bit addressable
@@ -345,11 +326,7 @@ bool runFusion(const int64_t key, Stack& stack) {
   // Tries to run fallback if map size can't be computed
   if (!maybe_map_size)
     return false;
-  if (spec.hasRandom()) {
-      bool hasBroadcast = shouldExpandArgs(spec,inputs, *maybe_map_size);
-      if (hasBroadcast) return false;
-  }
-  expandArgs(spec, inputs, *maybe_map_size, /*dry_run=*/false);
+  expandArgs(spec, inputs, *maybe_map_size);
 
   // Retrieves the kernel, compiling (and caching) if necessary
   ArgSpec arg_spec{inputs, device.index()};

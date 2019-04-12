@@ -1317,14 +1317,14 @@ In-place version of :meth:`~Tensor.le`
 
 add_docstr_all('lerp',
                r"""
-lerp(end, weight) -> Tensor
+lerp(start, end, weight) -> Tensor
 
 See :func:`torch.lerp`
 """)
 
 add_docstr_all('lerp_',
                r"""
-lerp_(end, weight) -> Tensor
+lerp_(start, end, weight) -> Tensor
 
 In-place version of :meth:`~Tensor.lerp`
 """)
