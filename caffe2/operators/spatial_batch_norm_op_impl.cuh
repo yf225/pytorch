@@ -501,7 +501,7 @@ void SpatialBNGradientOp<CUDAContext>::ComputeScaleBiasGradientsAndFusedParams(
     T* gamma,
     T* scratch) {
   if (order_ == StorageOrder::NCHW) {
-    DISPATCH_REDUCE_KERNEL_BY_2D_BLOCK_WITH_TYPE_1(
+    DISPATCH_REDUCE_KERNEL_BY_2D_BLOCK(
         HxW,
         ComputeScaleBiasGradientsAndFusedParamsNCHWCUDAKernel,
         T,

@@ -823,12 +823,8 @@ def ConvertNetForDevice(net, device=None):
 
     if device is None:
         device = scope.CurrentDeviceScope()
-    if core.IsGPUDeviceType(device.device_type):
-        device_prefix = "gpu"
-    elif device.device_type == caffe2_pb2.IDEEP:
-        device_prefix = "ideep"
-    else:
-        device_prefix = "cpu"
+
+    device_prefix = "gpu" if core.IsGPUDeviceType(device.device_type) else "cpu"
 
     namescope = "{}_{}/".format(device_prefix, device.device_id)
     for op in mnet.Proto().op:
@@ -1024,8 +1020,7 @@ def _Broadcast(devices, model, net, param, use_nccl=False):
         if _IsGPUBlob(model, param):
             device_opt = core.DeviceOption(workspace.GpuDeviceType, dev_idx)
         else:
-            device_opt = core.DeviceOption(caffe2_pb2.IDEEP, 0) if _IsIDEEPBlob(model, param) else \
-                core.DeviceOption(caffe2_pb2.CPU, 0)
+            device_opt = core.DeviceOption(caffe2_pb2.CPU, 0)
         with core.DeviceScope(device_opt):
             net.Copy(
                 model._device_grouped_blobs[param][master_dev],
@@ -1489,14 +1484,6 @@ def _AllReduceBlobsSingleHost(blob_names, devices, model, net, use_nccl):
                         device_opt = core.DeviceOption(model._device_type, gpu)
                         with core.DeviceScope(device_opt):
                             model.Copy(grad_val_concat, g.values)
-
-        elif _IsIDEEPBlob(model, blob_name):
-            assert not isinstance(blobs_group[0], core.GradientSlice), \
-                "Synchronizing gradient slices not supported"
-            with core.DeviceScope(core.DeviceOption(caffe2_pb2.IDEEP)):
-                net.Sum(blobs_group, [blobs_group[0]])
-                if not model._shared_model:
-                    _Broadcast(devices, model, net, blob_name)
 
         else:
             assert not isinstance(blobs_group[0], core.GradientSlice), \

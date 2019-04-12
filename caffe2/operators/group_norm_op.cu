@@ -438,7 +438,7 @@ bool GroupNormGradientOp<float, CUDAContext>::RunOnDeviceImpl(
     // Computes dL/ds and dL/db.
     // dL/ds = Sum(dL/dY * gamma * X)
     // dL/db = Sum(dL/dY * gamma)
-    DISPATCH_REDUCE_KERNEL_BY_2D_BLOCK_WITH_TYPE_1(
+    DISPATCH_REDUCE_KERNEL_BY_2D_BLOCK(
         HxW,
         ComputeInternalGradientsNCHWCUDAKernel,
         float,
@@ -471,7 +471,7 @@ bool GroupNormGradientOp<float, CUDAContext>::RunOnDeviceImpl(
             dX_data);
 
     // Computes dL/dgamma and dL/dbeta.
-    DISPATCH_REDUCE_KERNEL_BY_2D_BLOCK_WITH_TYPE_1(
+    DISPATCH_REDUCE_KERNEL_BY_2D_BLOCK(
         HxW,
         GammaBetaBackwardNCHWCUDAKernel,
         float,
@@ -491,7 +491,7 @@ bool GroupNormGradientOp<float, CUDAContext>::RunOnDeviceImpl(
     // Computes dL/ds and dL/db.
     // dL/ds = Sum(dL/dY * gamma * X)
     // dL/db = Sum(dL/dY * gamma)
-    DISPATCH_REDUCE_KERNEL_BY_2D_BLOCK_WITH_TYPE_1(
+    DISPATCH_REDUCE_KERNEL_BY_2D_BLOCK(
         K,
         ComputeInternalGradientsNHWCCUDAKernel,
         float,
@@ -526,7 +526,7 @@ bool GroupNormGradientOp<float, CUDAContext>::RunOnDeviceImpl(
             dX_data);
 
     // Computes dL/dgamma and dL/dbeta.
-    DISPATCH_REDUCE_KERNEL_BY_2D_BLOCK_WITH_TYPE_1(
+    DISPATCH_REDUCE_KERNEL_BY_2D_BLOCK(
         HxW,
         GammaBetaBackwardNHWCCUDAKernel,
         float,

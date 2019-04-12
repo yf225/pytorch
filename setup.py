@@ -11,7 +11,7 @@
 #   MAX_JOBS
 #     maximum number of compile jobs we should use to compile your code
 #
-#   USE_CUDA=0
+#   NO_CUDA
 #     disables CUDA build
 #
 #   CFLAGS
@@ -27,35 +27,35 @@
 #
 # Environment variables for feature toggles:
 #
-#   USE_CUDNN=0
+#   NO_CUDNN
 #     disables the cuDNN build
 #
-#   USE_FBGEMM=0
+#   NO_FBGEMM
 #     disables the FBGEMM build
 #
-#   USE_TEST=0
+#   NO_TEST
 #     disables the test build
 #
-#   USE_MIOPEN=0
+#   NO_MIOPEN
 #     disables the MIOpen build
 #
-#   USE_MKLDNN=0
+#   NO_MKLDNN
 #     disables use of MKLDNN
 #
-#   USE_NNPACK=0
+#   NO_NNPACK
 #     disables NNPACK build
 #
-#   USE_QNNPACK=0
+#   NO_QNNPACK
 #     disables QNNPACK build (quantized 8-bit operators)
 #
-#   USE_DISTRIBUTED=0
+#   NO_DISTRIBUTED
 #     disables distributed (c10d, gloo, mpi, etc.) build
 #
-#   USE_SYSTEM_NCCL=0
+#   NO_SYSTEM_NCCL
 #     disables use of system-wide nccl (we will use our submoduled
 #     copy in third_party/nccl)
 #
-#   USE_CAFFE2_OPS=0
+#   NO_CAFFE2_OPS
 #     disable Caffe2 operators build
 #
 #   USE_GLOO_IBVERBS
@@ -755,7 +755,6 @@ if __name__ == '__main__':
                 'lib/*.h',
                 'include/ATen/*.h',
                 'include/ATen/cpu/*.h',
-                'include/ATen/cpu/vec256/*.h',
                 'include/ATen/core/*.h',
                 'include/ATen/cuda/*.cuh',
                 'include/ATen/cuda/*.h',

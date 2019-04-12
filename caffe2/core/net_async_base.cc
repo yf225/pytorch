@@ -369,7 +369,7 @@ void AsyncNetBase::handleChainError(
     int task_id,
     OperatorBase* op,
     const char* err_str,
-    bool save_exception) noexcept {
+    bool save_exception) {
   std::string err_msg = err_str;
   if (op) {
     err_msg += ",  op " + (op->has_debug_def() ? op->type() : " unknown");
@@ -385,7 +385,7 @@ void AsyncNetBase::handleChainError(
   }
 }
 
-bool AsyncNetBase::run(int task_id, int stream_id) noexcept {
+bool AsyncNetBase::run(int task_id, int stream_id) {
   OperatorBase* op = nullptr;
   try {
     // Optionally insert async wait ops,

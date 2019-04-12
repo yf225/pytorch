@@ -2206,16 +2206,9 @@ Example::
 
 add_docstr_all('sort',
                r"""
-sort(dim=-1, descending=False) -> (Tensor, LongTensor)
+sort(dim=None, descending=False) -> (Tensor, LongTensor)
 
 See :func:`torch.sort`
-""")
-
-add_docstr_all('argsort',
-               r"""
-argsort(dim=-1, descending=False) -> LongTensor
-
-See :func: `torch.argsort`
 """)
 
 add_docstr_all('sparse_dim',

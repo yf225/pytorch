@@ -1,8 +1,6 @@
 #ifndef THC_TENSOR_TOPK_CUH
 #define THC_TENSOR_TOPK_CUH
 
-#include <c10/macros/Macros.h>
-
 template <typename T>
 struct TopKTypeConfig {};
 
@@ -361,7 +359,6 @@ __device__ void radixSelect(DataType* data,
 }
 
 template <typename T, typename IndexType, int Dim, bool Order>
-C10_LAUNCH_BOUNDS(1024)
 __global__ void gatherTopK(TensorInfo<T, IndexType> input,
                            IndexType inputSliceSize,
                            IndexType outputSliceSize, // aka `k`

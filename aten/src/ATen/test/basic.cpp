@@ -276,13 +276,6 @@ void TestDispatch() {
   ASSERT_TRUE(result.allclose(mse_loss(relu(tensor), other)));
 }
 
-void TestNegativeDim(Type& type) {
-  ASSERT_ANY_THROW(empty({5, -5, 5}, type.options()));
-  ASSERT_ANY_THROW(empty({5, -5, -5}, type.options()));
-  Tensor tensor = empty({5, 5}, type.options());
-  ASSERT_ANY_THROW(tensor.reshape({-5, -5}));
-}
-
 void test(Type& type) {
   TestResize(type);
   TestOnesAndDot(type);
@@ -309,7 +302,6 @@ void test(Type& type) {
   TestIndexingByZerodimTensor();
   TestIndexingMixedDevice(type);
   TestDispatch();
-  TestNegativeDim(type);
 }
 
 TEST(BasicTest, BasicTestCPU) {

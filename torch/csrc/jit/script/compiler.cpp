@@ -1,3 +1,4 @@
+#include <torch/csrc/jit/script/compiler.h>
 #include <c10/util/Exception.h>
 #include <torch/csrc/jit/hooks_for_testing.h>
 #include <torch/csrc/jit/interpreter.h>
@@ -5,7 +6,6 @@
 #include <torch/csrc/jit/operator.h>
 #include <torch/csrc/jit/passes/constant_pooling.h>
 #include <torch/csrc/jit/passes/lower_tuples.h>
-#include <torch/csrc/jit/script/compiler.h>
 #include <torch/csrc/jit/script/final_returns.h>
 #include <torch/csrc/jit/script/parser.h>
 #include <torch/csrc/jit/script/schema_matching.h>
@@ -488,6 +488,16 @@ static Value* ensureInt(const SourceRange& range, Value* v) {
   return v;
 }
 
+std::shared_ptr<SugaredValue> BuiltinFunction::call(
+    const SourceRange& loc,
+    Method& m,
+    at::ArrayRef<NamedValue> inputs,
+    at::ArrayRef<NamedValue> attributes,
+    size_t n_binders) {
+  return std::make_shared<SimpleValue>(
+      emitBuiltinCall(loc, *m.graph(), symbol, self, inputs, attributes, true));
+}
+
 inline bool isSupportedListElementType(const TypePtr& type) {
   return type->isSubtypeOf(TensorType::get()) ||
       type->isSubtypeOf(NumberType::get());
@@ -523,7 +533,6 @@ struct to_ir {
     }
 
     method.setSchema(emitDef(def, self, graph->block()));
-
     runCleanupPasses(graph);
   }
 
@@ -2242,15 +2251,6 @@ struct to_ir {
           elem_type = type_hint->expect<ListType>()->getElementType();
         } else if (!values.empty()) {
           elem_type = values.at(0)->type();
-        }
-
-        // Tensors are special because they have dymnamic properties. So any
-        // list containing tensors should be typed with the unified typeof all
-        // the elements.
-        if (elem_type->isSubtypeOf(TensorType::get())) {
-          for (const auto& value : values) {
-            elem_type = unifyTypes(elem_type, value->type()).value();
-          }
         }
         for (auto v : values) {
           if (!v->type()->isSubtypeOf(elem_type)) {

@@ -19,8 +19,6 @@ example:
   wget https://download.pytorch.org/libtorch/nightly/cpu/libtorch-shared-with-deps-latest.zip
   unzip libtorch-shared-with-deps-latest.zip
 
-Note that the above link has CPU-only libtorch. If you would like to download a GPU-enabled 
-libtorch, find the right link in the link selector on https://pytorch.org
 
 Next, we can write a minimal CMake build configuration to develop a small
 application that depends on LibTorch. CMake is not a hard requirement for using
