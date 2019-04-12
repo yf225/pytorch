@@ -218,6 +218,18 @@ std::vector<at::Tensor> VariableType::unpack(at::TensorList tl, const char *name
   return ret;
 }
 
+Tensor & VariableType::set_requires_grad(Tensor & self, bool requires_grad) const {
+  TensorImpl* self_impl = self.unsafeGetTensorImpl();
+  if (requires_grad) {
+    if (self_impl->autograd_meta() == nullptr) {
+      self_impl->set_autograd_meta(c10::guts::make_unique<Variable::AutogradMeta>());
+    }
+    self_impl->autograd_meta()->set_requires_grad(requires_grad, self_impl);
+  } else {
+    self_impl->set_autograd_meta(nullptr);
+  }
+}
+
 void VariableType::backward(
     Tensor& self,
     c10::optional<Tensor> gradient,

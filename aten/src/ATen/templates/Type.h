@@ -110,6 +110,7 @@ struct CAFFE2_API Type {
       c10::optional<Device> to_device = {}) const = 0;
   virtual Tensor & copy_(Tensor & self, const Tensor & src, bool non_blocking=false) const = 0;
 
+  virtual Tensor & set_requires_grad(Tensor & self, bool requires_grad) const = 0;
   virtual void backward(
       Tensor& self,
       c10::optional<Tensor> gradient,

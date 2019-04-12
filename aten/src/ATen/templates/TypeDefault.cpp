@@ -39,6 +39,10 @@ Tensor TypeDefault::copy(const Tensor & src, bool non_blocking, optional<Device>
   return r;
 }
 
+Tensor & TypeDefault::set_requires_grad(Tensor & self, bool requires_grad) const {
+  AT_ERROR("set_requires_grad is not implemented for Tensor");
+}
+
 void TypeDefault::backward(
     Tensor& self,
     c10::optional<Tensor> gradient,
