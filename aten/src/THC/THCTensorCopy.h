@@ -9,7 +9,4 @@
 #include <THC/generic/THCTensorCopy.h>
 #include <THC/THCGenerateAllTypes.h>
 
-#include <THC/generic/THCTensorCopy.h>
-#include <THC/THCGenerateBoolType.h>
-
 #endif

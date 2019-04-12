@@ -259,8 +259,6 @@ Other Operations
 ~~~~~~~~~~~~~~~~~~~~~~
 .. autofunction:: bincount
 .. autofunction:: broadcast_tensors
-.. autofunction:: cartesian_prod
-.. autofunction:: combinations
 .. autofunction:: cross
 .. autofunction:: diag
 .. autofunction:: diag_embed
@@ -277,9 +275,7 @@ Other Operations
 .. autofunction:: tensordot
 .. autofunction:: trace
 .. autofunction:: tril
-.. autofunction:: tril_indices
 .. autofunction:: triu
-.. autofunction:: triu_indices
 
 
 BLAS and LAPACK Operations

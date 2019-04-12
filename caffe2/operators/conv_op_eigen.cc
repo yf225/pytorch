@@ -19,7 +19,7 @@ class EigenConvOp final : public ConvPoolOpBase<CPUContext> {
       : ConvPoolOpBase<CPUContext>(operator_def, ws) {
     OPERATOR_NEEDS_FEATURE(group_ == 1, "Group convolution not supported yet.");
   }
-  ~EigenConvOp() override {}
+  ~EigenConvOp() {}
 
   bool RunOnDeviceWithOrderNCHW() override;
   bool RunOnDeviceWithOrderNHWC() override;

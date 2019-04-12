@@ -211,12 +211,7 @@ FullyConnectedDNNLowPPackWeightOp::FullyConnectedDNNLowPPackWeightOp(
     const OperatorDef& operator_def,
     Workspace* ws)
     : DNNLowPOp<uint8_t, FCFp32Op>(operator_def, ws),
-      axis_w_(this->GetSingleArgument<int32_t>("axis_w", 1)),
-      quantize_channelwise_(
-          this->GetSingleArgument<bool>("quantize_channelwise", false)) {
-  if (this->debug_def().engine() == "DNNLOWP_ROWWISE") {
-    quantize_channelwise_ = true;
-  }
+      axis_w_(this->GetSingleArgument<int32_t>("axis_w", 1)) {
   if (this->debug_def().engine() == "DNNLOWP_ACC16") {
     nbits_in_non_outlier_ = this->GetSingleArgument<int>(
         "nbits_in_non_outlier", FLAGS_caffe2_dnnlowp_nbits_in_non_outlier);
@@ -236,13 +231,14 @@ bool FullyConnectedDNNLowPPackWeightOp::RunOnDevice() {
   // This is just a convenient way to pass tensor shape information
   Y->original_tensor.ResizeLike(filter);
 
-  Y->qparams.resize(quantize_channelwise_ ? N : 1);
+  Y->qparams.resize((this->debug_def().engine() == "DNNLOWP_ROWWISE") ? N : 1);
 
   vector<int8_t> W_quantized;
   QuantizeWeight<uint8_t>(
       InputBlob(0), K, N, Y->qparams, W_quantized, qfactory_.get());
 
-  if (this->InputIsType<int8::Int8TensorCPU>(0) && quantize_channelwise_) {
+  if (this->InputIsType<int8::Int8TensorCPU>(0) &&
+      this->debug_def().engine() == "DNNLOWP_ROWWISE") {
     static int log_occurences = 0;
     if (log_occurences < 32) {
       ++log_occurences;

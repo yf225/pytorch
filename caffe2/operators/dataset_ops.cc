@@ -1419,7 +1419,7 @@ SHOULD_NOT_DO_GRADIENT(PackRecords);
 class TreeCursorSerializer : public BlobSerializerBase {
  public:
   TreeCursorSerializer() {}
-  ~TreeCursorSerializer() override {}
+  ~TreeCursorSerializer() {}
 
   void Serialize(
       const void* pointer,

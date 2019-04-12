@@ -36,7 +36,7 @@ class CuDNNDropoutOp final : public Operator<CUDAContext> {
     }
   }
 
-  ~CuDNNDropoutOp() noexcept override {
+  ~CuDNNDropoutOp() noexcept {
     CUDNN_ENFORCE(cudnnDestroyTensorDescriptor(data_desc_));
     CUDNN_ENFORCE(cudnnDestroyDropoutDescriptor(dropout_desc_));
   }
@@ -98,7 +98,7 @@ class CuDNNDropoutGradientOp final : public Operator<CUDAContext> {
     CAFFE_ENFORCE(scratch_blob_);
   }
 
-  ~CuDNNDropoutGradientOp() noexcept override {
+  ~CuDNNDropoutGradientOp() noexcept {
     CUDNN_ENFORCE(cudnnDestroyTensorDescriptor(data_desc_));
     CUDNN_ENFORCE(cudnnDestroyDropoutDescriptor(dropout_desc_));
   }

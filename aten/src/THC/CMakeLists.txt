@@ -78,7 +78,6 @@ INSTALL(FILES
           THCDeviceTensorUtils.cuh
           THCDeviceTensorUtils-inl.cuh
           THCGenerateAllTypes.h
-          THCGenerateBoolType.h
           THCGenerateByteType.h
           THCGenerateCharType.h
           THCGenerateShortType.h

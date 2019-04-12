@@ -82,9 +82,7 @@ void writeTextOutput(
   }
   // remove the last ,
   string str = line.str();
-  if(str.length() != 0) {
-    str.pop_back();
-  }
+  str.pop_back();
   lines.push_back(str);
 
   // static casts are workaround for MSVC build

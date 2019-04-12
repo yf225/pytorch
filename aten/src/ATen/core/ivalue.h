@@ -73,10 +73,37 @@ struct DictEqualTo {
   bool operator()(const IValue& lhs, const IValue& rhs) const;
 };
 
-using UnorderedMap = std::unordered_map<IValue, IValue, DictHash, DictEqualTo>;
+template <typename Key, typename Value>
+using DictUnorderedMap = std::unordered_map<Key, Value, DictHash, DictEqualTo>;
+
+template <typename Key, typename Value>
+struct CAFFE2_API Dict : c10::intrusive_ptr_target {
+ private:
+  DictUnorderedMap<Key, Value> elements_;
+
+ public:
+  Dict(DictUnorderedMap<Key, Value> elements_)
+      : elements_(std::move(elements_)) {}
+  static c10::intrusive_ptr<Dict> create(
+      DictUnorderedMap<Key, Value> elements_) {
+    return c10::make_intrusive<Dict>(std::move(elements_));
+  }
+  const DictUnorderedMap<Key, Value>& elements() const {
+    return elements_;
+  }
+  operator const DictUnorderedMap<Key, Value>&() const {
+    return elements();
+  }
+
+  DictUnorderedMap<Key, Value>& elements() {
+    return elements_;
+  }
+  operator DictUnorderedMap<Key, Value>&() {
+    return elements();
+  }
+};
 
 struct Future;
-struct GenericDict;
 
 struct CAFFE2_API Tuple : public List<IValue> {
   using List<IValue>::List;
@@ -89,6 +116,7 @@ using TensorList = List<at::Tensor>;
 using DoubleList = List<double>;
 using BoolList = List<bool>;
 using GenericList = List<IValue>;
+using GenericDict = Dict<IValue, IValue>;
 
 
 }
@@ -311,7 +339,7 @@ struct CAFFE2_API IValue final {
   const std::vector<bool>& toBoolListRef() const;
   const std::vector<at::Tensor>& toTensorListRef() const;
   const std::vector<IValue>& toGenericListRef() const;
-  const ivalue::UnorderedMap& toGenericDictRef() const;
+  const ivalue::DictUnorderedMap<IValue, IValue>& toGenericDictRef() const;
   const std::string& toStringRef() const;
 
   // ConstantString
@@ -381,7 +409,7 @@ struct CAFFE2_API IValue final {
 
   // GenericDict
   IValue(c10::intrusive_ptr<ivalue::GenericDict> v);
-  IValue(ivalue::UnorderedMap v);
+  IValue(ivalue::DictUnorderedMap<IValue, IValue> v);
   bool isGenericDict() const { return Tag::GenericDict == tag; }
   c10::intrusive_ptr<ivalue::GenericDict> toGenericDict() && {
     AT_ASSERT(isGenericDict());
@@ -664,32 +692,6 @@ struct C10_EXPORT ivalue::Future final : c10::intrusive_ptr_target {
   FutureError error;
 };
 
-struct C10_EXPORT ivalue::GenericDict : c10::intrusive_ptr_target {
- private:
-  UnorderedMap elements_;
-
- public:
-  GenericDict(UnorderedMap elements_)
-      : elements_(std::move(elements_)) {}
-  static c10::intrusive_ptr<GenericDict> create(
-      UnorderedMap elements_) {
-    return c10::make_intrusive<GenericDict>(std::move(elements_));
-  }
-  const UnorderedMap& elements() const {
-    return elements_;
-  }
-  operator const UnorderedMap&() const {
-    return elements();
-  }
-
-  UnorderedMap& elements() {
-    return elements_;
-  }
-  operator UnorderedMap&() {
-    return elements();
-  }
-};
-
 #undef TORCH_FORALL_TAGS
 
 namespace detail {
@@ -804,7 +806,7 @@ inline IValue::IValue(c10::intrusive_ptr<ivalue::GenericDict> v)
 : tag(Tag::GenericDict), is_intrusive_ptr(true) {
   payload.as_intrusive_ptr = v.release();
 }
-inline IValue::IValue(ivalue::UnorderedMap v)
+inline IValue::IValue(ivalue::DictUnorderedMap<IValue, IValue> v)
 : IValue(ivalue::GenericDict::create(std::move(v))) {}
 
 inline IValue::IValue(c10::intrusive_ptr<ivalue::Future> v)
@@ -832,7 +834,7 @@ inline const std::vector<IValue>& IValue::toGenericListRef() const {
   return toGenericList()->elements();
 }
 
-inline const c10::ivalue::UnorderedMap& IValue::
+inline const c10::ivalue::DictUnorderedMap<IValue, IValue>& IValue::
     toGenericDictRef() const {
   return toGenericDict()->elements();
 }

@@ -9,7 +9,7 @@ from ..._jit_internal import weak_module, weak_script_method
 
 @weak_module
 class Threshold(Module):
-    r"""Thresholds each element of the input Tensor.
+    r"""Thresholds each element of the input Tensor
 
     Threshold is defined as:
 
@@ -58,9 +58,10 @@ class Threshold(Module):
 
 @weak_module
 class ReLU(Threshold):
-    r"""Applies the rectified linear unit function element-wise:
-
+    r"""Applies the rectified linear unit function element-wise
     :math:`\text{ReLU}(x)= \max(0, x)`
+
+    .. image:: scripts/activation_images/ReLU.png
 
     Args:
         inplace: can optionally do the operation in-place. Default: ``False``
@@ -69,8 +70,6 @@ class ReLU(Threshold):
         - Input: :math:`(N, *)` where `*` means, any number of additional
           dimensions
         - Output: :math:`(N, *)`, same shape as the input
-
-    .. image:: scripts/activation_images/ReLU.png
 
     Examples::
 
@@ -167,6 +166,8 @@ class Hardtanh(Module):
     The range of the linear region :math:`[-1, 1]` can be adjusted using
     :attr:`min_val` and :attr:`max_val`.
 
+    .. image:: scripts/activation_images/Hardtanh.png
+
     Args:
         min_val: minimum value of the linear region range. Default: -1
         max_val: maximum value of the linear region range. Default: 1
@@ -179,8 +180,6 @@ class Hardtanh(Module):
         - Input: :math:`(N, *)` where `*` means, any number of additional
           dimensions
         - Output: :math:`(N, *)`, same shape as the input
-
-    .. image:: scripts/activation_images/Hardtanh.png
 
     Examples::
 
@@ -395,6 +394,8 @@ class SELU(Module):
     with :math:`\alpha = 1.6732632423543772848170429916717` and
     :math:`\text{scale} = 1.0507009873554804934193349852946`.
 
+    .. image:: scripts/activation_images/SELU.png
+
     More details can be found in the paper `Self-Normalizing Neural Networks`_ .
 
     Args:
@@ -404,8 +405,6 @@ class SELU(Module):
         - Input: :math:`(N, *)` where `*` means, any number of additional
           dimensions
         - Output: :math:`(N, *)`, same shape as the input
-
-    .. image:: scripts/activation_images/SELU.png
 
     Examples::
 
@@ -434,7 +433,7 @@ class SELU(Module):
 class GLU(Module):
     r"""Applies the gated linear unit function
     :math:`{GLU}(a, b)= a \otimes \sigma(b)` where :math:`a` is the first half
-    of the input matrices and :math:`b` is the second half.
+    of the input vector and :math:`b` is the second half.
 
     Args:
         dim (int): the dimension on which to split the input. Default: -1
@@ -709,7 +708,8 @@ class PReLU(Module):
         - Output: :math:`(N, *)`, same shape as the input
 
     Attributes:
-        weight (Tensor): the learnable weights of shape (:attr:`num_parameters`).
+        weight (Tensor): the learnable weights of shape (attr:`num_parameters`).
+            The attr:`dtype` is default to
 
     .. image:: scripts/activation_images/PReLU.png
 
@@ -789,9 +789,7 @@ class Tanhshrink(Module):
 class Softmin(Module):
     r"""Applies the Softmin function to an n-dimensional input Tensor
     rescaling them so that the elements of the n-dimensional output Tensor
-    lie in the range `[0, 1]` and sum to 1.
-
-    Softmin is defined as:
+    lie in the range `(0, 1)` and sum to 1
 
     .. math::
         \text{Softmin}(x_{i}) = \frac{\exp(-x_i)}{\sum_j \exp(-x_j)}
@@ -830,7 +828,7 @@ class Softmin(Module):
 class Softmax(Module):
     r"""Applies the Softmax function to an n-dimensional input Tensor
     rescaling them so that the elements of the n-dimensional output Tensor
-    lie in the range [0,1] and sum to 1.
+    lie in the range (0,1) and sum to 1
 
     Softmax is defined as:
 
@@ -920,7 +918,8 @@ class LogSoftmax(Module):
         - Output: :math:`(*)`, same shape as the input
 
     Arguments:
-        dim (int): A dimension along which LogSoftmax will be computed.
+        dim (int): A dimension along which Softmax will be computed (so every slice
+            along dim will sum to 1).
 
     Returns:
         a Tensor of the same dimension and shape as the input with

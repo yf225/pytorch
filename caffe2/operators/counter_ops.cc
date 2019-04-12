@@ -136,7 +136,7 @@ namespace {
 class CounterSerializer : public BlobSerializerBase {
  public:
   CounterSerializer() {}
-  ~CounterSerializer() override {}
+  ~CounterSerializer() {}
 
   void Serialize(
       const void* pointer,

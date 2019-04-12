@@ -56,6 +56,3 @@ THC_API bool THCTensor_maybeOverlappingIndices(THCState* state, const THCTensor*
 
 #include <THC/generic/THCTensor.hpp>
 #include <THC/THCGenerateAllTypes.h>
-
-#include <THC/generic/THCTensor.hpp>
-#include <THC/THCGenerateBoolType.h>

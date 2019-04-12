@@ -17,25 +17,20 @@ namespace jit {
 using ModuleLookup = std::function<std::shared_ptr<script::Module>(
     const std::vector<std::string>&)>;
 
-static script::ExtraFilesMap default_extra_files;
-
 TORCH_API void import_ir_module(
     ModuleLookup module_lookup,
     const std::string& filename,
-    c10::optional<c10::Device> device = c10::nullopt,
-    script::ExtraFilesMap& extra_files = default_extra_files);
+    c10::optional<c10::Device> device = c10::nullopt);
 
 TORCH_API void import_ir_module(
     ModuleLookup module_lookup,
     std::istream& in,
-    c10::optional<c10::Device> device = c10::nullopt,
-    script::ExtraFilesMap& extra_files = default_extra_files);
+    c10::optional<c10::Device> device = c10::nullopt);
 
 TORCH_API void import_ir_module(
     ModuleLookup module_lookup,
     std::unique_ptr<caffe2::serialize::ReadAdapterInterface> rai,
-    c10::optional<c10::Device> device = c10::nullopt,
-    script::ExtraFilesMap& extra_files = default_extra_files);
+    c10::optional<c10::Device> device = c10::nullopt);
 
 /// Loads a serialized `script::Module` from the given `istream`.
 ///
@@ -43,8 +38,7 @@ TORCH_API void import_ir_module(
 /// `torch::jit::ExportModule` in C++.
 TORCH_API std::shared_ptr<script::Module> load(
     std::istream& in,
-    c10::optional<c10::Device> device = c10::nullopt,
-    script::ExtraFilesMap& extra_files = default_extra_files);
+    c10::optional<c10::Device> device = c10::nullopt);
 
 /// Loads a serialized `script::Module` from the given `filename`.
 ///
@@ -53,8 +47,7 @@ TORCH_API std::shared_ptr<script::Module> load(
 /// Python or `torch::jit::ExportModule` in C++.
 TORCH_API std::shared_ptr<script::Module> load(
     const std::string& filename,
-    c10::optional<c10::Device> device = c10::nullopt,
-    script::ExtraFilesMap& extra_files = default_extra_files);
+    c10::optional<c10::Device> device = c10::nullopt);
 
 /// Loads a serialized `script::Module` from the given `rai`.
 ///
@@ -63,8 +56,8 @@ TORCH_API std::shared_ptr<script::Module> load(
 /// Python or `torch::jit::ExportModule` in C++.
 TORCH_API std::shared_ptr<script::Module> load(
     std::unique_ptr<caffe2::serialize::ReadAdapterInterface> rai,
-    c10::optional<c10::Device> device = c10::nullopt,
-    script::ExtraFilesMap& extra_files = default_extra_files);
+    c10::optional<c10::Device> device = c10::nullopt);
+
 
 } // namespace jit
 } // namespace torch

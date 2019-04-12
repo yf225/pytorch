@@ -44,7 +44,7 @@ class IDEEPConvFusionOp final : public IDEEPConvPoolOpBase {
           "explicitly the kernel size.");
     }
   }
-  ~IDEEPConvFusionOp() override {}
+  virtual ~IDEEPConvFusionOp() {}
 
   bool RunOnDeviceWithOrderNCHW() override {
     const auto& X = Input(INPUT_X);

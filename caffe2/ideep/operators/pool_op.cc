@@ -29,7 +29,7 @@ class IDEEPPoolOp final : public IDEEPConvPoolOpBase {
       LOG(FATAL) << "Unsupported pooling method: " << operator_def.type();
     }
   }
-  ~IDEEPPoolOp() override {}
+  virtual ~IDEEPPoolOp() {}
 
   bool RunOnDeviceWithOrderNCHW() override {
     auto& X = Input(INPUT);
@@ -77,7 +77,7 @@ class IDEEPPoolGradientOp final : public IDEEPConvPoolOpBase {
       LOG(FATAL) << "Unsupported pooling method: " << operator_def.type();
     }
   }
-  ~IDEEPPoolGradientOp() override {}
+  virtual ~IDEEPPoolGradientOp() {}
 
   bool RunOnDeviceWithOrderNCHW() override {
     const auto& X = Input(INPUT);

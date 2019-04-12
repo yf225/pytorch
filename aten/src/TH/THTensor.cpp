@@ -6,9 +6,6 @@
 #include <TH/generic/THTensor.cpp>
 #include <TH/THGenerateHalfType.h>
 
-#include <TH/generic/THTensor.cpp>
-#include <TH/THGenerateBoolType.h>
-
 #include <ATen/native/Resize.h>
 
 #include <numeric>

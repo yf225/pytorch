@@ -86,7 +86,7 @@ class CuDNNPoolOp final : public ConvPoolOpBase<CUDAContext> {
     }
   }
 
-  ~CuDNNPoolOp() override {
+  ~CuDNNPoolOp() {
     CUDNN_ENFORCE(cudnnDestroyTensorDescriptor(X_desc_));
     CUDNN_ENFORCE(cudnnDestroyTensorDescriptor(Y_desc_));
     CUDNN_ENFORCE(cudnnDestroyPoolingDescriptor(pooling_desc_));
@@ -226,7 +226,7 @@ class CuDNNPoolGradientOp final : public ConvPoolOpBase<CUDAContext> {
     }
   }
 
-  ~CuDNNPoolGradientOp() override {
+  ~CuDNNPoolGradientOp() {
     CUDNN_ENFORCE(cudnnDestroyTensorDescriptor(X_desc_));
     CUDNN_ENFORCE(cudnnDestroyTensorDescriptor(Y_desc_));
     CUDNN_ENFORCE(cudnnDestroyPoolingDescriptor(pooling_desc_));

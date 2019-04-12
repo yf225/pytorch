@@ -160,11 +160,8 @@ public:
 #endif
   }
 
-  void Feed(
-      const DeviceOption& option,
-      PyArrayObject* original_array,
-      Blob* blob,
-      bool in_place) override {
+  void Feed(const DeviceOption &option, PyArrayObject *original_array,
+            Blob *blob, bool in_place) {
 #ifdef USE_NUMPY
     try {
       PyArrayObject *array = PyArray_GETCONTIGUOUS(original_array);

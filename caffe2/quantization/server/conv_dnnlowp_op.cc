@@ -227,16 +227,13 @@ void ConvDNNLowPOp<T, ReluFused>::QuantizeBias_() {
   const auto& filter = InputTensorCPU_(FILTER);
   int M = filter.dim32(0);
 
-  bool has_packed_bias =
-      this->template InputIsType<Int8ConvDNNLowPPackedWeightBlob>(FILTER) &&
-      this->template Input<Int8ConvDNNLowPPackedWeightBlob>(FILTER).bias.get();
-  bool has_bias = InputSize() == 3 || has_packed_bias;
-
   // Quantize bias
-  if (has_bias &&
+  if (InputSize() == 3 &&
       (!b_quantized_data_ ||
        in_qparams_[INPUT].scale != in_qparams_scale_old_)) {
-    if (has_packed_bias) {
+    if (this->template InputIsType<Int8ConvDNNLowPPackedWeightBlob>(FILTER) &&
+        this->template Input<Int8ConvDNNLowPPackedWeightBlob>(FILTER)
+            .bias.get()) {
       const auto& packed_filter =
           this->template Input<Int8ConvDNNLowPPackedWeightBlob>(FILTER);
       b_quantized_ = packed_filter.bias;
@@ -341,10 +338,12 @@ void ConvDNNLowPOp<T, ReluFused>::QuantizeWeight_() {
       }
     }
 
+    filter_scales_.resize(filter_qparams_.size());
     filter_zero_points_.resize(filter_qparams_.size());
     requantization_params_.resize(filter_qparams_.size());
     requantization_multipliers_.resize(filter_qparams_.size());
     for (int i = 0; i < filter_qparams_.size(); ++i) {
+      filter_scales_[i] = filter_qparams_[i].scale;
       filter_zero_points_[i] = filter_qparams_[i].zero_point;
     }
 
@@ -533,7 +532,7 @@ void ConvDNNLowPOp<T, ReluFused>::RunOnDeviceEpilogueNCHW_(
   for (int i = 0; i < M / group_; ++i) {
     int32_t row_offset = row_offsets_[i_offset + i];
     row_offset *= -in_qparams_[INPUT].zero_point;
-    if (b_quantized_data_) {
+    if (InputSize() == 3) {
       row_offset += b_quantized_data_[i_offset + i];
     }
     for (int j = 0; j < Y_HxW; ++j) {
@@ -1010,7 +1009,7 @@ void ConvDNNLowPOp<T, ReluFused>::DispatchFBGEMM_(
       filter_zero_points_.data(),
       packA.getRowOffsetBuffer(),
       column_offsets_->data(),
-      b_quantized_data_,
+      InputSize() == 3 ? b_quantized_data_ : nullptr,
       M,
       group_);
 
@@ -1202,7 +1201,7 @@ void ConvDNNLowPOp<T, ReluFused>::ConvNHWCCore_(
             filter_zero_points_.data(),
             row_offsets_.data() + tid * row_offset_size_per_thread,
             column_offsets_->data(),
-            b_quantized_data_,
+            InputSize() == 3 ? b_quantized_data_ : nullptr,
             conv_p.OC,
             conv_p.G);
 
@@ -1226,7 +1225,7 @@ void ConvDNNLowPOp<T, ReluFused>::ConvNHWCCore_(
             filter_zero_points_.data(),
             row_offsets_.data() + tid * row_offset_size_per_thread,
             column_offsets_->data(),
-            b_quantized_data_,
+            InputSize() == 3 ? b_quantized_data_ : nullptr,
             conv_p.OC,
             conv_p.G);
 

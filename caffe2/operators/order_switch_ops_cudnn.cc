@@ -22,7 +22,7 @@ class CuDNNOrderSwithOpBase : public Operator<CUDAContext> {
     CUDNN_ENFORCE(cudnnCreateTensorDescriptor(&Y_desc_));
   }
 
-  ~CuDNNOrderSwithOpBase() override {
+  virtual ~CuDNNOrderSwithOpBase() {
     CUDNN_ENFORCE(cudnnDestroyTensorDescriptor(X_desc_));
     CUDNN_ENFORCE(cudnnDestroyTensorDescriptor(Y_desc_));
   }

@@ -23,7 +23,7 @@ class ZmqDBCursor : public Cursor {
     Next();
   }
 
-  ~ZmqDBCursor() override {
+  ~ZmqDBCursor() {
     finalize_ = true;
     prefetched_ = false;
     producer_.notify_one();
@@ -91,7 +91,7 @@ class ZmqDB : public DB {
     CAFFE_ENFORCE(mode == READ, "ZeroMQ DB only supports read mode.");
   }
 
-  ~ZmqDB() override {}
+  ~ZmqDB() {}
 
   void Close() override {}
 

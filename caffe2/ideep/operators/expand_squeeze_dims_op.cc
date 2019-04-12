@@ -23,7 +23,7 @@ class IDEEPExpandDimsOp final : public IDEEPOperator {
     }
     CAFFE_ENFORCE_GE(dims_.front(), 0, "Dimension ids must be non-negative.");
   }
-  ~IDEEPExpandDimsOp() override {}
+  ~IDEEPExpandDimsOp() {}
 
   bool RunOnDevice() override {
     if (!OperatorBase::InputBlob(INPUT).template IsType<itensor>()) {
@@ -85,7 +85,7 @@ class IDEEPSqueezeOp final : public IDEEPOperator {
     }
     CAFFE_ENFORCE_GE(dims_.front(), 0, "Dimension ids must be non-negative.");
   }
-  ~IDEEPSqueezeOp() override {}
+  ~IDEEPSqueezeOp() {}
 
   bool RunOnDevice() override {
     if (!OperatorBase::InputBlob(INPUT).template IsType<itensor>()) {

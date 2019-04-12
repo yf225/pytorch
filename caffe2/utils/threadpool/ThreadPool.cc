@@ -113,12 +113,12 @@ void ThreadPool::run(const std::function<void(int, size_t)>& fn, size_t range) {
 
   struct FnTask : public Task {
     FnTask(){};
-    ~FnTask() override{};
+    virtual ~FnTask(){};
     const std::function<void(int, size_t)> *fn_;
     int idx_;
     size_t start_;
     size_t end_;
-    void Run() override {
+    virtual void Run() override {
       for (auto i = start_; i < end_; ++i) {
         (*fn_)(idx_, i);
       }

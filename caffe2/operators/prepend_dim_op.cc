@@ -25,8 +25,7 @@ OPERATOR_SCHEMA(MergeDim)
 Merge first two dimensions in a single dimension with size dim(0) * dim(1).
 )DOC")
     .Input(0, "data", "An input tensor.")
-    .Output(0, "reshaped", "Reshaped tensor.")
-    .InheritOnnxSchema("Reshape");
+    .Output(0, "reshaped", "Reshaped tensor.");
 
 class GetPrependDimGradient : public GradientMakerBase {
   using GradientMakerBase::GradientMakerBase;

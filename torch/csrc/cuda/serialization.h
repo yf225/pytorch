@@ -6,7 +6,4 @@
 #define THC_GENERIC_FILE "torch/csrc/generic/serialization.h"
 #include <THC/THCGenerateAllTypes.h>
 
-#define THC_GENERIC_FILE "torch/csrc/generic/serialization.h"
-#include <THC/THCGenerateBoolType.h>
-
 #endif

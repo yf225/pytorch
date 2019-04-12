@@ -19,7 +19,7 @@ class IDEEPSpatialBNOp final : public IDEEPOperator {
     CAFFE_ENFORCE_GE(momentum_, 0);
     CAFFE_ENFORCE_LE(momentum_, 1);
   }
-  ~IDEEPSpatialBNOp() override {}
+  virtual ~IDEEPSpatialBNOp() {}
 
   bool RunOnDevice() override {
     const auto& X = Input(INPUT);
@@ -70,7 +70,7 @@ class IDEEPSpatialBNGradientOp final : public IDEEPOperator {
     CAFFE_ENFORCE(InputSize() > SAVED_VAR);
     CAFFE_ENFORCE(OutputSize() > BIAS_GRAD);
   }
-  ~IDEEPSpatialBNGradientOp() override {}
+  virtual ~IDEEPSpatialBNGradientOp() {}
 
   bool RunOnDevice() override {
     const auto& X = Input(INPUT);

@@ -265,7 +265,7 @@ def set_device(device):
         torch._C._cuda_setDevice(device)
 
 
-def get_device_name(device=None):
+def get_device_name(device):
     r"""Gets the name of a device.
 
     Arguments:
@@ -277,7 +277,7 @@ def get_device_name(device=None):
     return get_device_properties(device).name
 
 
-def get_device_capability(device=None):
+def get_device_capability(device):
     r"""Gets the cuda capability of a device.
 
     Arguments:
@@ -551,7 +551,7 @@ def _dummy_type(name):
 
 if not hasattr(torch._C, 'CudaDoubleStorageBase'):
     # Define dummy base classes
-    for t in ['Double', 'Float', 'Long', 'Int', 'Short', 'Char', 'Byte', 'Half', 'Bool']:
+    for t in ['Double', 'Float', 'Long', 'Int', 'Short', 'Char', 'Byte', 'Half']:
         storage_name = 'Cuda{0}StorageBase'.format(t)
         tensor_name = 'Cuda{0}TensorBase'.format(t)
 
@@ -613,9 +613,6 @@ class HalfStorage(_CudaBase, torch._C.CudaHalfStorageBase, _StorageBase):
     pass
 
 
-class BoolStorage(_CudaBase, torch._C.CudaBoolStorageBase, _StorageBase):
-    pass
-
 torch._storage_classes.add(DoubleStorage)
 torch._storage_classes.add(FloatStorage)
 torch._storage_classes.add(LongStorage)
@@ -624,7 +621,6 @@ torch._storage_classes.add(ShortStorage)
 torch._storage_classes.add(CharStorage)
 torch._storage_classes.add(ByteStorage)
 torch._storage_classes.add(HalfStorage)
-torch._storage_classes.add(BoolStorage)
 
 from . import sparse
 from . import profiler

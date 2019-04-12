@@ -95,17 +95,14 @@ Tensor TypeDefault::tensorWithAllocator(IntArrayRef sizes, IntArrayRef strides, 
 }
 
 Storage TypeDefault::storageFromBlob(void * data, int64_t size, const std::function<void(void*)> & deleter) const {
-  return Storage(
+    return Storage(
       typeMeta(),
+      InefficientStdFunctionContext::makeDataPtr(data, deleter, getDeviceFromPtr(data)),
       size,
-      InefficientStdFunctionContext::makeDataPtr(
-          data, deleter, getDeviceFromPtr(data)),
-      /*allocator=*/nullptr,
-      /*resizable=*/false);
+      deleter);
 }
 Storage TypeDefault::storageWithAllocator(int64_t size, Allocator* allocator) const {
-  // Potentially the storage might be marked as resizable too here
-  return Storage(typeMeta(), size, allocator, /*resizable=*/false);
+    return Storage(typeMeta(), size, allocator);
 }
 Tensor TypeDefault::unsafeTensorFromTH(void * th_pointer, bool retain) const {
   auto tensor_impl = c10::intrusive_ptr<TensorImpl, UndefinedTensorImpl>::reclaim(static_cast<TensorImpl*>(th_pointer));

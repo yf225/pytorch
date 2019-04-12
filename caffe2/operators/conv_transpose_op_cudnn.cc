@@ -53,7 +53,7 @@ class CudnnConvTransposeOpBase : public ConvTransposeUnpoolBase<CUDAContext> {
     CUDNN_ENFORCE(cudnnCreateConvolutionDescriptor(&conv_desc_));
   }
 
-  ~CudnnConvTransposeOpBase() override {
+  ~CudnnConvTransposeOpBase() {
     CUDNN_ENFORCE(cudnnDestroyTensorDescriptor(bottom_desc_));
     CUDNN_ENFORCE(cudnnDestroyFilterDescriptor(filter_desc_));
     if (InputSize() == 3) {
@@ -88,7 +88,7 @@ class CudnnConvTransposeOp final : public CudnnConvTransposeOpBase {
   CudnnConvTransposeOp(const OperatorDef& operator_def, Workspace* ws)
       : CudnnConvTransposeOpBase(operator_def, ws) {}
 
-  ~CudnnConvTransposeOp() override {}
+  ~CudnnConvTransposeOp() {}
 
   bool RunOnDevice() override;
 
@@ -111,7 +111,7 @@ class CudnnConvTransposeGradientOp final : public CudnnConvTransposeOpBase {
         "If bias is not present, you should not have 3 grad output.");
   }
 
-  ~CudnnConvTransposeGradientOp() override {}
+  ~CudnnConvTransposeGradientOp() {}
 
   bool RunOnDevice() override;
 

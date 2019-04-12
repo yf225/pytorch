@@ -8,7 +8,4 @@
 #include <THC/generic/THCStorageCopy.h>
 #include <THC/THCGenerateAllTypes.h>
 
-#include <THC/generic/THCStorageCopy.h>
-#include <THC/THCGenerateBoolType.h>
-
 #endif

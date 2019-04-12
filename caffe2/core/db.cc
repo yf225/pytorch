@@ -26,7 +26,7 @@ class MiniDBCursor : public Cursor {
     // We call Next() to read in the first entry.
     Next();
   }
-  ~MiniDBCursor() override {}
+  ~MiniDBCursor() {}
 
   void Seek(const string& /*key*/) override {
     LOG(FATAL) << "MiniDB does not support seeking to a specific key.";
@@ -93,7 +93,7 @@ class MiniDBTransaction : public Transaction {
  public:
   explicit MiniDBTransaction(FILE* f, std::mutex* mutex)
     : file_(f), lock_(*mutex) {}
-  ~MiniDBTransaction() override {
+  ~MiniDBTransaction() {
     Commit();
   }
 
@@ -140,9 +140,7 @@ class MiniDB : public DB {
     CAFFE_ENFORCE(file_, "Cannot open file: " + source);
     VLOG(1) << "Opened MiniDB " << source;
   }
-  ~MiniDB() override {
-    Close();
-  }
+  ~MiniDB() { Close(); }
 
   void Close() override {
     if (file_) {

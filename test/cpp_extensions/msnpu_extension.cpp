@@ -15,18 +15,9 @@ Tensor get_dummy_tensor() {
   return Tensor(std::move(tensor_impl));
 }
 
-Tensor get_dtype_tensor(caffe2::TypeMeta dtype) {
-  auto tensor_impl = c10::make_intrusive<TensorImpl, UndefinedTensorImpl>(
-      Storage(
-          dtype, 0, at::DataPtr(nullptr, Device(DeviceType::MSNPU, 1)), nullptr, false),
-      MSNPUTensorId(),
-      false);
-  return Tensor(std::move(tensor_impl));
-}
-
 Tensor zeros_override(IntArrayRef size, const TensorOptions & options) {
   test_int = 0;
-  return get_dtype_tensor(options.dtype());
+  return get_dummy_tensor();
 }
 
 Tensor add_override(const Tensor & a, const Tensor & b , Scalar c) {

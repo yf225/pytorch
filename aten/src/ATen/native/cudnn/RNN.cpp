@@ -99,7 +99,6 @@ namespace {
     cudnnDirectionMode_t bidirectional;
     cudnnRNNMode_t mode;
     cudnnDataType_t datatype;
-    cudnnDataType_t input_datatype;
     cudnnRNNAlgo_t algo = CUDNN_RNN_ALGO_STANDARD;
     cudnnRNNInputMode_t input_mode = CUDNN_LINEAR_INPUT;
 
@@ -138,19 +137,18 @@ namespace {
       this->algo = algo;
     }
 
-    void set(int64_t mode, int64_t hidden_size, int64_t num_layers, bool bidirectional, cudnnDataType_t datatype, cudnnDataType_t input_datatype) {
+    void set(int64_t mode, int64_t hidden_size, int64_t num_layers, bool bidirectional, cudnnDataType_t datatype) {
       this->set_mode(mode);
       this->hidden_size = hidden_size;
       this->num_layers = num_layers;
       this->set_bidirectional(bidirectional);
       this->datatype = datatype;
-      this->input_datatype = input_datatype;
     }
 
 
     RNNDescriptor descriptor(cudnnHandle_t handle, DropoutDescriptor&& dropout_desc) const {
       RNNDescriptor rnn_desc;
-      rnn_desc.set(handle, hidden_size, num_layers, std::move(dropout_desc), input_mode, bidirectional, mode, datatype, input_datatype, algo);
+      rnn_desc.set(handle, hidden_size, num_layers, std::move(dropout_desc), input_mode, bidirectional, mode, datatype, algo);
       return rnn_desc;
     }
 
@@ -450,7 +448,7 @@ namespace {
 
           AT_ASSERTM(nb_dims <= min_dim, "nb_dims = ", nb_dims, "; min_dim  = ", min_dim);
           filter_dim_a = filter_dim_a.slice(0, 0, nb_dims);
-          auto elem_size = dataSize(getCudnnDataType(weight_buf));
+          auto elem_size = dataSize(rnn.datatype);
           auto offset_bytes = (char*)matrix_pointer - (char*)weight_buf.data_ptr();
           AT_ASSERTM(offset_bytes % elem_size == 0, "offset_bytes = ", offset_bytes, "; elem_size = ", elem_size);
           size_t offset = offset_bytes / elem_size;
@@ -577,14 +575,14 @@ namespace {
     }
   }
 
-  cudnnRNNAlgo_t get_algo(const RNNDescriptorParams& rnn, const TensorDescriptorListParams& tensors, const Tensor input){
+  cudnnRNNAlgo_t get_algo(const RNNDescriptorParams& rnn, const TensorDescriptorListParams& tensors){
 #if CUDNN_VERSION < 7200 || CUDA_VERSION < 9010
       return CUDNN_RNN_ALGO_STANDARD;
 #else
       cudaDeviceProp* prop = at::cuda::getCurrentDeviceProperties();
       const int64_t bsize = tensors.mini_batch;
       //excluding Turing from using persistent rnn.
-      if (prop->major == 7 && prop->minor != 5 && getCudnnDataType(input) == CUDNN_DATA_HALF && !tensors.is_input_packed()) {
+      if (prop->major == 7 && prop->minor != 5 && rnn.datatype == CUDNN_DATA_HALF && !tensors.is_input_packed()) {
           if (rnn.num_layers == 1 && rnn.hidden_size <= 1024 && rnn.num_directions() == 1 &&
                   rnn.hidden_size % 128 == 0 && tensors.input_size % 128 == 0){
               //technically, batch size should be multiple of 8, but there are quite a few multiple-of-8 batchsizes that give bad perf,
@@ -600,17 +598,6 @@ namespace {
       }
       return CUDNN_RNN_ALGO_STANDARD;
 #endif
-  }
-
-  cudnnDataType_t promote_rnn_math_type(cudnnDataType_t dtype) {
-#if CUDNN_VERSION != 7103
-// CUDNN 7.1.3 enforces RNN descriptor type to be identical to input/weight. This check throws an error for type
-// promotion. The check has since been removed.
-    if (dtype == CUDNN_DATA_HALF) {
-      return CUDNN_DATA_FLOAT;
-    }
-#endif
-    return dtype;
   }
 
 } // anonymous namespace
@@ -631,10 +618,9 @@ Tensor _cudnn_rnn_flatten_weight(
            "_cudnn_rnn_flatten_weight_: cannot flatten empty weight list");
 
   auto any_param = weight_arr[0];
-  auto datatype = getCudnnDataType(any_param);
 
   RNNDescriptorParams rnn;
-  rnn.set(fn_mode, fn_hidden_size, fn_num_layers, fn_bidirectional, promote_rnn_math_type(datatype), datatype);
+  rnn.set(fn_mode, fn_hidden_size, fn_num_layers, fn_bidirectional, getCudnnDataType(any_param));
 
   auto handle = getCudnnHandle();
   RNNDescriptor rnn_desc = rnn.descriptor(handle);
@@ -643,7 +629,7 @@ Tensor _cudnn_rnn_flatten_weight(
   TensorDescriptor x_desc;
   x_desc.set(getCudnnDataType(any_param), x_geom.sizes(), x_geom.strides(), 5);
 
-  auto num_weights = get_num_weights(handle, rnn_desc, x_desc, datatype);
+  auto num_weights = get_num_weights(handle, rnn_desc, x_desc, rnn.datatype);
   auto weight_buf = at::zeros(num_weights, any_param.options());
 
   FilterDescriptor w_desc;
@@ -693,8 +679,7 @@ std::tuple<Tensor, Tensor, Tensor, Tensor, Tensor> _cudnn_rnn(
       checkSameGPU("cudnn_rnn", input_arg, dropout_state_arg);
   }
   RNNParams fn;
-  auto datatype = getCudnnDataType(input);
-  fn.rnn.set(fn_mode, fn_hidden_size, fn_num_layers, fn_bidirectional, promote_rnn_math_type(datatype), datatype);
+  fn.rnn.set(fn_mode, fn_hidden_size, fn_num_layers, fn_bidirectional, getCudnnDataType(input));
   fn.dropout.set(fn_train, fn_dropout, fn_dropout_state);
   fn.tensors.set(input.sizes(), fn_batch_sizes, batch_first);
 
@@ -731,13 +716,13 @@ std::tuple<Tensor, Tensor, Tensor, Tensor, Tensor> _cudnn_rnn(
   auto y = output;
 
   auto handle = getCudnnHandle();
-  cudnnRNNAlgo_t algo = get_algo(fn.rnn, fn.tensors, input);
+  cudnnRNNAlgo_t algo = get_algo(fn.rnn, fn.tensors);
   fn.rnn.set_algo(algo);
   RNNDescriptors descs(fn, handle, x, y, hx, cx);
 
   FilterDescriptor w_desc;
   if (!weight_buf.defined()) {
-    auto num_weights = get_num_weights(handle, descs.rnn_desc, descs.x_descs[0], datatype);
+    auto num_weights = get_num_weights(handle, descs.rnn_desc, descs.x_descs[0], fn.rnn.datatype);
     weight_buf = at::empty(num_weights, x.options());
     w_desc.set(weight_buf, 3);
     weight_buf.zero_();
@@ -833,8 +818,7 @@ std::tuple<Tensor, Tensor, Tensor> _cudnn_rnn_backward_input(
   auto output = output_r;
 
   RNNParams fn;
-  auto datatype = getCudnnDataType(input);
-  fn.rnn.set(fn_mode, fn_hidden_size, fn_num_layers, fn_bidirectional, promote_rnn_math_type(datatype), datatype);
+  fn.rnn.set(fn_mode, fn_hidden_size, fn_num_layers, fn_bidirectional, getCudnnDataType(input));
   fn.dropout.set(fn_train, fn_dropout, fn_dropout_state);
   fn.tensors.set(input.sizes(), fn_batch_sizes, batch_first);
 
@@ -893,7 +877,7 @@ std::tuple<Tensor, Tensor, Tensor> _cudnn_rnn_backward_input(
   AT_CHECK(dhy.is_cuda() && dy.is_cuda() && (!dcy.defined() || dcy.is_cuda()),
            "Gradients aren't CUDA tensors");
 
-  cudnnRNNAlgo_t algo = get_algo(fn.rnn, fn.tensors, input);
+  cudnnRNNAlgo_t algo = get_algo(fn.rnn, fn.tensors);
   fn.rnn.set_algo(algo);
   RNNDescriptors descs(fn, handle, x, y, hx, cx);
 
@@ -957,8 +941,7 @@ std::vector<Tensor> _cudnn_rnn_backward_weight(
   auto output = output_r;
 
   RNNParams fn;
-  auto datatype = getCudnnDataType(input);
-  fn.rnn.set(fn_mode, fn_hidden_size, fn_num_layers, fn_bidirectional, promote_rnn_math_type(datatype), datatype);
+  fn.rnn.set(fn_mode, fn_hidden_size, fn_num_layers, fn_bidirectional, getCudnnDataType(input));
   fn.dropout.set(fn_train, fn_dropout, fn_dropout_state);
   fn.tensors.set(input.sizes(), fn_batch_sizes, batch_first);
 
@@ -998,7 +981,7 @@ std::vector<Tensor> _cudnn_rnn_backward_weight(
   const auto& y = output;
   auto dw = at::zeros(weight_buf.sizes(), weight_buf.options());
 
-  cudnnRNNAlgo_t algo = get_algo(fn.rnn, fn.tensors, input);
+  cudnnRNNAlgo_t algo = get_algo(fn.rnn, fn.tensors);
   fn.rnn.set_algo(algo);
   RNNDescriptors descs(fn, handle, x, y, hx, cx);
 
@@ -1179,7 +1162,7 @@ Tensor try_get_weight_buf(
   auto datatype = getCudnnDataType(input);
 
   RNNDescriptorParams rnn;
-  rnn.set(mode, hidden_size, num_layers, bidirectional, promote_rnn_math_type(datatype), datatype);
+  rnn.set(mode, hidden_size, num_layers, bidirectional, datatype);
   RNNDescriptor rnn_desc = rnn.descriptor(handle);
 
   TensorGeometry x_geom ({1, input.size(-1)});

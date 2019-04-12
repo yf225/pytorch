@@ -128,7 +128,5 @@ class AliasDb {
   std::unordered_set<const Node*> wildcardNodes_;
   std::unique_ptr<AliasTracker> aliasTracker_;
 };
-
-TORCH_API bool aliasAnalysisHasSpecialCaseFor(c10::Symbol sym);
 } // namespace jit
 } // namespace torch

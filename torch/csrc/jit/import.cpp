@@ -45,8 +45,7 @@ class ScriptModuleDeserializer final {
   explicit ScriptModuleDeserializer(std::unique_ptr<ReadAdapterInterface> rai);
   void deserialize(
       ModuleLookup module_lookup,
-      c10::optional<at::Device> device,
-      script::ExtraFilesMap& extra_files);
+      c10::optional<at::Device> device);
 
  private:
   at::Tensor loadTensor(
@@ -81,8 +80,7 @@ ScriptModuleDeserializer::ScriptModuleDeserializer(
 
 void ScriptModuleDeserializer::deserialize(
     ModuleLookup module_lookup,
-    c10::optional<at::Device> device,
-    script::ExtraFilesMap& extra_files) {
+    c10::optional<at::Device> device) {
   torch::ModelDef model_def;
   at::DataPtr data_ptr;
   size_t data_size;
@@ -114,17 +112,6 @@ void ScriptModuleDeserializer::deserialize(
   device_ = device;
 
   const auto& module_def = model_def.main_module();
-
-  // Load extra files.
-  for (const auto& kv : extra_files) {
-    const std::string& key = "extra/" + kv.first;
-    at::DataPtr meta_ptr;
-    size_t meta_size;
-    std::tie(meta_ptr, meta_size) = reader_.getRecord(key);
-    extra_files[kv.first] =
-        std::string(static_cast<char*>(meta_ptr.get()), meta_size);
-  }
-
   loadTensorTable(&model_def);
   // TODO: this can be simplified when C++/Python interop lands,
   // and the submodules would be created as the same in either C++ or Python
@@ -162,10 +149,9 @@ at::Tensor ScriptModuleDeserializer::loadTensor(
     std::tie(storage_ptr, record_size) = reader_.getRecord(record_key);
     auto cpu_storage = at::Storage(
         at::CPU(type).typeMeta(),
-        record_size / at::CPU(type).typeMeta().itemsize(),
         std::move(storage_ptr),
-        /*allocator=*/nullptr,
-        /*resizable=*/false); // NB: we didn't set any allocator for the tensor
+        record_size / at::CPU(type).typeMeta().itemsize(),
+        nullptr); // NB: we didn't set any allocator for the tensor
     if (device.type() == at::DeviceType::CPU) {
       storage_it =
           storageMap.insert(std::make_pair(record_key, cpu_storage)).first;
@@ -239,53 +225,47 @@ void ScriptModuleDeserializer::convertModule(
 void import_ir_module(
     ModuleLookup module_lookup,
     std::istream& in,
-    c10::optional<at::Device> device,
-    script::ExtraFilesMap& extra_files) {
+    c10::optional<at::Device> device) {
   ScriptModuleDeserializer deserializer(&in);
-  deserializer.deserialize(module_lookup, device, extra_files);
+  deserializer.deserialize(module_lookup, device);
 }
 
 void import_ir_module(
     ModuleLookup module_lookup,
     const std::string& filename,
-    c10::optional<at::Device> device,
-    script::ExtraFilesMap& extra_files) {
+    c10::optional<at::Device> device) {
   ScriptModuleDeserializer deserializer(filename);
-  deserializer.deserialize(module_lookup, device, extra_files);
+  deserializer.deserialize(module_lookup, device);
 }
 
 void import_ir_module(
     ModuleLookup module_lookup,
     std::unique_ptr<ReadAdapterInterface> rai,
-    c10::optional<at::Device> device,
-    script::ExtraFilesMap& extra_files) {
+    c10::optional<at::Device> device) {
   ScriptModuleDeserializer deserializer(std::move(rai));
-  deserializer.deserialize(module_lookup, device, extra_files);
+  deserializer.deserialize(module_lookup, device);
 }
 
 std::shared_ptr<script::Module> load(
     std::istream& in,
-    c10::optional<at::Device> device,
-    script::ExtraFilesMap& extra_files) {
+    c10::optional<at::Device> device) {
   std::unique_ptr<IStreamAdapter> rai =
       caffe2::make_unique<IStreamAdapter>(&in);
-  auto module = load(std::move(rai), device, extra_files);
+  auto module = load(std::move(rai), device);
   return module;
 }
 
 std::shared_ptr<script::Module> load(
     const std::string& filename,
-    c10::optional<at::Device> device,
-    script::ExtraFilesMap& extra_files) {
+    c10::optional<at::Device> device) {
   std::unique_ptr<FileAdapter> rai = caffe2::make_unique<FileAdapter>(filename);
-  auto module = load(std::move(rai), device, extra_files);
+  auto module = load(std::move(rai), device);
   return module;
 }
 
 std::shared_ptr<script::Module> load(
     std::unique_ptr<ReadAdapterInterface> rai,
-    c10::optional<c10::Device> device,
-    script::ExtraFilesMap& extra_files) {
+    c10::optional<c10::Device> device) {
   auto module = std::make_shared<script::Module>();
 
   auto module_lookup = [&](const std::vector<std::string>& qualified_name) {
@@ -300,7 +280,7 @@ std::shared_ptr<script::Module> load(
   };
 
   ScriptModuleDeserializer deserializer(std::move(rai));
-  deserializer.deserialize(module_lookup, device, extra_files);
+  deserializer.deserialize(module_lookup, device);
 
   return module;
 }

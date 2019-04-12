@@ -29,7 +29,7 @@ private:
 // Stream singleton
 struct Stream {
   static Stream& Instance() {
-    static thread_local Stream myInstance;
+    static Stream myInstance;
     return myInstance;
   };
   stream& get_stream() {
