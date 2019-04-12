@@ -456,6 +456,10 @@ struct TORCH_API Variable::DifferentiableViewMeta : public Variable::AutogradMet
   }
 
   DifferentiableViewMeta(at::TensorImpl* self_impl, Variable base, Edge gradient_edge);
+
+  ~DifferentiableViewMeta() {
+    base_.reset();
+  }
 };
 
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
