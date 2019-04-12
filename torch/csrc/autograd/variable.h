@@ -558,6 +558,7 @@ inline Variable make_variable_view(
       auto data_impl_copy = data.getIntrusivePtr()->shallow_copy_and_detach();
       data_impl_copy->set_allow_tensor_metadata_change(allow_tensor_metadata_change);
       auto data_copy = at::Tensor(data_impl_copy);
+      // yf225 TODO: do we need AutogradMeta in this case?
       auto autograd_meta = c10::guts::make_unique<Variable::AutogradMeta>();
       auto var = Variable(c10::make_intrusive<Variable::Impl>(
               std::move(data_copy), std::move(autograd_meta), false, std::move(gradient_edge)));
@@ -579,7 +580,10 @@ inline Variable make_variable(
     auto data_impl_copy = data.getIntrusivePtr()->shallow_copy_and_detach();
     data_impl_copy->set_allow_tensor_metadata_change(allow_tensor_metadata_change);
     auto data_copy = at::Tensor(data_impl_copy);
-    auto autograd_meta = c10::guts::make_unique<Variable::AutogradMeta>();
+    std::unique_ptr<Variable::AutogradMeta> autograd_meta = nullptr;
+    if (requires_grad) {
+      autograd_meta = c10::guts::make_unique<Variable::AutogradMeta>();
+    }
     return Variable(c10::make_intrusive<Variable::Impl>(data_copy, std::move(autograd_meta), requires_grad));
   }
   return Variable();
@@ -595,7 +599,10 @@ inline Variable make_variable_consuming(
   if (data.defined()) {
     AT_ASSERT(data.getIntrusivePtr().use_count() == 1);
     data.unsafeGetTensorImpl()->set_allow_tensor_metadata_change(allow_tensor_metadata_change);
-    auto autograd_meta = c10::guts::make_unique<Variable::AutogradMeta>();
+    std::unique_ptr<Variable::AutogradMeta> autograd_meta = nullptr;
+    if (requires_grad) {
+      autograd_meta = c10::guts::make_unique<Variable::AutogradMeta>();
+    }
     return Variable(c10::make_intrusive<Variable::Impl>(std::move(data), std::move(autograd_meta), requires_grad));
   }
   return Variable();
@@ -612,7 +619,10 @@ inline Variable make_variable(
     auto data_impl_copy = data.getIntrusivePtr()->shallow_copy_and_detach();
     data_impl_copy->set_allow_tensor_metadata_change(allow_tensor_metadata_change);
     auto data_copy = at::Tensor(data_impl_copy);
-    auto autograd_meta = c10::guts::make_unique<Variable::AutogradMeta>();
+    std::unique_ptr<Variable::AutogradMeta> autograd_meta = nullptr;
+    if (requires_grad) {
+      autograd_meta = c10::guts::make_unique<Variable::AutogradMeta>();
+    }
     return Variable(c10::make_intrusive<Variable::Impl>(data_copy, std::move(autograd_meta), false, std::move(gradient_edge)));
   }
   return Variable();
