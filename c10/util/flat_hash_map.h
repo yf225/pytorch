@@ -1,5 +1,6 @@
 // Taken from https://github.com/skarupke/flat_hash_map/blob/2c4687431f978f02a3780e24b8b701d22aa32d9c/flat_hash_map.hpp
 // with fixes applied:
+// - https://github.com/skarupke/flat_hash_map/pull/8
 // - https://github.com/skarupke/flat_hash_map/pull/25
 // - https://github.com/skarupke/flat_hash_map/pull/26
 // - replace size_t with uint64_t to fix it for 32bit
@@ -521,6 +522,7 @@ public:
             if (it->has_value())
                 return { it };
         }
+        return end();
     }
     const_iterator begin() const
     {
@@ -529,6 +531,7 @@ public:
             if (it->has_value())
                 return { it };
         }
+        return end();
     }
     const_iterator cbegin() const
     {

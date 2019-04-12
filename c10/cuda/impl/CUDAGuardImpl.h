@@ -39,10 +39,7 @@ struct CUDAGuardImpl final : public c10::impl::DeviceGuardImplInterface {
     C10_CUDA_CHECK(cudaSetDevice(d.index()));
   }
   void uncheckedSetDevice(Device d) const noexcept override {
-    cudaError_t __err = cudaSetDevice(d.index());
-    if (__err != cudaSuccess) {
-      AT_WARN("CUDA error: ", cudaGetErrorString(__err));
-    }
+    cudaSetDevice(d.index());
   }
   Stream getStream(Device d) const noexcept override {
     return getCurrentCUDAStream().unwrap();

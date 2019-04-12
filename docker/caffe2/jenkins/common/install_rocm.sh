@@ -76,8 +76,13 @@ install_centos() {
                    rocsparse \
                    hipsparse \
                    rocrand \
-                   rccl \
-                   Thrust
+                   rccl
+
+  # Needed for now, will be replaced once hip-thrust is packaged for CentOS
+  git clone --recursive https://github.com/ROCmSoftwarePlatform/Thrust.git /data/Thrust
+  rm -rf /data/Thrust/thrust/system/cuda/detail/cub-hip
+  git clone --recursive https://github.com/ROCmSoftwarePlatform/cub-hip.git /data/Thrust/thrust/system/cuda/detail/cub-hip
+  ln -s /data/Thrust/thrust /opt/rocm/include/thrust
 }
  
 # Install Python packages depending on the base OS

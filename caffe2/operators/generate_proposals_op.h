@@ -6,8 +6,6 @@
 #include "caffe2/utils/eigen_utils.h"
 #include "caffe2/utils/math.h"
 
-C10_DECLARE_CAFFE2_OPERATOR(GenerateProposalsOp);
-
 namespace caffe2 {
 
 namespace utils {
@@ -78,9 +76,8 @@ template <class Context>
 class GenerateProposalsOp final : public Operator<Context> {
  public:
   USE_OPERATOR_CONTEXT_FUNCTIONS;
-  template<class... Args>
-  explicit GenerateProposalsOp(Args&&... args)
-      : Operator<Context>(std::forward<Args>(args)...),
+  GenerateProposalsOp(const OperatorDef& operator_def, Workspace* ws)
+      : Operator<Context>(operator_def, ws),
         spatial_scale_(
             this->template GetSingleArgument<float>("spatial_scale", 1.0 / 16)),
         feat_stride_(1.0 / spatial_scale_),
