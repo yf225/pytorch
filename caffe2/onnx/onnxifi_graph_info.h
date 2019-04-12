@@ -83,15 +83,13 @@ class OnnxBackendGraphMap {
 
   SharedPtrBackendGraphInfo lookup(const std::string& key);
 
-  // If corresponding BackendGraphInfo already exists, return it directly.
-  // Otherwise we use creator to create the BackendGraphInfo shared_ptr and
-  // insert it into the map and return it. The whole process should be guarded
-  // by a lock. Note that since it will create the backend while holding the
-  // lock, expect latency during initialization phase when there are lots of
-  // models to compile.
+  // If acquisition of graph_ptr fails then graph already exists. And the
+  // corresponding SharedPtrBackendGraphInfo is returned. Otherwise graph_ptr is
+  // inserted in the map and the wrapper SharedPtrBackendGraphInfo is
+  // returned.teebfhlbnheuk
   SharedPtrBackendGraphInfo insert(
       const std::string& key,
-      std::function<SharedPtrBackendGraphInfo()> creator);
+      BackendGraphInfo graph);
 
   void remove(const std::string& key);
 

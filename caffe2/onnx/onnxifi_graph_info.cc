@@ -1,5 +1,4 @@
 #include "caffe2/onnx/onnxifi_graph_info.h"
-#include "caffe2/core/logging.h"
 
 namespace caffe2 {
 namespace onnx {
@@ -15,19 +14,18 @@ SharedPtrBackendGraphInfo OnnxBackendGraphMap::lookup(const std::string& key) {
 
 SharedPtrBackendGraphInfo OnnxBackendGraphMap::insert(
     const std::string& key,
-    std::function<SharedPtrBackendGraphInfo()> creator) {
+    BackendGraphInfo backend_graph_info) {
   // First acquire lock.
   std::lock_guard<std::mutex> guard(backend_graph_map_lock_);
   // Then check if the backend_graph_info already exists in the map.
   if (backend_graph_map_.find(key) != backend_graph_map_.end()) {
-    LOG(INFO) << "Reusing onnxifi backend for: " << key;
     // If it already exists, return it.
     // The onus is on the caller to release onnxGraph pointed by
     // backend_graph_info
     return backend_graph_map_[key];
   }
-  LOG(INFO) << "Creating onnxifi backend for: " << key;
-  const auto ret_pair = backend_graph_map_.emplace(key, creator());
+  const auto& ret_pair = backend_graph_map_.emplace(
+      key, std::make_shared<BackendGraphInfo>(std::move(backend_graph_info)));
   return ret_pair.first->second;
 }
 
@@ -38,7 +36,6 @@ void OnnxBackendGraphMap::remove(const std::string& key) {
     auto it = backend_graph_map_.find(key);
     if (it != backend_graph_map_.end()) {
       if (it->second.unique()) {
-        LOG(INFO) << "Removing onnxifi backend for " << key;
         tmp = it->second;
         backend_graph_map_.erase(it);
       }

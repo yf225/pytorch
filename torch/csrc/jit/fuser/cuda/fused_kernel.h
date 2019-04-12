@@ -30,7 +30,9 @@ struct TORCH_API FusedKernelCUDA : public ::torch::jit::fuser::FusedKernel {
       std::vector<PartitionDesc> concat_desc,
       bool has_random);
 
-  ~FusedKernelCUDA() override;
+  ~FusedKernelCUDA() override {
+    cuModuleUnload(module_);
+  }
 
   void launch_raw(const uint32_t numel, std::vector<void*>& arguments)
       const override;

@@ -1,4 +1,3 @@
-
       # Pytorch MacOS builds
       - pytorch_macos_10_13_py3_build
       - pytorch_macos_10_13_py3_test:

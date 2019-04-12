@@ -1,20 +1,6 @@
-#!/usr/bin/env python3
-
-"""
-This module models the tree of configuration variants
-for "smoketest" builds.
-
-Each subclass of ConfigNode represents a layer of the configuration hierarchy.
-These tree nodes encapsulate the logic for whether a branch of the hierarchy
-should be "pruned".
-
-In addition to generating config.yml content, the tree is also traversed
-to produce a visualization of config dimensions.
-"""
-
 from collections import OrderedDict
 
-from cimodel.conf_tree import ConfigNode
+from conf_tree import ConfigNode
 
 
 LINKING_DIMENSIONS = [
@@ -73,7 +59,7 @@ CONFIG_TREE_DATA = OrderedDict(
 
 class TopLevelNode(ConfigNode):
     def __init__(self, node_name, config_tree_data, smoke):
-        super(TopLevelNode, self).__init__(None, node_name)
+        super().__init__(None, node_name)
 
         self.config_tree_data = config_tree_data
         self.props["smoke"] = smoke
@@ -84,7 +70,7 @@ class TopLevelNode(ConfigNode):
 
 class OSConfigNode(ConfigNode):
     def __init__(self, parent, os_name, cuda_versions, py_tree):
-        super(OSConfigNode, self).__init__(parent, os_name)
+        super().__init__(parent, os_name)
 
         self.py_tree = py_tree
         self.props["os_name"] = os_name
@@ -96,7 +82,7 @@ class OSConfigNode(ConfigNode):
 
 class PackageFormatConfigNode(ConfigNode):
     def __init__(self, parent, package_format, python_versions):
-        super(PackageFormatConfigNode, self).__init__(parent, package_format)
+        super().__init__(parent, package_format)
 
         self.props["python_versions"] = python_versions
         self.props["package_format"] = package_format
@@ -107,7 +93,7 @@ class PackageFormatConfigNode(ConfigNode):
 
 class ArchConfigNode(ConfigNode):
     def __init__(self, parent, cu):
-        super(ArchConfigNode, self).__init__(parent, get_processor_arch_name(cu))
+        super().__init__(parent, get_processor_arch_name(cu))
 
         self.props["cu"] = cu
 
@@ -117,7 +103,7 @@ class ArchConfigNode(ConfigNode):
 
 class PyVersionConfigNode(ConfigNode):
     def __init__(self, parent, pyver):
-        super(PyVersionConfigNode, self).__init__(parent, pyver)
+        super().__init__(parent, pyver)
 
         self.props["pyver"] = pyver
 
@@ -135,7 +121,7 @@ class PyVersionConfigNode(ConfigNode):
 
 class LinkingVariantConfigNode(ConfigNode):
     def __init__(self, parent, linking_variant):
-        super(LinkingVariantConfigNode, self).__init__(parent, linking_variant)
+        super().__init__(parent, linking_variant)
 
     def get_children(self):
         return [DependencyInclusionConfigNode(self, v) for v in DEPS_INCLUSION_DIMENSIONS]
@@ -143,6 +129,6 @@ class LinkingVariantConfigNode(ConfigNode):
 
 class DependencyInclusionConfigNode(ConfigNode):
     def __init__(self, parent, deps_variant):
-        super(DependencyInclusionConfigNode, self).__init__(parent, deps_variant)
+        super().__init__(parent, deps_variant)
 
         self.props["libtorch_variant"] = "-".join([self.parent.get_label(), self.get_label()])

@@ -183,21 +183,18 @@ def build_def(ctx, py_def, type_line, is_method):
 
 
 _vararg_kwarg_err = ("Compiled functions can't take variable number of arguments "
-                     "or use keyword-only arguments with defaults")
+                     "or keyword-only arguments")
 
 
 def build_param_list(ctx, py_args):
     if py_args.vararg is not None or py_args.kwarg is not None:
         raise ValueError(_vararg_kwarg_err)
-    if not PY2 and py_args.kw_defaults:
+    if not PY2 and (py_args.kw_defaults or py_args.kwonlyargs):
         raise ValueError(_vararg_kwarg_err)
-    result = [build_param(ctx, arg, False) for arg in py_args.args]
-    if not PY2:
-        result += [build_params(ctx, arg, True) for arg in py_args.kwonlyargs]
-    return result
+    return [build_param(ctx, arg) for arg in py_args.args]
 
 
-def build_param(ctx, py_arg, kwarg_only):
+def build_param(ctx, py_arg):
     # NB: In Python3 py_arg is a pair of (str arg, expr? annotation)
     #     In Python2 py_arg is a Name (Expr subclass)
     name = py_arg.id if PY2 else py_arg.arg
@@ -206,7 +203,7 @@ def build_param(ctx, py_arg, kwarg_only):
         annotation_expr = build_expr(ctx, py_arg.annotation)
     else:
         annotation_expr = Var(Ident(r, 'Tensor'))
-    return Param(annotation_expr, Ident(r, name), kwarg_only)
+    return Param(annotation_expr, Ident(r, name))
 
 
 def get_default_args(fn):

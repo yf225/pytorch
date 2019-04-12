@@ -3,7 +3,6 @@
 #include <torch/csrc/utils/disallow_copy.h>
 
 #include <dlfcn.h>
-#include <libgen.h>
 
 namespace torch {
 namespace jit {
@@ -31,17 +30,6 @@ DynamicLibrary::~DynamicLibrary() {
   if (!handle)
     return;
   dlclose(handle);
-}
-
-std::string DynamicLibrary::directoryOf(void* addr) {
-  Dl_info info = {};
-  if (!dladdr(addr, &info)) {
-    AT_ERROR("could not look up address: ", addr);
-  }
-  std::string name = info.dli_fname;
-  std::vector<char> path(name.begin(), name.end());
-  char* directory = dirname(path.data());
-  return directory;
 }
 
 } // namespace cpu

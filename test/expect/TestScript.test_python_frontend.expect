@@ -5,18 +5,15 @@
       (param
         (ident x)
         (variable (ident Tensor))
-        (option)
-        (False))
+        (option))
       (param
         (ident y)
         (variable (ident Tensor))
-        (option)
-        (False))
+        (option))
       (param
         (ident z)
         (variable (ident Tensor))
-        (option)
-        (False)))
+        (option)))
     (option))
   (list
     (assign

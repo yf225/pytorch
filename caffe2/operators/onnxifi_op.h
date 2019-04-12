@@ -87,7 +87,7 @@ class OnnxifiOp final : public Operator<Context> {
     Workspace mapped_ws(ws, input_mapping);
     std::vector<std::string> weight_names;
     std::vector<std::vector<uint64_t>> weight_shapes;
-    auto weight_descs = buildInitializationList(
+    auto weight_descs = BuildInitializationList(
         &mapped_ws, &initializer_set, &weight_names, &weight_shapes);
 
     BuildBackendAndGraph(property_pointers, onnx_model_str, weight_descs);
@@ -95,6 +95,7 @@ class OnnxifiOp final : public Operator<Context> {
 
   ~OnnxifiOp() {
     backend_graph_shared_ptr_.reset();
+
     backend_graph_map_ptr_->remove(op_id_string_);
   }
 
@@ -127,74 +128,87 @@ class OnnxifiOp final : public Operator<Context> {
       const std::string& onnx_model_str,
       const std::vector<onnxTensorDescriptorV1>& weight_descs) {
     op_id_string_ =
-        this->template GetSingleArgument<std::string>("model_id", "") + ":" +
         this->template GetSingleArgument<std::string>("net_pos", "");
+    auto net_id_string =
+        this->template GetSingleArgument<std::string>("model_id", "");
+    op_id_string_ += net_id_string;
 
-    // Build the Onnxifi engine
-    auto backend_index = this->template GetSingleArgument<int>("backend_id", 0);
-    onnxifi_library* lib = lib_;
-    auto creator = [lib,
-                    property_pointers,
-                    backend_index,
-                    &onnx_model_str,
-                    &weight_descs]() {
+    backend_graph_shared_ptr_ = backend_graph_map_ptr_->lookup(op_id_string_);
+
+    if (backend_graph_shared_ptr_ == nullptr) {
+      // Build the Onnxifi engine
       std::vector<onnxBackendID> backend_ids;
-      size_t num_backends{0};
+      auto backend_index =
+          this->template GetSingleArgument<int>("backend_id", 0);
       CAFFE_ENFORCE_EQ(
-          lib->onnxGetBackendIDs(nullptr, &num_backends),
+          lib_->onnxGetBackendIDs(nullptr, &num_backends_),
           ONNXIFI_STATUS_FALLBACK);
       CAFFE_ENFORCE_GT(
-          num_backends, 0, "At least 1 onnxifi backend should be available");
+          num_backends_, 0, "At least 1 onnxifi backend should be available");
       CAFFE_ENFORCE_LT(
           backend_index,
-          num_backends,
+          num_backends_,
           "Backend idx out of bound: ",
           backend_index,
           ", #backends: ",
-          num_backends);
-      backend_ids.resize(num_backends);
+          num_backends_);
+      backend_ids.resize(num_backends_);
       CAFFE_ENFORCE_EQ(
-          lib->onnxGetBackendIDs(backend_ids.data(), &num_backends),
+          lib_->onnxGetBackendIDs(backend_ids.data(), &num_backends_),
           ONNXIFI_STATUS_SUCCESS);
 
-      onnxBackendID backend_id = backend_ids[backend_index];
-      onnxBackend backend{nullptr};
+      backend_id_ = backend_ids[backend_index];
 
       CAFFE_ENFORCE_EQ(
-          lib->onnxInitBackend(backend_id, property_pointers.data(), &backend),
+          lib_->onnxInitBackend(
+              backend_id_, property_pointers.data(), &backend_),
           ONNXIFI_STATUS_SUCCESS);
 
       // Release unused backend ids.
-      for (auto i = 0; i < num_backends; ++i) {
+      for (auto i = 0; i < num_backends_; ++i) {
         if (i == backend_index) {
           continue;
         }
-        lib->onnxReleaseBackendID(backend_ids[i]);
+        lib_->onnxReleaseBackendID(backend_ids[i]);
       }
-      onnxGraph graph{nullptr};
-      CAFFE_ENFORCE_EQ(
-          lib->onnxInitGraph(
-              backend,
-              nullptr,
-              onnx_model_str.size(),
-              (const void*)(onnx_model_str.c_str()),
-              weight_descs.size(),
-              weight_descs.data(),
-              &graph),
-          ONNXIFI_STATUS_SUCCESS);
 
-      return std::make_shared<onnx::BackendGraphInfo>(
-          backend_id, backend, graph, lib);
-    };
-    backend_graph_shared_ptr_ =
-        backend_graph_map_ptr_->insert(op_id_string_, creator);
-
+      // Lookup the backend first, if it's not there, create our own and try
+      // submitting it to the backend_graph_map
+      backend_graph_shared_ptr_ = backend_graph_map_ptr_->lookup(op_id_string_);
+      if (!backend_graph_shared_ptr_) {
+        LOG(INFO) << "Creating backend for " << op_id_string_;
+        CAFFE_ENFORCE_EQ(
+            lib_->onnxInitGraph(
+                backend_,
+                nullptr,
+                onnx_model_str.size(),
+                (const void*)(onnx_model_str.c_str()),
+                weight_descs.size(),
+                weight_descs.data(),
+                &graph_),
+            ONNXIFI_STATUS_SUCCESS);
+        backend_graph_shared_ptr_ = backend_graph_map_ptr_->insert(
+            op_id_string_,
+            onnx::BackendGraphInfo(backend_id_, backend_, graph_, lib_));
+      } else {
+        LOG(INFO) << "Got cached backend for " << op_id_string_;
+      }
+      // This checks if our insertion was successful or some other thread did
+      // the insert in the meantime.
+      if (backend_graph_shared_ptr_->backend_id != backend_id_ ||
+          backend_graph_shared_ptr_->backend != backend_ ||
+          backend_graph_shared_ptr_->graph != graph_) {
+        lib_->onnxReleaseBackendID(backend_id_);
+        lib_->onnxReleaseBackend(backend_);
+        lib_->onnxReleaseGraph(graph_);
+      }
+    }
     backend_id_ = backend_graph_shared_ptr_->backend_id;
     backend_ = backend_graph_shared_ptr_->backend;
     graph_ = backend_graph_shared_ptr_->graph;
   }
 
-  std::vector<onnxTensorDescriptorV1> buildInitializationList(
+  std::vector<onnxTensorDescriptorV1> BuildInitializationList(
       Workspace* ws,
       std::unordered_set<std::string>* initialization_list,
       std::vector<std::string>* weight_names,
@@ -209,6 +223,7 @@ class OnnxifiOp final : public Operator<Context> {
   onnxBackend backend_{nullptr};
   onnxGraph graph_{nullptr};
   onnx::SharedPtrBackendGraphInfo backend_graph_shared_ptr_;
+  size_t num_backends_{0};
 
   // input/output descriptors
   std::vector<onnxTensorDescriptorV1> input_desc_;

@@ -1,7 +1,8 @@
-#include <torch/csrc/jit/script/sugared_value.h>
 #include <torch/csrc/jit/ir.h>
 #include <torch/csrc/jit/script/schema_matching.h>
+#include <torch/csrc/jit/script/sugared_value.h>
 #include <torch/csrc/jit/script/tree_views.h>
+#include <torch/csrc/jit/script/type_parser.h>
 
 namespace torch {
 namespace jit {
@@ -141,6 +142,7 @@ std::vector<std::shared_ptr<SugaredValue>> SimpleValue::asTuple(
   throw ErrorReport(loc) << value->type()->str()
                          << " cannot be used as a tuple";
 }
+
 } // namespace script
 } // namespace jit
 } // namespace torch

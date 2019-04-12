@@ -1,6 +1,3 @@
-#!/usr/bin/env python3
-
-
 from collections import OrderedDict
 
 
@@ -26,7 +23,7 @@ def sortkey(x):
     )
 
 
-def render(fh, data, depth, is_list_member=False):
+def render(fh, key, data, depth, is_list_member=False):
     """
     PyYaml does not allow precise control over the quoting
     behavior, especially for merge references.
@@ -49,7 +46,7 @@ def render(fh, data, depth, is_list_member=False):
             trailing_whitespace = "\n" if is_collection(v) else " "
             fh.write(indentation + list_marker_prefix + k + ":" + trailing_whitespace)
 
-            render(fh, v, depth + 1 + int(is_list_member))
+            render(fh, k, v, depth + 1 + int(is_list_member))
 
         # TODO Could eventually drop this cosmetic convention
         if depth == 2:
@@ -57,7 +54,7 @@ def render(fh, data, depth, is_list_member=False):
 
     elif type(data) is list:
         for v in data:
-            render(fh, v, depth, True)
+            render(fh, None, v, depth, True)
 
     else:
         list_member_prefix = indentation + LIST_MARKER if is_list_member else ""

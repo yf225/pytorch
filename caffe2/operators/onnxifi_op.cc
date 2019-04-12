@@ -89,7 +89,7 @@ void BlobToTensorDescriptor(
 
 template <>
 std::vector<onnxTensorDescriptorV1>
-OnnxifiOp<float, CPUContext>::buildInitializationList(
+OnnxifiOp<float, CPUContext>::BuildInitializationList(
     Workspace* ws,
     std::unordered_set<std::string>* initialization_list,
     std::vector<std::string>* weight_names,

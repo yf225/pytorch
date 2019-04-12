@@ -175,10 +175,6 @@ net models. In particular TorchScript supports:
 ``Optional[T]``
     A value which is either None or type ``T``
 
-```Dict[K, V]``
-    A dict with key type ``K`` and value type ``V``. Only ``str``, ``int``, and
-    ``float`` are allowed as key types.
-
 Unlike Python, each variable in TorchScript function must have a single static type.
 This makes it easier to optimize TorchScript functions.
 
@@ -196,7 +192,7 @@ Example::
 
 There are 2 scenarios in which you can annotate:
 
-1. Function Argument Type Annotation
+1. Function Argument Type annotation
 
 By default, all parameters to a TorchScript function are assumed to be Tensor
 because this is the most common type used in modules. To specify that an
@@ -221,9 +217,8 @@ Example::
 
 2. Variable Type Annotation
 
-A list by default is assumed to be ``List[Tensor]`` and empty dicts
-``Dict[str, Tensor]``. To instantiate an empty list or dict of other types,
-use ``torch.jit.annotate``.
+For example, a list by default is assumed to be List[Tensor]. If you would like to
+have a list of other types. PyTorch provides annotation functions.
 
 Example::
 
@@ -231,22 +226,20 @@ Example::
     from torch.jit import Tensor
     from typing import List, Tuple
 
-    class EmptyDataStructures(torch.jit.ScriptModule):
+    class ListOfTupleOfTensor(torch.jit.ScriptModule):
         def __init__(self):
-            super(EmptyDataStructures, self).__init__()
+            super(ListOfTupleOfTensor, self).__init__()
 
         @torch.jit.script_method
         def forward(self, x):
-            # type: (Tensor) -> Tuple[List[Tuple[Tensor, Tensor]], Dict[int, Tensor]]
+            # type: (Tensor) -> List[Tuple[Tensor, Tensor]]
 
-            # This annotates the list to be a `List[Tuple[Tensor, Tensor]]`
-            list_of_tuple = torch.jit.annotate(List[Tuple[Tensor, Tensor]], [])
+            # This annotates the list to be a List[Tuple[Tensor, Tensor]]
+            returns = torch.jit.annotate(List[Tuple[Tensor, Tensor]], [])
             for i in range(10):
-                list_of_tuple.append((x, x))
+                returns.append((x, x))
 
-                # This annotates the list to be a `Dict[int, Tensor]`
-            int_tensor_dict = torch.jit.annotate(Dict[int, Tensor], {})
-            return list_of_tuple, int_tensor_dict
+            return returns
 
 
 Optional Type Refinement:
@@ -299,13 +292,6 @@ List Construction
     .. note::
         an empty list is assumed have type ``List[Tensor]``.
         The types of other list literals are derived from the type of the members.
-
-Dict Construction
-    ``{'hello': 3}``, ``{}``, ``{'a': torch.rand(3), 'b': torch.rand(4)}``
-
-    .. note::
-        an empty dict is assumed have type ``Dict[str, Tensor]``.
-        The types of other dict literals are derived from the type of the members.
 
 Arithmetic Operators
   ``a + b``

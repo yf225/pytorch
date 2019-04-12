@@ -6,6 +6,15 @@ using namespace at;
 
 static int test_int;
 
+Tensor get_dummy_tensor() {
+  auto tensor_impl = c10::make_intrusive<TensorImpl, UndefinedTensorImpl>(
+      Storage(
+          caffe2::TypeMeta::Make<float>(), 0, at::DataPtr(nullptr, Device(DeviceType::MSNPU, 1)), nullptr, false),
+      MSNPUTensorId(),
+      false);
+  return Tensor(std::move(tensor_impl));
+}
+
 Tensor get_dtype_tensor(caffe2::TypeMeta dtype) {
   auto tensor_impl = c10::make_intrusive<TensorImpl, UndefinedTensorImpl>(
       Storage(
@@ -22,24 +31,24 @@ Tensor zeros_override(IntArrayRef size, const TensorOptions & options) {
 
 Tensor add_override(const Tensor & a, const Tensor & b , Scalar c) {
   test_int = 1;
-  return get_dtype_tensor(a.dtype());
+  return get_dummy_tensor();
 }
 
 Tensor sum_override(const Tensor & self) {
   test_int = 2;
-  return get_dtype_tensor(self.dtype());
+  return get_dummy_tensor();
 }
 
 // needed for sum backwards
 Tensor expand_override(const Tensor & self, IntArrayRef size, bool implicit) {
-  return get_dtype_tensor(self.dtype());
+  return get_dummy_tensor();
 }
 
 
 Tensor kl_div_override(
     const Tensor & self, const Tensor & target, int64_t reduction) {
   test_int = 3;
-  return get_dtype_tensor(self.dtype());
+  return get_dummy_tensor();
 }
 
 Tensor kl_div_backward_override(
@@ -48,7 +57,7 @@ Tensor kl_div_backward_override(
     const Tensor & target,
     int64_t reduction) {
   test_int = 4;
-  return get_dtype_tensor(self.dtype());
+  return get_dummy_tensor();
 }
 
 // numel and ones_like are needed for autograd backwards
@@ -57,7 +66,7 @@ int64_t numel_override(const Tensor & self) {
 }
 
 Tensor ones_like_override(const Tensor & self, const TensorOptions & options) {
-  return get_dtype_tensor(options.dtype());
+  return get_dummy_tensor();
 }
 
 void init_msnpu_extension() {

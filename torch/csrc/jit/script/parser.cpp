@@ -1,7 +1,7 @@
-#include <torch/csrc/jit/script/parser.h>
 #include <c10/util/Optional.h>
 #include <torch/csrc/jit/script/lexer.h>
 #include <torch/csrc/jit/script/parse_string_literal.h>
+#include <torch/csrc/jit/script/parser.h>
 #include <torch/csrc/jit/script/tree.h>
 #include <torch/csrc/jit/script/tree_views.h>
 
@@ -243,27 +243,19 @@ struct ParserImpl {
     }
     return Expr(prefix);
   }
-  void parseSequence(
-      int begin,
-      int sep,
-      int end,
-      const std::function<void()>& parse) {
+  template <typename T>
+  List<T> parseList(int begin, int sep, int end, T (ParserImpl::*parse)()) {
+    auto r = L.cur().range;
     if (begin != TK_NOTHING)
       L.expect(begin);
+    std::vector<T> elements;
     if (L.cur().kind != end) {
       do {
-        parse();
+        elements.push_back((this->*parse)());
       } while (L.nextIf(sep));
     }
     if (end != TK_NOTHING)
       L.expect(end);
-  }
-  template <typename T>
-  List<T> parseList(int begin, int sep, int end, T (ParserImpl::*parse)()) {
-    auto r = L.cur().range;
-    std::vector<T> elements;
-    parseSequence(
-        begin, sep, end, [&] { elements.emplace_back((this->*parse)()); });
     return List<T>::create(r, elements);
   }
 
@@ -334,7 +326,7 @@ struct ParserImpl {
     return Subscript::create(range, Expr(value), subscript_exprs);
   }
 
-  TreeRef parseParam(bool kwarg_only) {
+  TreeRef parseParam() {
     auto ident = parseIdent();
     TreeRef type;
     if (L.nextIf(':')) {
@@ -349,7 +341,7 @@ struct ParserImpl {
       def = Maybe<Expr>::create(L.cur().range);
     }
     return Param::create(
-        type->range(), Ident(ident), Expr(type), Maybe<Expr>(def), kwarg_only);
+        type->range(), Ident(ident), Expr(type), Maybe<Expr>(def));
   }
 
   Param parseBareTypeAnnotation() {
@@ -358,8 +350,7 @@ struct ParserImpl {
         type.range(),
         Ident::create(type.range(), ""),
         type,
-        Maybe<Expr>::create(type.range()),
-        /*kwarg_only=*/false);
+        Maybe<Expr>::create(type.range()));
   }
 
   Decl parseTypeComment() {
@@ -526,22 +517,9 @@ struct ParserImpl {
     }
   }
 
-  List<Param> parseParams() {
-    auto r = L.cur().range;
-    std::vector<Param> params;
-    bool kwarg_only = false;
-    parseSequence('(', ',', ')', [&] {
-      if (!kwarg_only && L.nextIf('*')) {
-        kwarg_only = true;
-      } else {
-        params.emplace_back(parseParam(kwarg_only));
-      }
-    });
-    return List<Param>::create(r, params);
-  }
   Decl parseDecl() {
+    auto paramlist = parseList('(', ',', ')', &ParserImpl::parseParam);
     // Parse return type annotation
-    List<Param> paramlist = parseParams();
     TreeRef return_type;
     Maybe<Expr> return_annotation = parseReturnAnnotation();
     L.expect(':');

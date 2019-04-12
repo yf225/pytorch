@@ -1,6 +1,6 @@
 #!/bin/bash
 ##############################################################################
-# Example command to build the Raspbian target.
+# Example command to build the android target.
 ##############################################################################
 # 
 # This script shows how one can build a Caffe2 binary for raspbian. The build
@@ -28,7 +28,7 @@ sudo apt-get install \
 # python dependencies
 sudo pip install hypothesis
 
-# Now, actually build the raspbian target.
+# Now, actually build the android target.
 echo "Building caffe2"
 cd $BUILD_ROOT
 

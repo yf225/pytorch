@@ -1,14 +1,11 @@
-#!/usr/bin/env python3
-
 from collections import OrderedDict
 
-import cimodel.conf_tree as conf_tree
-import cimodel.miniutils as miniutils
-import cimodel.make_build_configs as make_build_configs
-import cimodel.visualization as visualization
+import conf_tree
+import miniutils
+import make_build_configs
 
 
-class Conf(object):
+class Conf:
     def __init__(self, os, cuda_version, pydistro, parms, smoke=False, libtorch_variant=None):
 
         self.os = os
@@ -18,10 +15,10 @@ class Conf(object):
         self.smoke = smoke
         self.libtorch_variant = libtorch_variant
 
-    def gen_build_env_parms(self):
+    def genBuildEnvParms(self):
         return [self.pydistro] + self.parms + [make_build_configs.get_processor_arch_name(self.cuda_version)]
 
-    def gen_docker_image(self):
+    def genDockerImage(self):
 
         docker_word_substitution = {
             "manywheel": "manylinux",
@@ -34,11 +31,11 @@ class Conf(object):
         docker_distro_suffix = "" if self.pydistro == "conda" else alt_docker_suffix
         return miniutils.quote("soumith/" + docker_distro_prefix + "-cuda" + docker_distro_suffix)
 
-    def get_name_prefix(self):
+    def getNamePrefix(self):
         return "smoke" if self.smoke else "binary"
 
-    def gen_build_name(self, build_or_test):
-        parts = [self.get_name_prefix(), self.os] + self.gen_build_env_parms()
+    def genBuildName(self, build_or_test):
+        parts = [self.getNamePrefix(), self.os] + self.genBuildEnvParms()
 
         if self.smoke:
             if self.libtorch_variant:
@@ -48,10 +45,10 @@ class Conf(object):
 
         return "_".join(parts)
 
-    def gen_yaml_tree(self, build_or_test):
+    def genYamlTree(self, build_or_test):
 
         env_dict = OrderedDict({
-            "BUILD_ENVIRONMENT": miniutils.quote(" ".join(self.gen_build_env_parms())),
+            "BUILD_ENVIRONMENT": miniutils.quote(" ".join(self.genBuildEnvParms())),
         })
 
         if self.libtorch_variant:
@@ -65,24 +62,27 @@ class Conf(object):
 
         d = {
             "environment": env_dict,
-            "<<": "*" + "_".join([self.get_name_prefix(), os_name, build_or_test]),
+            "<<": "*" + "_".join([self.getNamePrefix(), os_name, build_or_test]),
         }
 
         if build_or_test == "test":
             tuples = []
-
-            if not (self.smoke and self.os == "macos"):
-                tuples.append(("DOCKER_IMAGE", self.gen_docker_image()))
-
             if self.cuda_version:
                 tuples.append(("USE_CUDA_DOCKER_RUNTIME", miniutils.quote("1")))
+
+            if not (self.smoke and self.os == "macos"):
+                tuples.append(("DOCKER_IMAGE", self.genDockerImage()))
+
+            if self.smoke:
+                # TODO: Fix this discrepancy upstream
+                tuples.reverse()
 
             for (k, v) in tuples:
                 env_dict[k] = v
 
         else:
             if self.os == "linux" and build_or_test != "upload":
-                d["docker"] = [{"image": self.gen_docker_image()}]
+                d["docker"] = [{"image": self.genDockerImage()}]
 
         if build_or_test == "test":
             if self.cuda_version:
@@ -91,19 +91,15 @@ class Conf(object):
         return d
 
 
-def get_root(smoke, name):
+def gen_build_env_list(smoke):
 
-    return make_build_configs.TopLevelNode(
-        name,
+    root = make_build_configs.TopLevelNode(
+        "Builds",
         make_build_configs.CONFIG_TREE_DATA,
         smoke,
     )
 
-
-def gen_build_env_list(smoke):
-
-    root = get_root(smoke, "N/A")
-    config_list = conf_tree.dfs(root)
+    config_list, dot = conf_tree.dfs(root)
 
     newlist = []
     for c in config_list:
@@ -117,14 +113,14 @@ def gen_build_env_list(smoke):
         )
         newlist.append(conf)
 
-    return newlist
+    return newlist, dot
 
 
 def add_build_entries(jobs_dict, phase, smoke):
 
-    configs = gen_build_env_list(smoke)
+    configs, _ = gen_build_env_list(smoke)
     for conf_options in configs:
-        jobs_dict[conf_options.gen_build_name(phase)] = conf_options.gen_yaml_tree(phase)
+        jobs_dict[conf_options.genBuildName(phase)] = conf_options.genYamlTree(phase)
 
 
 def add_binary_build_specs(jobs_dict):
@@ -139,50 +135,16 @@ def add_smoke_test_specs(jobs_dict):
     add_build_entries(jobs_dict, "test", True)
 
 
-def get_nightly_tests():
-
-    configs = gen_build_env_list(False)
-    filtered_configs = filter(predicate_exclude_nonlinux_and_libtorch, configs)
-
-    mylist = []
-    for conf_options in filtered_configs:
-        d = {conf_options.gen_build_name("test"): {"requires": [conf_options.gen_build_name("build")]}}
-        mylist.append(d)
-
-    return mylist
-
-
-def get_nightly_uploads():
-
-    configs = gen_build_env_list(False)
-
-    def gen_config(conf, phase_dependency):
-        return {
-            conf.gen_build_name("upload"): OrderedDict([
-                ("context", "org-member"),
-                ("requires", [conf.gen_build_name(phase_dependency)]),
-            ]),
-        }
-
-    mylist = []
-    for conf in configs:
-        phase_dependency = "test" if predicate_exclude_nonlinux_and_libtorch(conf) else "build"
-        mylist.append(gen_config(conf, phase_dependency))
-
-    return mylist
-
-
-def predicate_exclude_nonlinux_and_libtorch(config):
-    return config.os == "linux" and (config.smoke or config.pydistro != "libtorch")
-
-
 def add_binary_build_tests(jobs_dict):
 
-    configs = gen_build_env_list(False)
-    filtered_configs = filter(predicate_exclude_nonlinux_and_libtorch, configs)
+    def testable_binary_predicate(x):
+        return x.os == "linux" and (x.smoke or x.pydistro != "libtorch")
+
+    configs, _ = gen_build_env_list(False)
+    filtered_configs = filter(testable_binary_predicate, configs)
 
     for conf_options in filtered_configs:
-        jobs_dict[conf_options.gen_build_name("test")] = conf_options.gen_yaml_tree("test")
+        jobs_dict[conf_options.genBuildName("test")] = conf_options.genYamlTree("test")
 
 
 def gen_schedule_tree(cron_timing):
@@ -202,9 +164,9 @@ def add_jobs_and_render(jobs_dict, toplevel_key, smoke, cron_schedule):
 
     jobs_list = []
 
-    configs = gen_build_env_list(smoke)
+    configs, graph = gen_build_env_list(smoke)
     for build_config in configs:
-        build_name = build_config.gen_build_name("build")
+        build_name = build_config.genBuildName("build")
         jobs_list.append(build_name)
 
     d = OrderedDict(
@@ -214,7 +176,6 @@ def add_jobs_and_render(jobs_dict, toplevel_key, smoke, cron_schedule):
 
     jobs_dict[toplevel_key] = d
 
-    graph = visualization.generate_graph(get_root(smoke, toplevel_key))
     graph.draw(toplevel_key + "-config-dimensions.png", prog="twopi")
 
 
