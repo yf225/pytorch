@@ -293,7 +293,7 @@ void Module::load(serialize::InputArchive& archive) {
   }
   for (const auto& child : children_) {
     serialize::InputArchive child_archive;
-    archive.read(child.key(), child_archive);
+    archive.read(child.key(), child_archive); // yf225 TODO: this line can fail, if `relu` or `pool` is not in the Python model
     child.value()->load(child_archive);
   }
 }
