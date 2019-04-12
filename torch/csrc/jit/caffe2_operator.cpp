@@ -21,7 +21,7 @@ Operator createOperatorFromCaffe2(const std::string& name) {
         auto input = pop(stack);
         // Tensors come in as variables but need to be unwrapped
         if (input.isTensor()) {
-          input = input.toTensor();
+          input = torch::autograd::Variable(input.toTensor()).data();
         }
         inputs.emplace(inputs.begin(), std::move(input));
       }

@@ -86,9 +86,6 @@ void TensorImpl::release_resources() {
   if (storage_) {
     storage_ = {};
   }
-  if (autograd_meta_) {
-    autograd_meta_.reset();
-  }
 }
 
 int64_t TensorImpl::dim() const {
