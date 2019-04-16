@@ -284,7 +284,7 @@ void Module::save(serialize::OutputArchive& archive) const {
   }
 }
 
-void Module::load(serialize::InputArchive& archive) {
+void Module::load(serialize::InputArchive& archive, bool strict) {
   for (auto& parameter : parameters_) {
     archive.read(parameter.key(), parameter.value());
   }
@@ -293,8 +293,8 @@ void Module::load(serialize::InputArchive& archive) {
   }
   for (const auto& child : children_) {
     serialize::InputArchive child_archive;
-    archive.read(child.key(), child_archive);
-    child.value()->load(child_archive);
+    archive.read(child.key(), child_archive, strict);
+    child.value()->load(child_archive, strict);
   }
 }
 
@@ -388,8 +388,15 @@ serialize::OutputArchive& operator<<(
 serialize::InputArchive& operator>>(
     serialize::InputArchive& archive,
     const std::shared_ptr<nn::Module>& module) {
+  return load_module_from_archive(archive, module, false);
+}
+
+serialize::InputArchive& load_module_from_archive(
+    serialize::InputArchive& archive,
+    const std::shared_ptr<nn::Module>& module,
+    bool strict) {
   AT_CHECK(module != nullptr, "Cannot deserialize empty module");
-  module->load(archive);
+  module->load(archive, strict);
   return archive;
 }
 } // namespace nn

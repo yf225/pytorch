@@ -385,7 +385,7 @@ class TORCH_API Module : public std::enable_shared_from_this<Module> {
   virtual void save(serialize::OutputArchive& archive) const;
 
   /// Deserializes the `Module` from the given `InputArchive`.
-  virtual void load(serialize::InputArchive& archive);
+  virtual void load(serialize::InputArchive& archive, bool strict = true);
 
   /// Streams a pretty representation of the `Module` into the given `stream`.
   /// By default, this representation will be the name of the module (taken from
@@ -525,6 +525,12 @@ TORCH_API serialize::OutputArchive& operator<<(
 TORCH_API serialize::InputArchive& operator>>(
     serialize::InputArchive& archive,
     const std::shared_ptr<nn::Module>& module);
+
+// yf225 TODO: comment
+TORCH_API serialize::InputArchive& load_module_from_archive(
+    serialize::InputArchive& archive,
+    const std::shared_ptr<nn::Module>& module,
+    bool strict = true);
 
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ nn::Module ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

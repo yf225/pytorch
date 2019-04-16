@@ -52,7 +52,7 @@ class TORCH_API InputArchive final {
   /// Reads an `InputArchive` associated with a given `key`.
   /// The archive can thereafter be used for further deserialization of the
   /// nested data.
-  void read(const std::string& key, InputArchive& archive);
+  void read(const std::string& key, InputArchive& archive, bool strict = true);
 
   /// Loads the `InputArchive` from a serialized representation stored in the
   /// file at `filename`. Storage are remapped using device option. If device

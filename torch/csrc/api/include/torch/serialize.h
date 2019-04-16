@@ -66,10 +66,30 @@ void save(const Value& value, SaveToArgs&&... args) {
 ///   auto tensor = torch::ones({3, 4});
 ///   torch::load(tensor, "my_tensor.pt");
 /// \endrst
+
+/*
+template <typename First, typename Second, typename... Rest,
+    typename = torch::disable_if_t<std::is_same<First, std::string>::value ||
+      std::is_same<typename std::decay<First>::type, std::decay<const char (&)[]>::type>::value>>
+  void push_back(First&& first, Second&& second, Rest&&... rest) {
+    push_back(std::forward<First>(first));
+    // Recursively calls this method, until the parameter pack only thas this
+    // entry left. Then calls `push_back()` a final time (above).
+    push_back(std::forward<Second>(second), std::forward<Rest>(rest)...);
+  }
+*/
+
 template <typename Value, typename... LoadFromArgs>
-void load(Value& value, LoadFromArgs&&... args) {
+void load(Value& value, bool strict, LoadFromArgs&&... args) {
   serialize::InputArchive archive;
   archive.load_from(std::forward<LoadFromArgs>(args)...);
-  archive >> value;
+
+  load_module_from_archive(archive, value, strict);
+}
+
+template <typename Value, typename FirstLoadFromArg, typename... RestLoadFromArgs,
+  typename = torch::disable_if_t<std::is_same<FirstLoadFromArg, bool>::value>>
+void load(Value& value, FirstLoadFromArg&& first, RestLoadFromArgs&&... rest) {
+  load(value, false, std::forward<FirstLoadFromArg>(first), std::forward<RestLoadFromArgs>(rest)...);
 }
 } // namespace torch

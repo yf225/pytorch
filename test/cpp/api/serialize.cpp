@@ -304,3 +304,37 @@ TEST(
   const int output = in->named_buffers()["a.c.foo"].sum().item<int>();
   ASSERT_EQ(output, 5);
 }
+
+TEST(SerializeTest, CanLoadModulesWithMissingKeys) {
+  struct C1 : torch::nn::Module {
+    C1() {
+      register_module("relu", torch::nn::Functional(torch::relu));
+      register_buffer("foo", torch::ones(5, torch::kInt32));
+    }
+  };
+  struct A : torch::nn::Module {
+    A() {
+      register_module("c", std::make_shared<C1>());
+    }
+  };
+
+  struct C2 : torch::nn::Module {
+    C2() {
+      register_buffer("foo", torch::zeros(5, torch::kInt32));
+    }
+  };
+  struct B : torch::nn::Module {
+    B() {
+      register_module("c", std::make_shared<C2>());
+    }
+  };
+
+  auto out = std::make_shared<B>();
+  std::stringstream ss;
+  torch::save(out, ss);
+  auto in = std::make_shared<A>();
+  torch::load(in, /*strict=*/false, ss);  // yf225 TODO: add comment here
+
+  const int output = in->named_buffers()["c.foo"].sum().item<int>();
+  ASSERT_EQ(output, 5);
+}
