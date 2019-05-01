@@ -195,6 +195,9 @@ Variable::DifferentiableViewImpl::DifferentiableViewImpl(Variable base, at::Tens
   diff_view_meta->is_view_ = true;
   data_.unsafeGetTensorImpl()->set_version_counter(diff_view_meta->base_.version_counter());
   diff_view_meta->attr_version = data_.unsafeGetTensorImpl()->version_counter().current_version();
+  // if (at::isFloatingType(at::typeMetaToScalarType(data_.dtype()))) {
+  //   diff_view_meta->requires_grad_ = true;  // yf225 TODO: what if we do this and always set requires_grad_ to true?
+  // }
 }
 
 const std::shared_ptr<Function>& Variable::grad_fn() const {

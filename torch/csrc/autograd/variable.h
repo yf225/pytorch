@@ -359,6 +359,7 @@ struct TORCH_API Variable::AutogradMeta : public c10::AutogradMetaInterface {
     AT_CHECK(
       !requires_grad || at::isFloatingType(at::typeMetaToScalarType(self_impl->dtype())),
       "Only Tensors of floating point dtype can require gradients");
+    // AT_ASSERT(!(is_view_ && requires_grad));  // yf225 TODO: In what case is this expected to happen?
     requires_grad_ = requires_grad;
   }
 
@@ -390,7 +391,9 @@ struct TORCH_API Variable::DifferentiableViewMeta : public Variable::AutogradMet
   uint32_t attr_version;
 
   bool requires_grad() const override {
-    return requires_grad_ || grad_fn_ || (is_view_ && base_.requires_grad());
+    // AT_ASSERT(!requires_grad_);  // yf225 TODO: this should not happen!
+    return requires_grad_ || grad_fn_ || (is_view_ && base_.requires_grad());  // yf225 TODO: will anything throw if we don't use the requires_grad_ case here?
+    // return grad_fn_ || (is_view_ && base_.requires_grad());
   }
 };
 

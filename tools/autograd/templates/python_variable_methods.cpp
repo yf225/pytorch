@@ -422,7 +422,10 @@ static PyObject * THPVariable_requires_grad_(PyObject* self, PyObject* args, PyO
   if (requires_grad && !self_.is_floating_point()) {
     throw std::runtime_error("only Tensors of floating point dtype can require gradients");
   }
-  self_.set_requires_grad(requires_grad);
+  self_.set_requires_grad(requires_grad);  // yf225 TODO: `self_.set_requires_grad(true)` can happen on view variable. Should we make it only happen on non-view variable?
+  // if (!self_.is_view()) {
+  //   self_.set_requires_grad(requires_grad);
+  // }
   return THPVariable_Wrap(self_);
   END_HANDLE_TH_ERRORS
 }

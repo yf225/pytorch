@@ -148,6 +148,8 @@ def get_analytical_jacobian(input, output):
     correct_grad_sizes = True
 
     for i in range(flat_grad_output.numel()):
+        print("flat_grad_output._is_view(): ", flat_grad_output._is_view())
+        print("flat_grad_output.is_leaf: ", flat_grad_output.is_leaf)
         flat_grad_output.zero_()
         flat_grad_output[i] = 1
         for jacobian_c in (jacobian, jacobian_reentrant):

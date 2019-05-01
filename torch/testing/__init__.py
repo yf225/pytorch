@@ -75,14 +75,22 @@ def make_non_contiguous(tensor):
     # right-most dimension and cut it off
 
     input = tensor.new(torch.Size(osize + [random.randint(2, 3)]))
+    # print("here1: input._is_view(): ", input._is_view())
+    # print("here1: input.grad_fn: ", input.grad_fn)
     input = input.select(len(input.size()) - 1, random.randint(0, 1))
+    # print("here2: input._is_view(): ", input._is_view())
+    # print("here2: input.grad_fn: ", input.grad_fn)
     # now extract the input of correct size from 'input'
     for i in range(len(osize)):
         if input.size(i) != tensor.size(i):
             bounds = random.randint(1, input.size(i) - tensor.size(i))
             input = input.narrow(i, bounds, tensor.size(i))
+            # print("here3: input._is_view(): ", input._is_view())
+            # print("here3: input.grad_fn: ", input.grad_fn)
 
     input.copy_(tensor)
+    # print("here4: input._is_view(): ", input._is_view())
+    # print("here4: input.grad_fn: ", input.grad_fn)
     return input
 
 
