@@ -61,5 +61,16 @@ using is_module =
 template <typename M, typename T = void>
 using enable_if_module_t =
     typename std::enable_if<is_module<M>::value, T>::type;
+
+template<typename T>
+struct has_const_iterator
+{
+private:
+    template<typename C> static char test(typename C::const_iterator*);
+    template<typename C> static int  test(...);
+public:
+    enum { value = sizeof(test<T>(0)) == sizeof(char) };
+};
+
 } // namespace detail
 } // namespace torch
