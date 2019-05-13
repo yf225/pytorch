@@ -25,7 +25,7 @@ struct CAFFE2_API QTensorImpl : public c10::TensorImpl {
     return quantizer_;
   }
 
-  c10::intrusive_ptr<TensorImpl> shallow_copy_and_detach() const override {
+  c10::intrusive_ptr<TensorImpl> shallow_copy_and_detach(bool create_new_version_counter) const override {
     auto impl = c10::make_intrusive<QTensorImpl>(
         Storage(storage()), type_id(), quantizer_);
     impl->set_sizes_and_strides(sizes(), strides());
@@ -34,6 +34,12 @@ struct CAFFE2_API QTensorImpl : public c10::TensorImpl {
     impl->reserved_ = reserved_;
     impl->refresh_numel();
     impl->refresh_contiguous();
+    if (create_new_version_counter) {
+      impl->set_version_counter(0);
+    } else {
+      impl->set_version_counter(version_counter());
+    }
+
     return impl;
   }
 
