@@ -3,6 +3,7 @@
 
 #include <torch/nn/module.h>
 #include <torch/ordered_dict.h>
+#include <torch/serialize.h>
 
 #include <torch/csrc/utils/pybind.h>
 
@@ -60,6 +61,23 @@ void bind_ordered_dict(py::module module, const char* dict_name) {
 }
 } // namespace
 
+void bind_serialization_methods(py::module module) {
+  module
+    .def("save", [](py::object object, const std::string& filename) {
+      PyObject* obj = object.ptr();
+      if (THPVariable_Check(obj)) {
+        torch::save(THPVariable_Unpack(obj), filename);
+      } else {
+        AT_ERROR("Can only serialize tensor from Python");
+      }
+    })
+    .def("load", [](const std::string& filename) {
+      autograd::Variable variable;
+      torch::load(variable, filename);
+      return py::reinterpret_borrow<py::object>(THPVariable_Wrap(variable));
+    });
+}
+
 void init_bindings(PyObject* module) {
   py::module m = py::handle(module).cast<py::module>();
   py::module cpp = m.def_submodule("cpp");
@@ -70,6 +88,8 @@ void init_bindings(PyObject* module) {
   py::module nn = cpp.def_submodule("nn");
   add_module_bindings(
       py::class_<nn::Module, std::shared_ptr<nn::Module>>(nn, "Module"));
+
+  bind_serialization_methods(cpp);
 }
 } // namespace python
 } // namespace torch

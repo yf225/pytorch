@@ -36,8 +36,9 @@ test/data/legacy_modules.t7
 test/data/legacy_serialized.pt
 test/data/linear.pt
 dropout_model.pt
-tensor_python.pt
-tensor_cpp.pt
+# yf225 TODO: how to improve this??
+tensor_python_saved.pt
+tensor_cpp_saved.pt
 test/generated_type_hints_smoketest.py
 test/htmlcov
 test/cpp_extensions/install/

@@ -402,13 +402,27 @@ TEST(SerializeTest, UnserializableSubmoduleIsIgnoredWhenLoadingModule) {
 }
 
 TEST(SerializeTest, TensorSerializationInteropWithPythonFrontend) {
+  // yf225 TODO: fix test and add requires_grad check here!
   torch::Tensor x = torch::ones({5, 5});
   torch::Tensor y;
-  torch::load(y, "tensor_python.pt");
+  torch::load(y, "tensor_python_saved.pt");
 
   ASSERT_TRUE(y.defined());
   ASSERT_EQ(x.sizes().vec(), y.sizes().vec());
   ASSERT_TRUE(x.allclose(y));
 
-  torch::save(y, "tensor_cpp.pt");
+  torch::save(y, "tensor_cpp_saved.pt");
+}
+
+TEST(SerializeTest, TensorSerializationInteropWithPythonFrontend_CUDA) {
+  // yf225 TODO: fix test and add requires_grad check and CUDA check here!
+  torch::Tensor x = torch::ones({5, 5});
+  torch::Tensor y;
+  torch::load(y, "tensor_python_saved.pt");
+
+  ASSERT_TRUE(y.defined());
+  ASSERT_EQ(x.sizes().vec(), y.sizes().vec());
+  ASSERT_TRUE(x.allclose(y));
+
+  torch::save(y, "tensor_cpp_saved.pt");
 }
