@@ -167,8 +167,13 @@ test_libtorch() {
       "$CPP_BUILD"/caffe2/bin/test_jit "[cpu]"
     fi
     python test/cpp/jit/tests_setup.py shutdown
+
+    python test/cpp/api/tests_setup.py setup
     python tools/download_mnist.py --quiet -d test/cpp/api/mnist
     OMP_NUM_THREADS=2 TORCH_CPP_TEST_MNIST_PATH="test/cpp/api/mnist" "$CPP_BUILD"/caffe2/bin/test_api
+    python test/cpp/api/tests_setup.py post_cpp_test
+    python test/cpp/api/tests_setup.py shutdown
+
     assert_git_not_dirty
   fi
 }

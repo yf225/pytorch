@@ -400,3 +400,15 @@ TEST(SerializeTest, UnserializableSubmoduleIsIgnoredWhenLoadingModule) {
   // serialization.
   ASSERT_EQ(output, 5);  
 }
+
+TEST(SerializeTest, TensorSerializationInteropWithPythonFrontend) {
+  torch::Tensor x = torch::ones({5, 5});
+  torch::Tensor y;
+  torch::load(y, "tensor_python.pt");
+
+  ASSERT_TRUE(y.defined());
+  ASSERT_EQ(x.sizes().vec(), y.sizes().vec());
+  ASSERT_TRUE(x.allclose(y));
+
+  torch::save(y, "tensor_cpp.pt");
+}
