@@ -22,6 +22,13 @@
 using namespace torch::nn;
 using namespace torch::optim;
 
+// yf225 TODO: add harness for measuring current process's CPU and CUDA memory usage:
+// CPU memory usage: https://stackoverflow.com/questions/63166/how-to-determine-cpu-and-memory-consumption-from-inside-a-process
+// CUDA memory usage: use `c10::cuda::current_device()` and `c10::cuda::CUDACachingAllocator::currentMemoryAllocated(device)`
+// and then, call this measurement before and after a test, and see what tests are failing this memory leak test right now
+// and then, add this test to all C++ API tests
+// and then, audit all tests and check all possible module options variations
+
 template <typename OptimizerClass, typename Options>
 bool test_optimizer_xor(Options options) {
   torch::manual_seed(0);
@@ -135,7 +142,7 @@ void check_exact_values(
   }
 }
 
-TEST(OptimTest, BasicInterface) {
+TEST_F(OptimTest, BasicInterface) {
   struct MyOptimizer : Optimizer {
     using Optimizer::Optimizer;
     void step() override {}
@@ -162,85 +169,85 @@ TEST(OptimTest, BasicInterface) {
   }
 }
 
-TEST(OptimTest, XORConvergence_SGD) {
+TEST_F(OptimTest, XORConvergence_SGD) {
   ASSERT_TRUE(test_optimizer_xor<SGD>(
       SGDOptions(0.1).momentum(0.9).nesterov(true).weight_decay(1e-6)));
 }
 
-TEST(OptimTest, XORConvergence_Adagrad) {
+TEST_F(OptimTest, XORConvergence_Adagrad) {
   ASSERT_TRUE(test_optimizer_xor<Adagrad>(
       AdagradOptions(1.0).weight_decay(1e-6).lr_decay(1e-3)));
 }
 
-TEST(OptimTest, XORConvergence_RMSprop) {
+TEST_F(OptimTest, XORConvergence_RMSprop) {
   ASSERT_TRUE(test_optimizer_xor<RMSprop>(RMSpropOptions(0.1).centered(true)));
 }
 
-TEST(OptimTest, XORConvergence_RMSpropWithMomentum) {
+TEST_F(OptimTest, XORConvergence_RMSpropWithMomentum) {
   ASSERT_TRUE(test_optimizer_xor<RMSprop>(
       RMSpropOptions(0.1).momentum(0.9).weight_decay(1e-6)));
 }
 
-TEST(OptimTest, XORConvergence_Adam) {
+TEST_F(OptimTest, XORConvergence_Adam) {
   ASSERT_TRUE(test_optimizer_xor<Adam>(AdamOptions(0.1).weight_decay(1e-6)));
 }
 
-TEST(OptimTest, XORConvergence_AdamWithAmsgrad) {
+TEST_F(OptimTest, XORConvergence_AdamWithAmsgrad) {
   ASSERT_TRUE(test_optimizer_xor<Adam>(
       AdamOptions(0.1).weight_decay(1e-6).amsgrad(true)));
 }
 
-TEST(OptimTest, ProducesPyTorchValues_Adam) {
+TEST_F(OptimTest, ProducesPyTorchValues_Adam) {
   check_exact_values<Adam>(AdamOptions(1.0), expected_parameters::Adam());
 }
 
-TEST(OptimTest, ProducesPyTorchValues_AdamWithWeightDecay) {
+TEST_F(OptimTest, ProducesPyTorchValues_AdamWithWeightDecay) {
   check_exact_values<Adam>(
       AdamOptions(1.0).weight_decay(1e-2),
       expected_parameters::Adam_with_weight_decay());
 }
 
-TEST(OptimTest, ProducesPyTorchValues_AdamWithWeightDecayAndAMSGrad) {
+TEST_F(OptimTest, ProducesPyTorchValues_AdamWithWeightDecayAndAMSGrad) {
   check_exact_values<Adam>(
       AdamOptions(1.0).weight_decay(1e-6).amsgrad(true),
       expected_parameters::Adam_with_weight_decay_and_amsgrad());
 }
 
-TEST(OptimTest, ProducesPyTorchValues_Adagrad) {
+TEST_F(OptimTest, ProducesPyTorchValues_Adagrad) {
   check_exact_values<Adagrad>(
       AdagradOptions(1.0), expected_parameters::Adagrad());
 }
 
-TEST(OptimTest, ProducesPyTorchValues_AdagradWithWeightDecay) {
+TEST_F(OptimTest, ProducesPyTorchValues_AdagradWithWeightDecay) {
   check_exact_values<Adagrad>(
       AdagradOptions(1.0).weight_decay(1e-2),
       expected_parameters::Adagrad_with_weight_decay());
 }
 
-TEST(OptimTest, ProducesPyTorchValues_AdagradWithWeightDecayAndLRDecay) {
+TEST_F(OptimTest, ProducesPyTorchValues_AdagradWithWeightDecayAndLRDecay) {
   check_exact_values<Adagrad>(
       AdagradOptions(1.0).weight_decay(1e-6).lr_decay(1e-3),
       expected_parameters::Adagrad_with_weight_decay_and_lr_decay());
 }
 
-TEST(OptimTest, ProducesPyTorchValues_RMSprop) {
+TEST_F(OptimTest, ProducesPyTorchValues_RMSprop) {
   check_exact_values<RMSprop>(
       RMSpropOptions(0.1), expected_parameters::RMSprop());
 }
 
-TEST(OptimTest, ProducesPyTorchValues_RMSpropWithWeightDecay) {
+TEST_F(OptimTest, ProducesPyTorchValues_RMSpropWithWeightDecay) {
   check_exact_values<RMSprop>(
       RMSpropOptions(0.1).weight_decay(1e-2),
       expected_parameters::RMSprop_with_weight_decay());
 }
 
-TEST(OptimTest, ProducesPyTorchValues_RMSpropWithWeightDecayAndCentered) {
+TEST_F(OptimTest, ProducesPyTorchValues_RMSpropWithWeightDecayAndCentered) {
   check_exact_values<RMSprop>(
       RMSpropOptions(0.1).weight_decay(1e-6).centered(true),
       expected_parameters::RMSprop_with_weight_decay_and_centered());
 }
 
-TEST(
+TEST_F(
     OptimTest,
     ProducesPyTorchValues_RMSpropWithWeightDecayAndCenteredAndMomentum) {
   check_exact_values<RMSprop>(
@@ -249,29 +256,29 @@ TEST(
           RMSprop_with_weight_decay_and_centered_and_momentum());
 }
 
-TEST(OptimTest, ProducesPyTorchValues_SGD) {
+TEST_F(OptimTest, ProducesPyTorchValues_SGD) {
   check_exact_values<SGD>(SGDOptions(0.1), expected_parameters::SGD());
 }
 
-TEST(OptimTest, ProducesPyTorchValues_SGDWithWeightDecay) {
+TEST_F(OptimTest, ProducesPyTorchValues_SGDWithWeightDecay) {
   check_exact_values<SGD>(
       SGDOptions(0.1).weight_decay(1e-2),
       expected_parameters::SGD_with_weight_decay());
 }
 
-TEST(OptimTest, ProducesPyTorchValues_SGDWithWeightDecayAndMomentum) {
+TEST_F(OptimTest, ProducesPyTorchValues_SGDWithWeightDecayAndMomentum) {
   check_exact_values<SGD>(
       SGDOptions(0.1).weight_decay(1e-2).momentum(0.9),
       expected_parameters::SGD_with_weight_decay_and_momentum());
 }
 
-TEST(OptimTest, ProducesPyTorchValues_SGDWithWeightDecayAndNesterovMomentum) {
+TEST_F(OptimTest, ProducesPyTorchValues_SGDWithWeightDecayAndNesterovMomentum) {
   check_exact_values<SGD>(
       SGDOptions(0.1).weight_decay(1e-6).momentum(0.9).nesterov(true),
       expected_parameters::SGD_with_weight_decay_and_nesterov_momentum());
 }
 
-TEST(OptimTest, ZeroGrad) {
+TEST_F(OptimTest, ZeroGrad) {
   torch::manual_seed(0);
 
   Linear model(2, 8);
@@ -298,7 +305,7 @@ TEST(OptimTest, ZeroGrad) {
   }
 }
 
-TEST(OptimTest, ExternalVectorOfParameters) {
+TEST_F(OptimTest, ExternalVectorOfParameters) {
   torch::manual_seed(0);
 
   std::vector<torch::Tensor> parameters = {
@@ -320,7 +327,7 @@ TEST(OptimTest, ExternalVectorOfParameters) {
   ASSERT_TRUE(parameters[2].allclose(original_parameters[2] - 1.0));
 }
 
-TEST(OptimTest, AddParameter_LBFGS) {
+TEST_F(OptimTest, AddParameter_LBFGS) {
   torch::manual_seed(0);
 
   std::vector<torch::Tensor> parameters = {torch::randn({5, 5})};

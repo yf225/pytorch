@@ -26,6 +26,7 @@ void SGD::step() {
     auto update = p.grad();
 
     if (options.weight_decay_ > 0) {
+      // NoGradGuard guard; // yf225 TODO: likely need this fix
       update += options.weight_decay_ * p;
     }
 
