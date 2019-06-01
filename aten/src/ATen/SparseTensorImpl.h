@@ -5,6 +5,8 @@
 #include <c10/util/Exception.h>
 
 namespace at {
+// yf225 TODO: move SparseTensorImpl to use VirtualTensorImpl
+// yf225 TODO: add Python nn.Module._apply() test for fake converting a model from dense to sparse, and see that previous references to params are still preserved
 struct CAFFE2_API SparseTensorImpl : public TensorImpl {
   // Stored in COO format, indices + values.
 

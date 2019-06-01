@@ -112,7 +112,15 @@ void Variable::set_data(const at::Tensor &new_data) {
   // users need this API as an escape hatch for changing a tensor's metadata regardless of its
   // `allow_tensor_metadata_change_` value, and the users are responsible for ensuring this is
   // the behavior they want.
-  get()->shallow_copy_from(new_data.getIntrusivePtr());
+  // yf225 TODO: fix comment here!
+  if (new_data.unsafeGetTensorImpl()->virtual_impl()) {
+    auto virtual_impl_copy = new_data.unsafeGetTensorImpl()->virtual_impl()->shallow_copy_and_detach(
+      /*version_counter=*/new_data.unsafeGetTensorImpl()->virtual_impl()->version_counter(),
+      /*allow_tensor_metadata_change=*/true);
+    get()->set_virtual_impl(std::move(virtual_impl_copy));
+  } else {
+    get()->shallow_copy_from(new_data.getIntrusivePtr());
+  }
 }
 
 Variable::DifferentiableViewMeta::DifferentiableViewMeta(at::TensorImpl* self_impl, Variable base, Edge gradient_edge)

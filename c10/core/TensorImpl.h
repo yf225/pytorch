@@ -144,6 +144,24 @@ struct C10_API NonVariableTypeMode {
   static void set_enabled(bool enabled);
 };
 
+struct C10_API VirtualTensorImpl : public TensorImpl {
+  virtual c10::intrusive_ptr<TensorImpl> virtual_shallow_copy_and_detach(
+      const c10::VariableVersion& version_counter,
+      bool allow_tensor_metadata_change) const = 0;
+
+  virtual void virtual_shallow_copy_from(const c10::intrusive_ptr<TensorImpl>& impl) = 0;
+
+  virtual at::IntArrayRef virtual_sizes() const = 0;
+
+  virtual int64_t virtual_dim() const = 0;
+
+  virtual int64_t virtual_numel() const = 0;
+
+  virtual bool virtual_is_contiguous(at::MemoryFormat memory_format) const = 0;
+
+  virtual int64_t virtual_size(int64_t d) const = 0;
+};
+
 // NOTE [ Version Counter Sharing ]
 //
 // Every Tensor has a version counter. Version counters are incremented whenever the
@@ -270,6 +288,7 @@ struct C10_API VariableVersion {
  *    tensor is fully initialized in all fields.  Please do not write new code
  *    that depends on these uninitialized states.
  */
+
 struct C10_API TensorImpl : public c10::intrusive_ptr_target {
   TensorImpl() = delete;
 
@@ -375,10 +394,14 @@ struct C10_API TensorImpl : public c10::intrusive_ptr_target {
    * of sizes of a tensor.
    */
   virtual int64_t numel() const {
+    if (virtual_impl_) {
+      return virtual_impl_->virtual_numel();
+    } else {
 #ifdef DEBUG
-    TORCH_INTERNAL_ASSERT(compute_numel() == numel_);
+      TORCH_INTERNAL_ASSERT(compute_numel() == numel_);
 #endif
-    return numel_;
+      return numel_;
+    }
   }
 
   /**
@@ -817,6 +840,10 @@ struct C10_API TensorImpl : public c10::intrusive_ptr_target {
   /**
    * True if a tensor allows changes to its metadata (e.g. sizes / strides / storage / storage_offset).
    * See NOTE [ Metadata Change for a Detached Tensor ] for details.
+   *
+   * yf225 TODO: we need to branch for virtual_impl_ here as well (and in all other virtual methods of TensorImpl),
+   * because the basic idea is that if virtual_impl_ is not null, data are actually stored in virtual_impl_,
+   * and the data in base TensorImpl doesn't matter.
    */
   virtual bool allow_tensor_metadata_change() const {
     return allow_tensor_metadata_change_;
@@ -841,6 +868,22 @@ struct C10_API TensorImpl : public c10::intrusive_ptr_target {
    */
   std::unique_ptr<c10::AutogradMetaInterface> detach_autograd_meta() {
     return std::move(autograd_meta_);
+  }
+
+  /**
+   * yf225 TODO: improve comment!
+   * Return the pointer to virtual impl.
+   */
+  c10::VirtualTensorImpl* virtual_impl() const {
+    return virtual_impl_.get();
+  }
+
+  /**
+   * yf225 TODO: improve comment!
+   * Set the pointer to virtual impl.
+   */
+  void set_virtual_impl(c10::intrusive_ptr<VirtualTensorImpl, UndefinedTensorImpl> virtual_impl) {
+    virtual_impl_ = std::move(virtual_impl);
   }
 
   // NOTE [ TensorImpl Shallow-Copying ]
@@ -880,13 +923,17 @@ struct C10_API TensorImpl : public c10::intrusive_ptr_target {
       const c10::VariableVersion& version_counter,
       bool allow_tensor_metadata_change) const {
     auto impl = c10::make_intrusive<TensorImpl>(Storage(storage()), type_id());
-    copy_tensor_data(
-      /*src_impl=*/this,
-      /*dest_impl=*/impl.get(),
-      /*version_counter=*/version_counter,
-      /*allow_tensor_metadata_change=*/allow_tensor_metadata_change);
-    impl->refresh_numel();
-    impl->refresh_contiguous();
+    if (virtual_impl_) {
+      impl->virtual_impl_ = virtual_impl_->virtual_shallow_copy_and_detach(version_counter, allow_tensor_metadata_change);
+    } else {
+      copy_tensor_data(
+        /*src_impl=*/this,
+        /*dest_impl=*/impl.get(),
+        /*version_counter=*/version_counter,
+        /*allow_tensor_metadata_change=*/allow_tensor_metadata_change);
+      impl->refresh_numel();
+      impl->refresh_contiguous();
+    }
     return impl;
   }
 
@@ -897,13 +944,17 @@ struct C10_API TensorImpl : public c10::intrusive_ptr_target {
    * see NOTE [ TensorImpl Shallow-Copying ].
    */
   virtual void shallow_copy_from(const c10::intrusive_ptr<TensorImpl>& impl) {
-    copy_tensor_data(
-      /*src_impl=*/impl.get(),
-      /*dest_impl=*/this,
-      /*version_counter=*/version_counter(),
-      /*allow_tensor_metadata_change=*/allow_tensor_metadata_change());
-    refresh_numel();
-    refresh_contiguous();
+    if (virtual_impl_) {
+      virtual_impl_->virtual_shallow_copy_from(impl->virtual_impl_);
+    } else {
+      copy_tensor_data(
+        /*src_impl=*/impl.get(),
+        /*dest_impl=*/this,
+        /*version_counter=*/version_counter(),
+        /*allow_tensor_metadata_change=*/allow_tensor_metadata_change());
+      refresh_numel();
+      refresh_contiguous();
+    }
   }
 
   void set_version_counter(
@@ -1459,6 +1510,8 @@ protected:
   c10::VariableVersion version_counter_;
 
   PyObject* pyobj_ = nullptr; // weak reference
+
+  c10::intrusive_ptr<VirtualTensorImpl, UndefinedTensorImpl> virtual_impl_;
 
   // We could save a word or two by combining the SmallVector structs,
   // since their size is redundant, and if we need to overflow the buffer space

@@ -13,6 +13,7 @@ namespace at {
  *
  * We'll use QTensor in code or documentation to refer to a Tensor with QTensorImpl.
  */
+// yf225 TODO: move this to use VirtualTensorImpl
 struct CAFFE2_API QTensorImpl : public c10::TensorImpl {
  public:
   QTensorImpl(

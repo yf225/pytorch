@@ -60,7 +60,11 @@ TensorImpl::TensorImpl(Storage&& storage, TensorTypeId type_id, const caffe2::Ty
 }
 
 IntArrayRef TensorImpl::sizes() const {
-  return sizes_;
+  if (virtual_impl_) {
+    return virtual_impl_->virtual_sizes();
+  } else {
+    return sizes_;
+  }
 }
 
 IntArrayRef TensorImpl::strides() const {
@@ -93,12 +97,20 @@ void TensorImpl::release_resources() {
 }
 
 int64_t TensorImpl::dim() const {
-  return sizes_.size();
+  if (virtual_impl_) {
+    return virtual_impl_->virtual_dim();
+  } else {
+    return sizes_.size();
+  }
 }
 
 int64_t TensorImpl::size(int64_t d) const {
-  d = at::maybe_wrap_dim(d, dim(), false);
-  return sizes_[d];
+  if (virtual_impl_) {
+    return virtual_impl_->virtual_size(d);
+  } else {
+    d = at::maybe_wrap_dim(d, dim(), false);
+    return sizes_[d];
+  }
 }
 
 int64_t TensorImpl::stride(int64_t d) const {
@@ -119,23 +131,27 @@ bool TensorImpl::has_storage() const {
 }
 
 bool TensorImpl::is_contiguous(at::MemoryFormat memory_format) const {
+  if (virtual_impl_) {
+    return virtual_impl_->virtual_is_contiguous(memory_format);
+  } else {
 #ifdef DEBUG
-  AT_ASSERT(compute_contiguous() == is_contiguous_);
+    AT_ASSERT(compute_contiguous() == is_contiguous_);
 #endif
-  if (memory_format == at::MemoryFormat::ChannelsLast) {
-    if (dim() == 4) {
-      auto strides_1 = 1;
-      auto strides_3 = sizes_[1];
-      auto strides_2 = strides_3 * sizes_[3];
-      auto strides_0 = strides_2 * sizes_[2];
-      if (strides_0 == strides_[0] && strides_1 == strides_[1] &&
-          strides_2 == strides_[2] && strides_3 == strides_[3]) {
-        return true;
+    if (memory_format == at::MemoryFormat::ChannelsLast) {
+      if (dim() == 4) {
+        auto strides_1 = 1;
+        auto strides_3 = sizes_[1];
+        auto strides_2 = strides_3 * sizes_[3];
+        auto strides_0 = strides_2 * sizes_[2];
+        if (strides_0 == strides_[0] && strides_1 == strides_[1] &&
+            strides_2 == strides_[2] && strides_3 == strides_[3]) {
+          return true;
+        }
       }
+      return false;
     }
-    return false;
+    return is_contiguous_;
   }
-  return is_contiguous_;
 }
 
 const Storage& TensorImpl::storage() const {

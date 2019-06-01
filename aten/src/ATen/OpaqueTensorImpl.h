@@ -16,6 +16,7 @@ namespace at {
 // `shallow_copy_and_detach`. We would need to define an interface to  "shallow copy"
 // in order to add support.
 
+// yf225 TODO: move this to use VirtualTensorImpl
 template <typename OpaqueHandle>
 struct CAFFE2_API OpaqueTensorImpl : public TensorImpl {
   // public constructor for now...
