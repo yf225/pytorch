@@ -137,6 +137,7 @@ struct C10_API AutogradMetaInterface {
   virtual at::Tensor& grad() = 0;
   virtual const at::Tensor& grad() const = 0;
   virtual ~AutogradMetaInterface();
+  static std::function<std::unique_ptr<AutogradMetaInterface>(TensorImpl *)> create_autograd_meta;  // yf225 TODO: can we initialize this function pointer somewhere else?
 };
 
 struct C10_API NonVariableTypeMode {
@@ -524,7 +525,10 @@ struct C10_API TensorImpl : public c10::intrusive_ptr_target {
    * See Note [Tensor versus Variable in C++].
    */
   void set_requires_grad(bool requires_grad) {
+    auto autograd_meta_tmp = c10::AutogradMetaInterface::create_autograd_meta(this);
+    TORCH_INTERNAL_ASSERT(autograd_meta_tmp, "yf225 TODO: create_autograd_meta not initialized!");
     TORCH_INTERNAL_ASSERT(autograd_meta(), "set_requires_grad is not implemented for Tensor");
+    std::cout << "hi!" << std::endl;
     autograd_meta()->set_requires_grad(requires_grad, this);
   }
 

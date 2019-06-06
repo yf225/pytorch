@@ -19,6 +19,10 @@
 #include <vector>
 #include <typeinfo>
 
+std::function<std::unique_ptr<c10::AutogradMetaInterface>(at::TensorImpl *)> c10::AutogradMetaInterface::create_autograd_meta = [](at::TensorImpl *self_impl) {
+  return c10::guts::make_unique<torch::autograd::Variable::AutogradMeta>(self_impl);
+};
+
 namespace torch {
 namespace autograd {
 Variable::AutogradMeta::AutogradMeta(at::TensorImpl* self_impl, bool requires_grad, Edge gradient_edge) {
