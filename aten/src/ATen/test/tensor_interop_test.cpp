@@ -282,8 +282,7 @@ TEST(PytorchToCaffe2, NonRegularTensor) {
 // With current build system it's too bothersome to set it up, but the test
 // passes
 // TEST(PytorchToCaffe2, Variable) {
-//   at::Tensor var =
-//       torch::autograd::make_variable(at::empty({2, 3}, at::dtype<float>()));
+//   at::Tensor var = at::empty({2, 3}, at::dtype<float>());
 //   ASSERT_TRUE(var.is_variable());
 //   ASSERT_ANY_THROW(caffe2::Tensor c2_tensor(var));
 // }

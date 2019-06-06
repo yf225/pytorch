@@ -132,11 +132,12 @@ struct C10_API PlacementDeleteContext {
 struct TensorImpl;
 
 struct C10_API AutogradMetaInterface {
-  virtual void set_requires_grad(bool requires_grad, at::TensorImpl* self_impl) = 0;
+  virtual void set_requires_grad(bool requires_grad) = 0;
   virtual bool requires_grad() const = 0;
   virtual at::Tensor& grad() = 0;
   virtual const at::Tensor& grad() const = 0;
   virtual ~AutogradMetaInterface();
+  static std::function<std::unique_ptr<AutogradMetaInterface>()> create_autograd_meta;
 };
 
 struct C10_API NonVariableTypeMode {
@@ -531,8 +532,18 @@ struct C10_API TensorImpl : public c10::intrusive_ptr_target {
    * See Note [Tensor versus Variable in C++].
    */
   void set_requires_grad(bool requires_grad) {
-    TORCH_INTERNAL_ASSERT(autograd_meta(), "set_requires_grad is not implemented for Tensor");
-    autograd_meta()->set_requires_grad(requires_grad, this);
+    TORCH_CHECK(
+      !requires_grad || at::isFloatingType(at::typeMetaToScalarType(dtype())),
+      "Only Tensors of floating point dtype can require gradients");
+
+    if (requires_grad) {
+      if (!autograd_meta()) {
+        set_autograd_meta(c10::AutogradMetaInterface::create_autograd_meta());
+      }
+      autograd_meta()->set_requires_grad(requires_grad);
+    } else if (!requires_grad && autograd_meta()) {
+      set_autograd_meta(nullptr);
+    }
   }
 
   /**
@@ -546,8 +557,11 @@ struct C10_API TensorImpl : public c10::intrusive_ptr_target {
    * See Note [Tensor versus Variable in C++].
    */
   bool requires_grad() const {
-    TORCH_INTERNAL_ASSERT(autograd_meta(), "requires_grad is not implemented for Tensor");
-    return autograd_meta()->requires_grad();
+    if (!autograd_meta()) {
+      return false;
+    } else {
+      return autograd_meta()->requires_grad();  // yf225 TODO: why can't this just return true??
+    }
   }
 
   /**
@@ -810,7 +824,7 @@ struct C10_API TensorImpl : public c10::intrusive_ptr_target {
    * True if a tensor is a variable.  See Note [Tensor versus Variable in C++]
    */
   bool is_variable() const {
-    return autograd_meta_ != nullptr && !at::NonVariableTypeMode::is_enabled();
+    return !at::NonVariableTypeMode::is_enabled();
   }
 
   /**

@@ -33,7 +33,7 @@ bool isEqual(const ArgumentInfo& ti, const autograd::Variable& v) {
 }
 
 autograd::Variable var(at::DeprecatedTypeProperties& t, at::IntArrayRef sizes, bool requires_grad) {
-  return autograd::make_variable(at::rand(sizes, t.options()), requires_grad);
+  return autograd::Variable(at::rand(sizes, t.options()), requires_grad);
 }
 autograd::Variable undef() {
   return autograd::Variable();

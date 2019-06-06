@@ -19,16 +19,20 @@
 #include <vector>
 #include <typeinfo>
 
+std::function<std::unique_ptr<c10::AutogradMetaInterface>()> c10::AutogradMetaInterface::create_autograd_meta = []() {
+  return c10::guts::make_unique<torch::autograd::Variable::AutogradMeta>();
+};
+
 namespace torch {
 namespace autograd {
-Variable::AutogradMeta::AutogradMeta(at::TensorImpl* self_impl, bool requires_grad, Edge gradient_edge) {
+Variable::AutogradMeta::AutogradMeta(bool requires_grad, Edge gradient_edge) {
   grad_fn_ = std::move(gradient_edge.function);
   requires_grad_ = false;
   is_view_ = false;
   output_nr_ = gradient_edge.input_nr;
 
   // set_requires_grad also checks error conditions.
-  set_requires_grad(requires_grad, self_impl);
+  set_requires_grad(requires_grad);
   TORCH_CHECK(
       !grad_fn_ || !requires_grad_,
       "requires_grad should be false if grad_fn is set");
@@ -61,10 +65,7 @@ void Variable::detach_() {
   if (is_view()) {
     AT_ERROR("Can't detach views in-place. Use detach() instead");
   }
-  auto autograd_meta = get_autograd_meta();
-  autograd_meta->set_requires_grad(false, unsafeGetTensorImpl());
-  autograd_meta->grad_fn_.reset();
-  autograd_meta->output_nr_ = 0;
+  set_requires_grad(false);
 }
 
 void Variable::backward(
@@ -116,7 +117,7 @@ void Variable::set_data(const at::Tensor &new_data) {
 }
 
 Variable::DifferentiableViewMeta::DifferentiableViewMeta(at::TensorImpl* self_impl, Variable base, Edge gradient_edge)
-    : Variable::AutogradMeta(self_impl, false, std::move(gradient_edge)) {
+    : Variable::AutogradMeta(false, std::move(gradient_edge)) {
   base_ = std::move(base);
   TORCH_CHECK(base_.defined(), "base is undefined");
   if (base_.is_view()) {

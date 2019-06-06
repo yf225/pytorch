@@ -107,7 +107,7 @@ struct TORCH_API Variable : public at::Tensor {
   /// set only for leaves, and determines whether the `Variable` will accumulate
   /// gradients. NOTE: `data` must *not* be a `Variable` already. Its dynamic
   /// type *must* be `Tensor`.
-  friend Variable make_variable(
+  friend Variable make_variable_deprecated(
       at::Tensor data,
       bool requires_grad,
       bool allow_tensor_metadata_change);
@@ -117,7 +117,7 @@ struct TORCH_API Variable : public at::Tensor {
   /// convert it to a `Variable`, and then free it; it has been found to
   /// decrease the overhead of those operations, in some situations.
   /// The comments about `requires_grad` and `data` on the above version also apply to this one.
-  friend Variable make_variable_consuming(
+  friend Variable make_variable_consuming_deprecated(
       at::Tensor data,
       bool requires_grad,
       bool allow_tensor_metadata_change);
@@ -126,7 +126,7 @@ struct TORCH_API Variable : public at::Tensor {
   /// `gradient_edge` should be a (function, input_nr) pair specifying the function
   /// in the autograd graph, and what particular input of that function, this
   /// variable is connected to.
-  friend Variable make_variable(
+  friend Variable make_variable_deprecated(
       at::Tensor data,
       Edge gradient_edge,
       bool allow_tensor_metadata_change);
@@ -350,7 +350,7 @@ struct TORCH_API Variable::AutogradMeta : public c10::AutogradMetaInterface {
   std::vector<std::shared_ptr<FunctionPreHook>> hooks_;
 
   // Only meaningful on leaf variables (must be false otherwise)
-  bool requires_grad_;
+  bool requires_grad_;  // yf225 TODO: can we remove this field??
 
   bool is_view_;
 
@@ -365,18 +365,14 @@ struct TORCH_API Variable::AutogradMeta : public c10::AutogradMetaInterface {
   // grad_accumulator().
   std::mutex mutex_;
 
-  /// Sets the `requires_grad` property of `Variable`. This should be true for
-  /// leaf variables that want to accumulate gradients, and false for all other
-  /// variables.
-  void set_requires_grad(bool requires_grad, at::TensorImpl* self_impl) override {
-    TORCH_CHECK(
-      !requires_grad || at::isFloatingType(at::typeMetaToScalarType(self_impl->dtype())),
-      "Only Tensors of floating point dtype can require gradients");
-    requires_grad_ = requires_grad;
+  // yf225 TODO: can we remove this??
+  bool requires_grad() const override {
+    return true;
   }
 
-  bool requires_grad() const override {
-    return requires_grad_ || grad_fn_;
+  // yf225 TODO: can we potentially remove this ??
+  void set_requires_grad(bool requires_grad) override {
+    requires_grad_ = requires_grad;
   }
 
   /// Accesses the gradient `Variable` of this `Variable`.
@@ -389,7 +385,6 @@ struct TORCH_API Variable::AutogradMeta : public c10::AutogradMetaInterface {
   }
 
   AutogradMeta(
-    at::TensorImpl* self_impl,
     bool requires_grad = false,
     Edge gradient_edge = Edge());
 };
@@ -476,6 +471,8 @@ struct TORCH_API Variable::DifferentiableViewMeta : public Variable::AutogradMet
   /// version_counter.current_version().
   uint32_t attr_version;
 
+  // yf225 TODO: can we potentially remove this and just check autograd_meta() ??
+  // yf225 TODO: what are the all possible scenarios when this can return false???
   bool requires_grad() const override {
     return requires_grad_ || grad_fn_ || (is_view_ && base_.requires_grad());
   }
@@ -520,17 +517,20 @@ inline Variable make_variable_view(
         /*version_counter=*/base.version_counter(),
         /*allow_tensor_metadata_change=*/allow_tensor_metadata_change);
       data_impl_copy->set_autograd_meta(c10::guts::make_unique<Variable::AutogradMeta>(
-        data_impl_copy.get(), false, std::move(gradient_edge)));
+        false, std::move(gradient_edge)));
       return Variable(data_impl_copy);
     }
   }
   return Variable();
 }
 
-inline Variable make_variable(
+inline Variable make_variable_deprecated(
     at::Tensor data,
     bool requires_grad = false,
     bool allow_tensor_metadata_change = true) {
+  // yf225 TODO: what does it mean to call `make_variable` with `at::NonVariableTypeMode` set to true (and data not a variable)?? Can we enforce that it's not set to true? Can we have a contract that "baseType ops (ATen/XLA) never calls make_variable()"?
+  // yf225 TODO: how many callsites of make_variable() rely on the fact that make_variable() makes shallow-copy of the data and create a new autograd_meta? Can we directly use the data (and not use make_variable), or use the data tensor's `variable_data()`/`detach()` instead?
+  // yf225 TODO: when we call make_variable(), is it just because we need new autograd history?
   TORCH_CHECK(
       !data.is_variable(),
       "Must not create a new variable from a variable, use its .tensor_data()");
@@ -538,17 +538,20 @@ inline Variable make_variable(
     auto data_impl_copy = data.getIntrusivePtr()->shallow_copy_and_detach(
       /*version_counter=*/0,
       /*allow_tensor_metadata_change=*/allow_tensor_metadata_change);
-    data_impl_copy->set_autograd_meta(c10::guts::make_unique<Variable::AutogradMeta>(
-      data_impl_copy.get(), requires_grad));
+    data_impl_copy->set_requires_grad(requires_grad);
     return Variable(data_impl_copy);
   }
   return Variable();
 }
 
-inline Variable make_variable_consuming(
+inline Variable make_variable_consuming_deprecated(
     at::Tensor data,
     bool requires_grad = false,
     bool allow_tensor_metadata_change = true) {
+  // yf225 TODO: what does it mean to call `make_variable` with `at::NonVariableTypeMode` set to true (and data not a variable)?? Can we enforce that it's not set to true? Can we have a contract that "baseType ops (ATen/XLA
+  ) never calls make_variable()"?
+  // yf225 TODO: how many callsites of make_variable() rely on the fact that make_variable() makes shallow-copy of the data? Can we directly use the data (and not use make_variable), or use the data tensor's `variable_data()`/`detach()` instead?
+  // yf225 TODO: when we call make_variable(), is it just because we need new autograd history?
   TORCH_CHECK(
       !data.is_variable(),
       "Must not create a new variable from a variable, use its .tensor_data()");
@@ -556,16 +559,19 @@ inline Variable make_variable_consuming(
     AT_ASSERT(data.getIntrusivePtr().use_count() == 1);
     auto data_impl = data.getIntrusivePtr();
     data_impl->set_allow_tensor_metadata_change(allow_tensor_metadata_change);
-    data_impl->set_autograd_meta(c10::guts::make_unique<Variable::AutogradMeta>(data_impl.get(), requires_grad));
+    data_impl->set_requires_grad(requires_grad);
     return Variable(std::move(data_impl));
   }
   return Variable();
 }
 
-inline Variable make_variable(
+inline Variable make_variable_deprecated(
     at::Tensor data,
     Edge gradient_edge,
     bool allow_tensor_metadata_change = true) {
+  // yf225 TODO: what does it mean to call `make_variable` with `at::NonVariableTypeMode` set to true (and data not a variable)?? Can we enforce that it's not set to true? Can we have a contract that "baseType ops (ATen/XLA) never calls make_variable()"?
+  // yf225 TODO: how many callsites of make_variable() rely on the fact that make_variable() makes shallow-copy of the data? Can we directly use the data (and not use make_variable), or use the data tensor's `variable_data()`/`detach()` instead?
+  // yf225 TODO: when we call make_variable(), is it just because we need new autograd history?
   TORCH_CHECK(
       !data.is_variable(),
       "Must not create a new variable from a variable, use its .tensor_data()");
@@ -574,7 +580,7 @@ inline Variable make_variable(
       /*version_counter=*/0,
       /*allow_tensor_metadata_change=*/allow_tensor_metadata_change);
     data_impl_copy->set_autograd_meta(c10::guts::make_unique<Variable::AutogradMeta>(
-      data_impl_copy.get(), false, std::move(gradient_edge)));
+      false, std::move(gradient_edge)));
     return Variable(data_impl_copy);
   }
   return Variable();
@@ -613,7 +619,7 @@ inline at::Tensor Variable::variable_data() const noexcept {
   auto self_impl_copy = get()->shallow_copy_and_detach(
     /*version_counter=*/0,
     /*allow_tensor_metadata_change=*/false);
-  self_impl_copy->set_autograd_meta(c10::guts::make_unique<Variable::AutogradMeta>(self_impl_copy.get(), false));
+  self_impl_copy->set_requires_grad(false);
   return at::Tensor(self_impl_copy);
 }
 
