@@ -304,3 +304,11 @@ TEST(TensorTest, Item_CUDA) {
     ASSERT_EQ(scalar.to<int>(), 123);
   }
 }
+
+TEST(TensorTest, SwapTensorImpl) {
+  torch::Tensor tensor1 = torch::tensor(1.0);
+  torch::Tensor tensor2 = tensor1;
+  std::swap(*tensor2.unsafeGetTensorImpl(), *(torch::tensor(2.0).unsafeGetTensorImpl()));
+  ASSERT_NEAR(tensor2.item().to<float>(), 2.0, 1e-5);
+  ASSERT_NEAR(tensor1.item().to<float>(), 2.0, 1e-5);
+}
