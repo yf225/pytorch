@@ -2579,6 +2579,22 @@
   variants: method
   device_guard: False
 
+- func: to_(Tensor(a!) self, *, ScalarType dtype, Layout layout, Device device, bool pin_memory=False, bool non_blocking=False, bool copy=False) -> Tensor(a!)
+  variants: method
+  device_guard: False
+
+- func: to_(Tensor(a!) self, Device device, ScalarType dtype, bool non_blocking=False, bool copy=False) -> Tensor(a!)
+  variants: method
+  device_guard: False
+
+- func: to_(Tensor(a!) self, ScalarType dtype, bool non_blocking=False, bool copy=False) -> Tensor(a!)
+  variants: method
+  device_guard: False
+
+- func: to_(Tensor(a!) self, Tensor other, bool non_blocking=False, bool copy=False) -> Tensor(a!)
+  variants: method
+  device_guard: False
+
 - func: meshgrid(Tensor[] tensors) -> Tensor[]
 
 - func: cartesian_prod(Tensor[] tensors) -> Tensor

@@ -828,6 +828,18 @@ inline Tensor Tensor::to(ScalarType dtype, bool non_blocking, bool copy) const {
 inline Tensor Tensor::to(const Tensor & other, bool non_blocking, bool copy) const {
     return dispatch_type().to(*this, other, non_blocking, copy);
 }
+inline Tensor & Tensor::to_(const TensorOptions & options, bool non_blocking, bool copy) {
+    return dispatch_type().to_(*this, options, non_blocking, copy);
+}
+inline Tensor & Tensor::to_(Device device, ScalarType dtype, bool non_blocking, bool copy) {
+    return dispatch_type().to_(*this, device, dtype, non_blocking, copy);
+}
+inline Tensor & Tensor::to_(ScalarType dtype, bool non_blocking, bool copy) {
+    return dispatch_type().to_(*this, dtype, non_blocking, copy);
+}
+inline Tensor & Tensor::to_(const Tensor & other, bool non_blocking, bool copy) {
+    return dispatch_type().to_(*this, other, non_blocking, copy);
+}
 inline Scalar Tensor::item() const {
     return dispatch_type().item(*this);
 }

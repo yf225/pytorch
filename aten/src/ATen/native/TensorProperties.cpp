@@ -52,6 +52,30 @@ Tensor & detach_(Tensor & self) {
   return self;
 }
 
+Tensor & to_(Tensor & self, const TensorOptions & options, bool non_blocking, bool copy) {
+  // this just exists to give us a hook in VariableType and an entry in Declarations.yaml
+  AT_ERROR("to_ is not implemented for Tensor");
+  return self;
+}
+
+Tensor & to_(Tensor & self, Device device, ScalarType dtype, bool non_blocking, bool copy) {
+  // this just exists to give us a hook in VariableType and an entry in Declarations.yaml
+  AT_ERROR("to_ is not implemented for Tensor");
+  return self;
+}
+
+Tensor & to_(Tensor & self, ScalarType dtype, bool non_blocking, bool copy) {
+  // this just exists to give us a hook in VariableType and an entry in Declarations.yaml
+  AT_ERROR("to_ is not implemented for Tensor");
+  return self;
+}
+
+Tensor & to_(Tensor & self, const Tensor & other, bool non_blocking, bool copy) {
+  // this just exists to give us a hook in VariableType and an entry in Declarations.yaml
+  AT_ERROR("to_ is not implemented for Tensor");
+  return self;
+}
+
 Tensor contiguous(const Tensor & self) {
   return contiguous(self, MemoryFormat::Contiguous);
 }

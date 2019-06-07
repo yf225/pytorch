@@ -345,4 +345,134 @@ Tensor & VariableType::detach_(Tensor & self) const {
   return self;
 }
 
+Tensor & VariableType::to_(Tensor & self, const TensorOptions & options, bool non_blocking, bool copy) const {
+  RECORD_FUNCTION("to_", std::vector<c10::IValue>({self}), Function::peek_at_next_sequence_nr());
+  torch::jit::Node* node = nullptr;
+  std::shared_ptr<jit::tracer::TracingState> tracer_state;
+  // yf225 TODO: improve JIT tracing handling?
+  if (jit::tracer::isTracing()) {
+    tracer_state = jit::tracer::getTracingState();
+    at::Symbol op_name;
+    op_name = jit::Symbol::fromQualString("aten::to_");
+    node = tracer_state->graph->create(op_name, /*num_outputs=*/0);
+    jit::tracer::recordSourceLocation(node);
+    jit::tracer::addInputs(node, "self", self);
+    jit::tracer::addInputs(node, "options", options);
+    jit::tracer::addInputs(node, "non_blocking", non_blocking);
+    jit::tracer::addInputs(node, "copy", copy);
+    tracer_state->graph->insertNode(node);
+  
+    jit::tracer::setTracingState(nullptr);
+  }
+  auto result = TypeDefault::to(self, options, non_blocking, copy);
+  if (as_variable_ref(self).is_same_impl_type(result)) {
+    as_variable_ref(self).set_data(result);
+  } else {
+    as_variable_ref(self)._set_data_swap_impl(result);
+  }
+  increment_version(self);
+  if (tracer_state) {
+    jit::tracer::setTracingState(std::move(tracer_state));
+    jit::tracer::addOutput(node, result);
+  }
+  return self;
+}
+Tensor & VariableType::to_(Tensor & self, Device device, ScalarType dtype, bool non_blocking, bool copy) const {
+  RECORD_FUNCTION("to_", std::vector<c10::IValue>({self}), Function::peek_at_next_sequence_nr());
+  torch::jit::Node* node = nullptr;
+  std::shared_ptr<jit::tracer::TracingState> tracer_state;
+  // yf225 TODO: improve JIT tracing handling?
+  if (jit::tracer::isTracing()) {
+    tracer_state = jit::tracer::getTracingState();
+    at::Symbol op_name;
+    op_name = jit::Symbol::fromQualString("aten::to_");
+    node = tracer_state->graph->create(op_name, /*num_outputs=*/0);
+    jit::tracer::recordSourceLocation(node);
+    jit::tracer::addInputs(node, "self", self);
+    jit::tracer::addInputs(node, "device", device);
+    jit::tracer::addInputs(node, "dtype", dtype);
+    jit::tracer::addInputs(node, "non_blocking", non_blocking);
+    jit::tracer::addInputs(node, "copy", copy);
+    tracer_state->graph->insertNode(node);
+  
+    jit::tracer::setTracingState(nullptr);
+  }
+  auto result = TypeDefault::to(self, device, dtype, non_blocking, copy);
+  if (as_variable_ref(self).is_same_impl_type(result)) {
+    as_variable_ref(self).set_data(result);
+  } else {
+    as_variable_ref(self)._set_data_swap_impl(result);
+  }
+  increment_version(self);
+  if (tracer_state) {
+    jit::tracer::setTracingState(std::move(tracer_state));
+    jit::tracer::addOutput(node, result);
+  }
+  return self;
+}
+Tensor & VariableType::to_(Tensor & self, ScalarType dtype, bool non_blocking, bool copy) const {
+  RECORD_FUNCTION("to_", std::vector<c10::IValue>({self}), Function::peek_at_next_sequence_nr());
+  torch::jit::Node* node = nullptr;
+  std::shared_ptr<jit::tracer::TracingState> tracer_state;
+  // yf225 TODO: improve JIT tracing handling?
+  if (jit::tracer::isTracing()) {
+    tracer_state = jit::tracer::getTracingState();
+    at::Symbol op_name;
+    op_name = jit::Symbol::fromQualString("aten::to_");
+    node = tracer_state->graph->create(op_name, /*num_outputs=*/0);
+    jit::tracer::recordSourceLocation(node);
+    jit::tracer::addInputs(node, "self", self);
+    jit::tracer::addInputs(node, "dtype", dtype);
+    jit::tracer::addInputs(node, "non_blocking", non_blocking);
+    jit::tracer::addInputs(node, "copy", copy);
+    tracer_state->graph->insertNode(node);
+  
+    jit::tracer::setTracingState(nullptr);
+  }
+  auto result = TypeDefault::to(self, dtype, non_blocking, copy);
+  if (as_variable_ref(self).is_same_impl_type(result)) {
+    as_variable_ref(self).set_data(result);
+  } else {
+    as_variable_ref(self)._set_data_swap_impl(result);
+  }
+  increment_version(self);
+  if (tracer_state) {
+    jit::tracer::setTracingState(std::move(tracer_state));
+    jit::tracer::addOutput(node, result);
+  }
+  return self;
+}
+Tensor & VariableType::to_(Tensor & self, const Tensor & other, bool non_blocking, bool copy) const {
+  RECORD_FUNCTION("to_", std::vector<c10::IValue>({self, other}), Function::peek_at_next_sequence_nr());
+  torch::jit::Node* node = nullptr;
+  std::shared_ptr<jit::tracer::TracingState> tracer_state;
+  // yf225 TODO: improve JIT tracing handling?
+  if (jit::tracer::isTracing()) {
+    tracer_state = jit::tracer::getTracingState();
+    at::Symbol op_name;
+    op_name = jit::Symbol::fromQualString("aten::to_");
+    node = tracer_state->graph->create(op_name, /*num_outputs=*/0);
+    jit::tracer::recordSourceLocation(node);
+    jit::tracer::addInputs(node, "self", self);
+    jit::tracer::addInputs(node, "other", other);
+    jit::tracer::addInputs(node, "non_blocking", non_blocking);
+    jit::tracer::addInputs(node, "copy", copy);
+    tracer_state->graph->insertNode(node);
+  
+    jit::tracer::setTracingState(nullptr);
+  }
+  auto result = TypeDefault::to(self, other, non_blocking, copy);
+  if (as_variable_ref(self).is_same_impl_type(result)) {
+    as_variable_ref(self).set_data(result);
+  } else {
+    as_variable_ref(self)._set_data_swap_impl(result);
+  }
+  increment_version(self);
+  if (tracer_state) {
+    jit::tracer::setTracingState(std::move(tracer_state));
+    jit::tracer::addOutput(node, result);
+  }
+  return self;
+}
+
 }} // namespace torch::autograd

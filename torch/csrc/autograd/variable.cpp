@@ -122,18 +122,46 @@ void Variable::set_data(const at::Tensor &new_data) {
   get()->shallow_copy_from(new_data.getIntrusivePtr());
 }
 
-void Variable::_set_data_change_impl(const at::Tensor &new_data) {
+static void set_refcount(at::TensorImpl *impl, size_t cur_refcount, size_t target_refcount, bool is_weak_count) {
+  if (target_refcount > cur_refcount) {
+    for (size_t i = cur_refcount; i < target_refcount; i++) {  // yf225 TODO: is there off-by-one error here?
+      if (!is_weak_count) {
+        c10::raw::intrusive_ptr::incref(impl);
+      } else {
+        c10::raw::weak_intrusive_ptr::incref(impl);
+      }
+    }
+  } else {
+    for (size_t i = cur_refcount; i > target_refcount; i--) {  // yf225 TODO: is there off-by-one error here?
+      if (!is_weak_count) {
+        c10::raw::intrusive_ptr::decref(impl);
+      } else {
+        c10::raw::weak_intrusive_ptr::decref(impl);
+      }
+    }
+  }
+}
+
+void Variable::_set_data_swap_impl(const at::Tensor &new_data) {
   // Resets gradient accumulator if metadata is out of date
   reset_grad_accumulator(new_data.device(), new_data.type());
 
-  // We change this `Variable`'s TensorImpl, but preserves its `pyobj_` pointer,
+  // We change this `Variable`'s TensorImpl, but preserves its `pyobj_` pointerc,
   // so that previous references to this `Variable` in Python are still valid.
   auto new_impl = new_data.unsafeGetTensorImpl()->shallow_copy_and_detach(
     /*version_counter=*/get()->version_counter(),
     /*allow_tensor_metadata_change=*/get()->allow_tensor_metadata_change());
   new_impl->set_autograd_meta(std::move(get()->detach_autograd_meta()));
   new_impl->set_pyobj(get()->pyobj());
-  impl_ = std::move(new_impl);
+  size_t impl_refcount_saved = impl_.use_count();
+  size_t impl_weakcount_saved = impl_.weak_use_count();
+  size_t new_impl_refcount_saved = new_impl.use_count();
+  size_t new_impl_weakcount_saved = new_impl.weak_use_count();
+  std::swap(*(impl_.get()), *(new_impl.get()));
+  set_refcount(impl_.get(), impl_.use_count(), impl_refcount_saved, false);
+  set_refcount(impl_.get(), impl_.weak_use_count(), impl_weakcount_saved, true);
+  set_refcount(new_impl.get(), new_impl.use_count(), new_impl_refcount_saved, false);
+  set_refcount(new_impl.get(), new_impl.weak_use_count(), new_impl_weakcount_saved, true);
 }
 
 Variable::DifferentiableViewMeta::DifferentiableViewMeta(at::TensorImpl* self_impl, Variable base, Edge gradient_edge)

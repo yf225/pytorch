@@ -304,3 +304,22 @@ TEST(TensorTest, Item_CUDA) {
     ASSERT_EQ(scalar.to<int>(), 123);
   }
 }
+
+TEST(TensorTest, TensorToInplace) {
+  {
+    auto tensor1 = at::randn({3, 4}).to(at::kFloat);
+    auto tensor2 = tensor1;
+    tensor2.to_(at::kDouble);
+    ASSERT_EQ(tensor1.dtype(), tensor2.dtype());
+  }
+
+  {
+    auto tensor1 = at::randn({3, 4});
+    auto tensor2 = tensor1;
+    tensor2.to_(torch::kCUDA);
+    ASSERT_EQ(tensor1.device(), tensor2.device());
+  }
+}
+
+// yf225 TODO: Make sure to test that view backward is detecting version difference and fail
+// yf225 TODO: Make sure that Greg's test case in the PR throws error

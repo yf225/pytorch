@@ -264,7 +264,7 @@ struct TORCH_API Variable : public at::Tensor {
   /// in this case: when we call `model.to(device)` in Python to move `model` to
   /// a device that requires a different TensorImpl type (e.g. XLA device), but
   /// want previous references to `model`'s parameters to still be valid.
-  void _set_data_change_impl(const at::Tensor &new_data);
+  void _set_data_swap_impl(const at::Tensor &new_data);
 
   /// True if this `Variable` has the same derived type of TensorImpl as `tensor`.
   bool is_same_impl_type(const at::Tensor &tensor);
