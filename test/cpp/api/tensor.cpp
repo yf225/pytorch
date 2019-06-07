@@ -4,6 +4,9 @@
 
 #include <ATen/ATen.h>
 
+#include <torch/csrc/autograd/variable.h>
+#include <test/cpp/api/support.h>
+
 #include <cmath>
 #include <cstddef>
 #include <vector>
@@ -303,4 +306,37 @@ TEST(TensorTest, Item_CUDA) {
     torch::Scalar scalar = tensor.item();
     ASSERT_EQ(scalar.to<int>(), 123);
   }
+}
+
+TEST(TensorTest, TensorToInplace) {
+  {
+    auto tensor1 = torch::randn({3, 4}).to(torch::kFloat);
+    auto tensor2 = tensor1;
+    torch::autograd::as_variable_ref(tensor2).to_(torch::kDouble);
+    ASSERT_EQ(tensor1.dtype(), tensor2.dtype());
+  }
+  {
+    auto tensor1 = torch::randn({3, 4}).to(torch::kFloat).set_requires_grad(true);
+    auto tensor1_view = tensor1.select(0, 0);
+    auto tensor2 = tensor1;
+    torch::autograd::as_variable_ref(tensor2).to_(torch::kDouble);
+    ASSERT_THROWS_WITH(
+      tensor1_view.sum().backward(),
+      "Function SumBackward0 returned an invalid gradient at index 0 - expected type Variable[CPUDoubleType] but got Variable[CPUFloatType]");
+  }
+  {
+    auto tensor1 = torch::randn({3, 4}).to(torch::kFloat).set_requires_grad(true);
+    auto tensor1_sum = tensor1.sum();
+    auto tensor2 = tensor1;
+    ASSERT_THROWS_WITH(
+      torch::autograd::as_variable_ref(tensor2).to_(torch::kDouble),
+      "a leaf Variable that requires grad has been used in an in-place operation");
+  }
+}
+
+TEST(TensorTest, TensorToInplace_CUDA) {
+  auto tensor1 = torch::randn({3, 4});
+  auto tensor2 = tensor1;
+  torch::autograd::as_variable_ref(tensor2).to_(torch::kCUDA);
+  ASSERT_EQ(tensor1.device(), tensor2.device());
 }
