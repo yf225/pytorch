@@ -253,6 +253,11 @@ struct TORCH_API Variable : public at::Tensor {
   /// this `Variable`.
   void set_data(const at::Tensor &new_data);
 
+  at::Tensor & to_(const at::TensorOptions & options, bool non_blocking=false, bool copy=false);
+  at::Tensor & to_(at::Device device, at::ScalarType dtype, bool non_blocking=false, bool copy=false);
+  at::Tensor & to_(at::ScalarType dtype, bool non_blocking=false, bool copy=false);
+  at::Tensor & to_(const at::Tensor & other, bool non_blocking=false, bool copy=false);
+
   /// Sets the tensor data held by this `Variable` to be the same as `new_data`.
   /// It allows this `Variable` and `new_data` to have different derived types
   /// of TensorImpl.
@@ -264,7 +269,9 @@ struct TORCH_API Variable : public at::Tensor {
   /// in this case: when we call `model.to(device)` in Python to move `model` to
   /// a device that requires a different TensorImpl type (e.g. XLA device), but
   /// want previous references to `model`'s parameters to still be valid.
-  void _set_data_change_impl(const at::Tensor &new_data);
+  void _set_data_swap_impl(const at::Tensor &new_data);
+
+  void _set_data_maybe_swap_impl(const at::Tensor &new_data);
 
   /// True if this `Variable` has the same derived type of TensorImpl as `tensor`.
   bool is_same_impl_type(const at::Tensor &tensor);

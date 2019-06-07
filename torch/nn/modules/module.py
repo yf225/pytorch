@@ -197,23 +197,9 @@ class Module(object):
             if param is not None:
                 # Tensors stored in modules are graph leaves, and we don't
                 # want to create copy nodes, so we have to unpack the data.
-                param_applied = fn(param.data)
-                if param._is_same_impl_type(param_applied):
-                    param.data = param_applied
-                else:
-                    param._set_data_change_impl(param_applied)
+                param.data = fn(param.data)
                 if param._grad is not None:
-                    grad_applied = fn(param._grad.data)
-                    if param._grad._is_same_impl_type(grad_applied):
-                        param._grad.data = grad_applied
-                    else:
-                        # NOTE: This breaks previous references to `param._grad`.
-                        #
-                        # TODO: Ideally, we should use something like
-                        # `param._grad._set_data_change_impl(grad_applied)`
-                        # instead to preserve previous references to `param._grad`,
-                        # but we haven't figured out a way to do so at the moment.
-                        param._grad = grad_applied
+                    param._grad.data = fn(param._grad.data)
 
         for key, buf in self._buffers.items():
             if buf is not None:
@@ -395,10 +381,26 @@ class Module(object):
                 raise TypeError('nn.Module.to only accepts floating point '
                                 'dtypes, but got desired dtype={}'.format(dtype))
 
-        def convert(t):
-            return t.to(device, dtype if t.is_floating_point() else None, non_blocking)
+        for module in self.children():
+            module.to(*args, **kwargs)
 
-        return self._apply(convert)
+        for param in self._parameters.values():
+            if param is not None:
+                # Tensors stored in modules are graph leaves, and we don't
+                # want to create copy nodes, so we have to unpack the data.
+                param_applied = param.data.to(device, dtype if t.is_floating_point() else None, non_blocking)
+                if param._is_same_impl_type(param_applied):
+                    param.data = param_applied
+                else:
+                    param.to_(device, dtype if t.is_floating_point() else None, non_blocking)
+                if param._grad is not None:
+                    grad_applied = param._grad.data.to(device, dtype if t.is_floating_point() else None, non_blocking)
+                    if param._grad._is_same_impl_type(grad_applied):
+                        param._grad.data = grad_applied
+                    else:
+                        param._grad.to_(device, dtype if t.is_floating_point() else None, non_blocking)
+
+        return self
 
     def register_backward_hook(self, hook):
         r"""Registers a backward hook on the module.
