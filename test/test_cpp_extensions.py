@@ -589,12 +589,16 @@ class TestCppExtension(common.TestCase):
         self.assertNotEqual(buf_ref.device, net.buf.device)
 
         # Test that `cpu_module.to("cuda", force_move_params_cpu_cuda=True)` invalidates
-        # `cpu_module`'s original parameters in any autograd graph they participate in.
+        # `cpu_module`'s original parameters and buffers in any autograd graph they
+        # participate in.
         net = extension.Net(20, 10)
         pvm = net.fc.weight.mul(net.fc.weight)
+        bvm = net.buf.mul(net.buf)
         net.to("cuda", force_move_params_cpu_cuda=True)
         with self.assertRaisesRegex(RuntimeError, "modified by an inplace operation"):
             pvm.backward(torch.randn(10, 20))
+        with self.assertRaisesRegex(RuntimeError, "modified by an inplace operation"):
+            bvm.backward(torch.randn(5, 5))
 
         # Test that `cpu_module.to("cuda", force_move_params_cpu_cuda=True)` invalidates
         # `cpu_module`'s original parameters' gradients in any autograd graph they
