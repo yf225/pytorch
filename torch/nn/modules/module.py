@@ -239,7 +239,7 @@ class Module(object):
         for module in self.children():
             module._apply(fn, force_move_params_cpu_cuda)
 
-        _update_parameters(fn, force_move_params_cpu_cuda)
+        self._update_parameters(fn, force_move_params_cpu_cuda)
 
         for key, buf in self._buffers.items():
             if buf is not None:

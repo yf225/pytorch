@@ -67,7 +67,7 @@ class ModuleWrapper(nn.Module):
                 setattr(self, attr, getattr(self.cpp_module, attr))
 
     def _apply(self, fn, force_move_params_cpu_cuda=False):
-        _update_parameters(fn, force_move_params_cpu_cuda)
+        self._update_parameters(fn, force_move_params_cpu_cuda)
 
         for buf in self.buffers():
             buf_applied = fn(buf.data)
