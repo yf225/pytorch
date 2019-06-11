@@ -1,6 +1,7 @@
 """Functionality for Python <-> C++ frontend inter-op."""
 
 from torch import nn
+from torch.nn.modules.module import _compute_should_move_tensor
 
 
 class OrderedDictWrapper(object):
@@ -65,16 +66,15 @@ class ModuleWrapper(nn.Module):
             if not attr.startswith("_"):
                 setattr(self, attr, getattr(self.cpp_module, attr))
 
-    def _apply(self, fn):
-        for param in self.parameters():
-            # Tensors stored in modules are graph leaves, and we don't
-            # want to create copy nodes, so we have to unpack the data.
-            param.data = fn(param.data)
-            if param._grad is not None:
-                param._grad.data = fn(param._grad.data)
+    def _apply(self, fn, force_move_params_cpu_cuda=False):
+        _update_parameters(fn, force_move_params_cpu_cuda)
 
         for buf in self.buffers():
-            buf.data = fn(buf.data)
+            buf_applied = fn(buf.data)
+            if _compute_should_move_tensor(buf, buf_applied, force_move_tensor_cpu_cuda=force_move_params_cpu_cuda):
+                self._buffers[key] = buf_applied
+            else:
+                buf.data = buf_applied
 
         return self
 

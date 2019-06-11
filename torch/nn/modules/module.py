@@ -23,6 +23,24 @@ def _addindent(s_, numSpaces):
     return s
 
 
+def _compute_should_move_tensor(tensor, tensor_applied, force_move_tensor_cpu_cuda):
+    # If the new tensor is still on the same device, we don't move
+    # the existing tensor (and we in-place update the existing tensor
+    # instead).
+    if tensor.device != tensor_applied.device:
+        # If the new tensor is on a different device, then we take
+        # `force_move_tensor_cpu_cuda` into account only if we are
+        # moving the model between CPU and CUDA. Otherwise, we always
+        # move the existing tensor.
+        if (tensor.is_cuda and tensor_applied.device == torch.device('cpu')) or \
+            (tensor.device == torch.device('cpu') and tensor_applied.is_cuda):
+            return force_move_tensor_cpu_cuda
+        else:
+            return True
+    else:
+        return False
+
+
 class Module(object):
     r"""Base class for all neural network modules.
 
@@ -189,31 +207,11 @@ class Module(object):
             raise KeyError("module name can't be empty string \"\"")
         self._modules[name] = module
 
-    def _apply(self, fn, force_move_params_cpu_cuda=False):
-        for module in self.children():
-            module._apply(fn, force_move_params_cpu_cuda)
-
-        def compute_should_move_tensor(tensor, tensor_applied):
-            # If the new tensor is still on the same device, we don't move
-            # the existing tensor (and we in-place update the existing tensor
-            # instead).
-            if tensor.device != tensor_applied.device:
-                # If the new tensor is on a different device, then we take
-                # `force_move_params_cpu_cuda` into account only if we are
-                # moving the model between CPU and CUDA. Otherwise, we always
-                # move the existing tensor.
-                if (tensor.is_cuda and tensor_applied.device == torch.device('cpu')) or \
-                    (tensor.device == torch.device('cpu') and tensor_applied.is_cuda):
-                    return force_move_params_cpu_cuda
-                else:
-                    return True
-            else:
-                return False
-
+    def _update_parameters(self, fn, force_move_params_cpu_cuda):
         for key, param in self._parameters.items():
             if param is not None:
                 param_applied = fn(param.data)
-                if compute_should_move_tensor(param, param_applied):
+                if _compute_should_move_tensor(param, param_applied, force_move_params_cpu_cuda):
                     # Tensors stored in modules are graph leaves, and we don't want to
                     # create copy nodes, so we have to use `with torch.no_grad():`
                     with torch.no_grad():
@@ -228,7 +226,7 @@ class Module(object):
 
                 if param.grad is not None:
                     grad_applied = fn(param.grad.data)
-                    if compute_should_move_tensor(param.grad, grad_applied):
+                    if _compute_should_move_tensor(param.grad, grad_applied, force_move_params_cpu_cuda):
                         with torch.no_grad():
                             self._parameters[key].grad = grad_applied.requires_grad_(param.grad.requires_grad)
                             # Bump up the version counter of the original parameter's gradient,
@@ -236,6 +234,12 @@ class Module(object):
                             param.grad._bump_version()
                     else:
                         param.grad.data = grad_applied
+
+    def _apply(self, fn, force_move_params_cpu_cuda=False):
+        for module in self.children():
+            module._apply(fn, force_move_params_cpu_cuda)
+
+        _update_parameters(fn, force_move_params_cpu_cuda)
 
         for key, buf in self._buffers.items():
             if buf is not None:

@@ -573,6 +573,36 @@ class TestCppExtension(common.TestCase):
         for p in net.parameters():
             self.assertTrue(p.device.type == "cuda")
 
+        # Test that `cpu_module.to("cuda", force_move_params_cpu_cuda=True)` doesn't
+        # preserve previous references to `cpu_module`'s parameters or gradients.
+        net = extension.Net(20, 10)
+        net.fc.weight.grad = torch.randn(10, 20)
+        weight_ref = net.fc.weight
+        weight_grad_ref = net.fc.weight.grad
+        buf_ref = net.buf
+        net.to("cuda", force_move_params_cpu_cuda=True)
+        self.assertNotEqual(weight_ref.device, net.fc.weight.device)
+        self.assertNotEqual(weight_grad_ref.device, net.fc.weight.grad.device)
+        self.assertNotEqual(buf_ref.device, net.buf.device)
+
+        # Test that `cpu_module.to("cuda", force_move_params_cpu_cuda=True)` invalidates
+        # `cpu_module`'s original parameters in any autograd graph they participate in.
+        net = extension.Net(20, 10)
+        pvm = net.fc.weight.mul(net.fc.weight)
+        net.to("cuda", force_move_params_cpu_cuda=True)
+        with self.assertRaisesRegex(RuntimeError, "modified by an inplace operation"):
+            pvm.backward(torch.randn(10, 20))
+
+        # Test that `cpu_module.to("cuda", force_move_params_cpu_cuda=True)` invalidates
+        # `cpu_module`'s original parameters' gradients in any autograd graph they
+        # participate in.
+        net = extension.Net(20, 10)
+        net.fc.weight.grad = torch.randn(10, 20).requires_grad_()
+        pgm = net.fc.weight.grad.mul(net.fc.weight.grad)
+        net.to("cuda", force_move_params_cpu_cuda=True)
+        with self.assertRaisesRegex(RuntimeError, "modified by an inplace operation"):
+            pgm.backward(torch.randn(10, 20))
+
     def test_returns_shared_library_path_when_is_python_module_is_true(self):
         source = """
         #include <torch/script.h>
