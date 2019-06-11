@@ -412,7 +412,6 @@ class TestCppExtension(common.TestCase):
 
         self.assertEqual(cpp_parameters["fc.weight"].grad, python_linear.weight.grad)
         self.assertEqual(cpp_parameters["fc.bias"].grad, python_linear.bias.grad)
-    '''
 
     @dont_wipe_extensions_build_folder
     @common.skipIfRocm
@@ -513,7 +512,6 @@ class TestCppExtension(common.TestCase):
         self.assertIn("buf", nb)
         self.assertEqual(nb[0][1], torch.eye(5))
 
-    '''
     @dont_wipe_extensions_build_folder
     @common.skipIfRocm
     def test_cpp_frontend_module_has_up_to_date_attributes(self):
@@ -536,6 +534,7 @@ class TestCppExtension(common.TestCase):
         self.assertEqual(len(net._modules), 1)
         net.add_new_submodule("fc2")
         self.assertEqual(len(net._modules), 2)
+    '''
 
     @dont_wipe_extensions_build_folder
     @unittest.skipIf(not TEST_CUDA, "CUDA not found")
@@ -610,6 +609,7 @@ class TestCppExtension(common.TestCase):
         with self.assertRaisesRegex(RuntimeError, "modified by an inplace operation"):
             pgm.backward(torch.randn(10, 20))
 
+    '''
     def test_returns_shared_library_path_when_is_python_module_is_true(self):
         source = """
         #include <torch/script.h>
