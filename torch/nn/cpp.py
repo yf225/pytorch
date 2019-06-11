@@ -72,6 +72,7 @@ class ModuleWrapper(nn.Module):
         for buf in self.buffers():
             buf_applied = fn(buf.data)
             if _compute_should_move_tensor(buf, buf_applied, force_move_tensor_cpu_cuda=force_move_params_cpu_cuda):
+                # yf225 TODO: this might not work!
                 self._buffers[key] = buf_applied
             else:
                 buf.data = buf_applied
