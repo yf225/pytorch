@@ -673,14 +673,19 @@ static PyObject * THPVariable_type(PyObject* self, PyObject* args, PyObject* kwa
   std::string type_name;
   bool is_dtype = false;
   if (PyType_Check(obj)) {
+    std::cout << "PyType_Check(obj) true" << std::endl;
     if (obj == THPVariableClass) {
+      std::cout << "THPVariableClass true" << std::endl;
       type_name = "torch.Tensor";
     } else {
+      std::cout << "THPVariableClass false" << std::endl;
       type_name = ((PyTypeObject*)obj)->tp_name;
     }
   } else if (THPUtils_checkString(obj)) {
+    std::cout << "THPUtils_checkString(obj) true" << std::endl;
     type_name = THPUtils_unpackString(obj);
   } else if (THPDtype_Check(obj)) {
+    std::cout << "THPDtype_Check(obj) true" << std::endl;
     is_dtype = true;
   } else {
     throw TypeError("dtype must be a type, str, or dtype object");
@@ -688,8 +693,10 @@ static PyObject * THPVariable_type(PyObject* self, PyObject* args, PyObject* kwa
   ScalarType scalar_type;
   Device device = self_.device();
   if (is_dtype) {
+    std::cout << "is_dtype true" << std::endl;
     scalar_type = r.scalartype(0);
   } else {
+    std::cout << "is_dtype false" << std::endl;
     Type* type;
     std::tie(type, scalar_type) = torch::utils::type_from_string(type_name);
     auto device_type = backendToDeviceType(type->backend());
