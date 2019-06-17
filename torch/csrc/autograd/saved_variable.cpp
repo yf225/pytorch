@@ -15,7 +15,10 @@
 namespace torch { namespace autograd {
 
 SavedVariable::SavedVariable(const Variable& variable, bool is_output) {
+  std::cout << "SavedVariable: here1" << std::endl;
   if (variable.defined()) {
+    std::cout << "SavedVariable: here1" << std::endl;
+    std::cout << "SavedVariable: data: " << variable << std::endl;
     was_default_constructed_ = false;
     output_nr_ = variable.output_nr();
     requires_grad_ = variable.requires_grad();
