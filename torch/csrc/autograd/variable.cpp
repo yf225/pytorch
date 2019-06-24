@@ -118,9 +118,11 @@ void Variable::set_data(const at::Tensor &new_data) {
 Variable::DifferentiableViewMeta::DifferentiableViewMeta(at::TensorImpl* self_impl, Variable base, Edge gradient_edge)
     : Variable::AutogradMeta(self_impl, false, std::move(gradient_edge)) {
   base_ = std::move(base);
+  AT_ASSERT(base_.unsafeGetTensorImpl() != self_impl);
   TORCH_CHECK(base_.defined(), "base is undefined");
   if (base_.is_view()) {
     base_ = base_.base();
+    AT_ASSERT(base_.unsafeGetTensorImpl() != self_impl);
   }
   is_view_ = true;
   self_impl->set_version_counter(base_.version_counter());
