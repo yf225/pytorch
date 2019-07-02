@@ -14,7 +14,7 @@ void testGraphExecutor() {
 
   int hidden_size = 2 * input_size;
 
-  auto v = [](at::Tensor t) { return autograd::make_variable(t, false); };
+  auto v = [](at::Tensor t) { return autograd::Variable(t); };
 
   auto input = at::randn({batch_size, input_size}, at::kCUDA);
   auto hx = at::randn({batch_size, hidden_size}, at::kCUDA);

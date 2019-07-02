@@ -21,9 +21,10 @@ namespace torch {
 #define TENSOR(T, S, _1)                                                   \
   inline at::Tensor tensor(                                                \
       at::ArrayRef<T> values, const at::TensorOptions& options) {          \
-    at::Tensor result =                                                    \
-        at::tensor(values, at::TensorOptions(options).is_variable(false)); \
-    return autograd::make_variable(result, options.requires_grad());       \
+    at::Tensor tensor =                                                    \
+        at::tensor(values, at::TensorOptions(options));                    \
+    at::Tensor result = tensor.set_requires_grad(options.requires_grad()); \
+    return result;                                                         \
   }                                                                        \
   inline at::Tensor tensor(                                                \
       std::initializer_list<T> values, const at::TensorOptions& options) { \
@@ -61,8 +62,9 @@ inline at::Tensor from_blob(
     const Deleter& deleter,
     const at::TensorOptions& options = at::TensorOptions()) {
   at::Tensor tensor =
-      at::from_blob(data, sizes, strides, deleter, options.is_variable(false));
-  return autograd::make_variable(tensor, options.requires_grad());
+      at::from_blob(data, sizes, strides, deleter, options);
+  at::Tensor result = tensor.set_requires_grad(options.requires_grad());
+  return result;
 }
 
 /// Exposes the given `data` as a `Tensor` without taking ownership of the
@@ -95,8 +97,9 @@ inline at::Tensor from_blob(
     const Deleter& deleter,
     const at::TensorOptions& options = at::TensorOptions()) {
   at::Tensor tensor =
-      at::from_blob(data, sizes, deleter, options.is_variable(false));
-  return autograd::make_variable(tensor, options.requires_grad());
+      at::from_blob(data, sizes, deleter, options);
+  at::Tensor result = tensor.set_requires_grad(options.requires_grad());
+  return result;
 }
 
 /// Exposes the given `data` as a `Tensor` without taking ownership of the

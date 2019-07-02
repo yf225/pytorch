@@ -377,7 +377,7 @@ void fixDefaultRNNState(Graph* graph, Node* n, int input_index) {
   gather_indices->insertBefore(n);
   gather_indices->t_(
       attr::value,
-      autograd::make_variable(at::scalar_to_tensor(at::Scalar(1))));
+      autograd::Variable(at::scalar_to_tensor(at::Scalar(1))));
 
   Node* batch_size = graph->create(onnx::Gather, 1);
   batch_size->insertBefore(n);
@@ -393,7 +393,7 @@ void fixDefaultRNNState(Graph* graph, Node* n, int input_index) {
   hidden_size->insertBefore(n);
   hidden_size->t_(
       attr::value,
-      autograd::make_variable(at::full(
+      autograd::Variable(at::full(
           {1},
           n->i(attr::hidden_size),
           at::kLong))); // at::Scalar(n->i(attr::hidden_size)).toTensor());
@@ -402,7 +402,7 @@ void fixDefaultRNNState(Graph* graph, Node* n, int input_index) {
   num_directions->insertBefore(n);
   num_directions->t_(
       attr::value,
-      autograd::make_variable(scalar_to_tensor(at::Scalar(
+      autograd::Variable(scalar_to_tensor(at::Scalar(
           n->hasAttribute(attr::direction) &&
                   n->s(attr::direction) == "bidirectional"
               ? 2

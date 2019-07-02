@@ -232,7 +232,7 @@ inline at::Tensor PythonArgs::tensor(int i) {
     }
     auto tensor = scalar_to_tensor(scalar);
     tensor.unsafeGetTensorImpl()->set_wrapped_number(true);
-    return autograd::make_variable(tensor);
+    return autograd::Variable(tensor);
   }
   return reinterpret_cast<THPVariable*>(obj)->cdata;
 }

@@ -271,7 +271,7 @@ RegisterOperators reg({
           IValue device;                                                      \
           bool requires_grad;                                                 \
           pop(stack, scalar_val, dtype, device, requires_grad);               \
-          auto tensor = autograd::make_variable(tensor_creation_op);          \
+          auto tensor = tensor_creation_op;                                   \
           at::ScalarType scalar_type =                                        \
               dtype.isNone() ? tensor.scalar_type() : dtype.toScalarType();   \
           c10::Device dev =                                                   \
@@ -341,7 +341,7 @@ RegisterOperators reg({
             IValue device;
             pop(stack, data, dtype, device, requires_grad);
             auto sizes = compute_sizes(data);
-            auto tensor = autograd::make_variable(at::empty(
+            auto tensor = autograd::Variable(at::empty(
                 sizes, at::initialTensorOptions().dtype(initial_scalar_type)));
 
             recursiveStore(

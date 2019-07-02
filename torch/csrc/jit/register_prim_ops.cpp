@@ -318,7 +318,7 @@ RegisterOperators reg(
          [](Stack& stack) {
            at::Scalar s;
            pop(stack, s);
-           push(stack, autograd::make_variable(at::scalar_to_tensor(s)));
+           push(stack, autograd::Variable(at::scalar_to_tensor(s)));
            return 0;
          }),
      // note: this op needs to share a name with the Scalar -> Tensor conversion
@@ -328,7 +328,7 @@ RegisterOperators reg(
          [](Stack& stack) {
            bool b;
            pop(stack, b);
-           push(stack, autograd::make_variable(at::scalar_to_tensor(b)));
+           push(stack, autograd::Variable(at::scalar_to_tensor(b)));
            return 0;
          }),
      Operator(

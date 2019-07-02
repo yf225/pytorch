@@ -237,7 +237,7 @@ at::Tensor ScriptModuleDeserializer::loadTensor(
   }
   AT_ASSERT(result.defined());
 
-  result = autograd::make_variable(result, tensor_proto.requires_grad());
+  result.set_requires_grad(tensor_proto.requires_grad());
 
   return result;
 }

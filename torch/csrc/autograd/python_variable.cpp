@@ -151,7 +151,7 @@ static PyObject* THPVariable_make_subclass(PyObject* _ignored, PyObject* args, P
     throw TypeError("cls must be a type (got %s)", Py_TYPE(cls)->tp_name);
   }
   auto data = as_variable_ref(r.tensor(1)).tensor_data();
-  auto var = make_variable(data, r.toBool(2));
+  auto var = make_variable_deprecated(data, r.toBool(2));
   return THPVariable_NewWithVar((PyTypeObject*)cls, std::move(var));
   END_HANDLE_TH_ERRORS
 }
@@ -554,8 +554,7 @@ void initTensorImplConversion(PyObject* module) {
     TORCH_CHECK(p.defined(), "Can't wrap undefined tensor");
     TORCH_CHECK(!p->is_variable(), "Can wrap only non-variable tensor");
     auto tensor = at::Tensor::wrap_tensor_impl(std::move(p));
-    return py::cast(torch::autograd::Variable(
-        torch::autograd::make_variable(std::move(tensor), false)));
+    return py::cast(torch::autograd::Variable(std::move(tensor)));
   });
   // set on the module level to avoid mixing pybind and plain CPython extensions
   m.def("_tensor_impl_raw_handle", [](torch::autograd::Variable* t) -> void* {

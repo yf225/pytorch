@@ -160,13 +160,15 @@ inline std::vector<SavedVariable> make_saved_variable_list(TensorList tensors) {
 //
 // In the near future, once we make every tensor a Variable, these two
 // `as_variable()` functions are no-op and we can remove them.
+
+// yf225 TODO: remove `as_variable` in another PR
 inline Tensor as_variable(Tensor tensor) {
-  return tensor.is_variable() ? tensor : make_variable(std::move(tensor), /*requires_grad=*/false);
+  return tensor;
 }
 
 inline std::vector<Tensor> as_variable(TensorList tl) {
   return fmap(tl, [](const Tensor& t) -> Tensor {
-      return t.is_variable() ? t : make_variable(t, /*requires_grad=*/false);
+      return t;
   });
 }
 

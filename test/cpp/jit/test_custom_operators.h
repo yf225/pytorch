@@ -31,12 +31,12 @@ void testCustomOperators() {
     ASSERT_EQ(op->schema().returns()[0].type()->kind(), TypeKind::TensorType);
 
     Stack stack;
-    push(stack, 2.0f, autograd::make_variable(at::ones(5)));
+    push(stack, 2.0f, autograd::Variable(at::ones(5)));
     op->getOperation()(stack);
     at::Tensor output;
     pop(stack, output);
 
-    ASSERT_TRUE(output.allclose(autograd::make_variable(at::full(5, 3.0f))));
+    ASSERT_TRUE(output.allclose(autograd::Variable(at::full(5, 3.0f))));
   }
   {
     RegisterOperators reg("foo::bar_with_schema(float a, Tensor b) -> Tensor",
@@ -59,12 +59,12 @@ void testCustomOperators() {
     ASSERT_EQ(op->schema().returns()[0].type()->kind(), TypeKind::TensorType);
 
     Stack stack;
-    push(stack, 2.0f, autograd::make_variable(at::ones(5)));
+    push(stack, 2.0f, autograd::Variable(at::ones(5)));
     op->getOperation()(stack);
     at::Tensor output;
     pop(stack, output);
 
-    ASSERT_TRUE(output.allclose(autograd::make_variable(at::full(5, 3.0f))));
+    ASSERT_TRUE(output.allclose(autograd::Variable(at::full(5, 3.0f))));
   }
   {
     // Check that lists work well.
@@ -98,7 +98,7 @@ void testCustomOperators() {
     Stack stack;
     push(stack, c10::make_list<int64_t>({1, 2}));
     push(stack, c10::make_list<double>({1.0, 2.0}));
-    push(stack, c10::make_list<at::Tensor>({autograd::make_variable(at::ones(5))}));
+    push(stack, c10::make_list<at::Tensor>({autograd::Variable(at::ones(5))}));
     op->getOperation()(stack);
     c10::List<double> output = c10::make_list<double>();
     pop(stack, output);
@@ -128,13 +128,13 @@ void testCustomOperators() {
         op->schema().returns()[0].type()->isSubtypeOf(ListType::ofTensors()));
 
     Stack stack;
-    push(stack, c10::make_list<at::Tensor>({autograd::make_variable(at::ones(5))}));
+    push(stack, c10::make_list<at::Tensor>({autograd::Variable(at::ones(5))}));
     op->getOperation()(stack);
     c10::List<at::Tensor> output = c10::make_list<at::Tensor>();
     pop(stack, output);
 
     ASSERT_EQ(output.size(), 1);
-    ASSERT_TRUE(output.get(0).allclose(autograd::make_variable(at::ones(5))));
+    ASSERT_TRUE(output.get(0).allclose(autograd::Variable(at::ones(5))));
   }
 }
 

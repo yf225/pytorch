@@ -420,7 +420,7 @@ void testControlFlow() {
   };
 
   auto L = [](int64_t l) {
-    return IValue(autograd::make_variable(scalar_to_tensor(at::Scalar(l))));
+    return IValue(autograd::Variable(scalar_to_tensor(at::Scalar(l))));
   };
   auto V = [](IValue t) { return std::move(t).toTensor().item<int64_t>(); };
   auto run_binary = [&](const std::string& name, int64_t a, int64_t b) {
@@ -925,7 +925,7 @@ void testInsertAndEliminateRedundantGuards() {
   auto pr = ProfilingRecord::instrumentGraph(fun.graph());
   auto x = at::randn({2, 3}, at::kCPU);
   auto y = at::randn({2, 3}, at::kCPU);
-  auto v = [](at::Tensor t) { return autograd::make_variable(t, false); };
+  auto v = [](at::Tensor t) { return autograd::Variable(t); };
   auto stack = createStack({v(x), v(y)});
   // introduce some profiling information
   Code cd(pr->profiled_graph_);
@@ -974,7 +974,7 @@ void testInsertBailOuts() {
   auto pr = ProfilingRecord::instrumentGraph(fun.graph());
   auto x = at::randn({2, 3}, at::kCPU);
   auto y = at::randn({2, 3}, at::kCPU);
-  auto v = [](at::Tensor t) { return autograd::make_variable(t, false); };
+  auto v = [](at::Tensor t) { return autograd::Variable(t); };
   auto stack = createStack({v(x), v(y)});
   // introduce some profiling information
   Code cd(pr->profiled_graph_);
@@ -1006,7 +1006,7 @@ void testProfiler() {
 
   int hidden_size = 2 * input_size;
 
-  auto v = [](at::Tensor t) { return autograd::make_variable(t, false); };
+  auto v = [](at::Tensor t) { return autograd::Variable(t); };
 
   auto input = at::randn({batch_size, input_size}, at::kCPU);
   auto hx = at::randn({batch_size, hidden_size}, at::kCPU);

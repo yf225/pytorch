@@ -597,9 +597,10 @@ void Reducer::finalize_bucket_sparse(Bucket& bucket) {
     auto& replica = bucket.replicas[i];
     AT_ASSERT(replica.variables.size() == 1);
     auto& variable = replica.variables.front();
+    // yf225 TODO: fix comment here!
     // The c10d API doesn't work with torch::autograd::Variable. We have to
     // manually box it when assigning to the grad. See #19145.
-    variable.grad() = torch::autograd::make_variable(result[i]);
+    variable.grad() = result[i];
   }
 }
 

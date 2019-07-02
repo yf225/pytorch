@@ -221,7 +221,7 @@ Tensor internal_new_from_data(
 #ifdef USE_NUMPY
   if (PyObject_HasAttrString(data, "__cuda_array_interface__")) {
     TORCH_CHECK(!pin_memory, "Can't pin tensor constructed from __cuda_array_interface__");
-    auto tensor = autograd::make_variable(tensor_from_cuda_array_interface(data), /*requires_grad=*/false);
+    auto tensor = autograd::Variable(tensor_from_cuda_array_interface(data));
     const auto& inferred_scalar_type = type_inference ? tensor.scalar_type() : scalar_type;
     auto device = device_opt.has_value() ? *device_opt : at::Device(type.device_type());
     AutoNoGIL no_gil;
@@ -231,7 +231,7 @@ Tensor internal_new_from_data(
 
   if (PyArray_Check(data)) {
     TORCH_CHECK(!pin_memory, "Can't pin tensor constructed from numpy");
-    auto tensor = autograd::make_variable(tensor_from_numpy(data), /*requires_grad=*/false);
+    auto tensor = autograd::Variable(tensor_from_numpy(data));
     const auto& inferred_scalar_type = type_inference ? tensor.scalar_type() : scalar_type;
     auto device = device_opt.has_value() ? *device_opt : at::Device(type.device_type());
     AutoNoGIL no_gil;
@@ -242,7 +242,7 @@ Tensor internal_new_from_data(
 
   auto sizes = compute_sizes(data);
   ScalarType inferred_scalar_type = type_inference ? infer_scalar_type(data) : scalar_type;
-  auto tensor = autograd::make_variable(at::empty(sizes, at::initialTensorOptions().dtype(inferred_scalar_type).pinned_memory(pin_memory)), /*requires_grad=*/false);
+  auto tensor = autograd::Variable(at::empty(sizes, at::initialTensorOptions().dtype(inferred_scalar_type).pinned_memory(pin_memory)));
   recursive_store(
       (char*)tensor.data_ptr(), tensor.sizes(), tensor.strides(), 0,
       inferred_scalar_type, tensor.dtype().itemsize(), data);
@@ -296,7 +296,7 @@ Tensor legacy_sparse_tensor_ctor(const Type& type, ScalarType scalar_type, PyObj
     return at::empty({0}, type.options(scalar_type, r.deviceOptional(0)));
   } else if (r.idx == 1) {
     auto cdata = reinterpret_cast<void*>(r.toInt64(0));
-    return autograd::make_variable(at::unsafeTensorFromTH(cdata, true));
+    return autograd::Variable(at::unsafeTensorFromTH(cdata, true));
   } else if (r.idx == 2) {
     auto deviceOptional = r.deviceOptional(2);
     check_legacy_ctor_device(type, deviceOptional);
@@ -338,7 +338,7 @@ Tensor legacy_sparse_tensor_new(const Type& type, ScalarType scalar_type, PyObje
     return at::empty({0}, type.options(scalar_type));
   } else if (r.idx == 1) {
     auto cdata = reinterpret_cast<void*>(r.toInt64(0));
-    return autograd::make_variable(at::unsafeTensorFromTH(cdata, true));
+    return autograd::Variable(at::unsafeTensorFromTH(cdata, true));
   } else if (r.idx == 2) {
     // Note: this signature doesn't have a dtype, even though it has a device; it probably shouldn't
     // have a device (we should infer it).
@@ -401,7 +401,7 @@ Tensor legacy_tensor_ctor(const Type& type, ScalarType scalar_type, PyObject* ar
     return new_with_storage(type, scalar_type, r.storage(0));
   } else if (r.idx == 2) {
     auto cdata = reinterpret_cast<void*>(r.toInt64(0));
-    return autograd::make_variable(at::unsafeTensorFromTH(cdata, true));
+    return autograd::Variable(at::unsafeTensorFromTH(cdata, true));
   } else if (r.idx == 3) {
     return new_with_tensor(type, scalar_type, r.tensor(0));
   } else if (r.idx == 4) {
@@ -447,7 +447,7 @@ Tensor legacy_tensor_new(const Type& type, ScalarType scalar_type, PyObject* arg
     return new_with_storage(type, scalar_type, r.storage(0));
   } else if (r.idx == 2) {
     auto cdata = reinterpret_cast<void*>(r.toInt64(0));
-    return autograd::make_variable(at::unsafeTensorFromTH(cdata, true));
+    return autograd::Variable(at::unsafeTensorFromTH(cdata, true));
   } else if (r.idx == 3) {
     return new_with_tensor(type, scalar_type, r.tensor(0));
   } else if (r.idx == 4) {

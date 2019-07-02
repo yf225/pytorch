@@ -41,7 +41,7 @@ Int8TensorCPU from_proxy(const c10::IValue& proxy) {
 }
 
 at::Tensor to_proxy(const caffe2::Tensor& t) {
-  return autograd::make_variable(at::Tensor(t.UnsafeSharedInstance()), false);
+  return at::Tensor(t.UnsafeSharedInstance());
 }
 
 c10::intrusive_ptr<c10::ivalue::Tuple> to_proxy(const Int8TensorCPU& t) {

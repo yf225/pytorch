@@ -212,10 +212,10 @@ void testDifferentiateWithRequiresGrad() {
   graph->registerOutput(d.value());
   graph->registerOutput(e.value());
 
-  auto a_var = autograd::make_variable(
-      at::empty_strided(2, 2, at::CPU(at::kFloat).options()), true);
-  auto b_var = autograd::make_variable(
-      at::empty_strided(2, 2, at::CPU(at::kFloat).options()), false);
+  auto a_var = autograd::Variable(
+      at::empty_strided(2, 2, at::CPU(at::kFloat).options().requires_grad(true)));
+  auto b_var = autograd::Variable(
+      at::empty_strided(2, 2, at::CPU(at::kFloat).options().requires_grad(false)));
 
   ArgumentSpecCreator asc(*graph);
   asc.specializeTypes(*graph, asc.create(true, {a_var, b_var}));
