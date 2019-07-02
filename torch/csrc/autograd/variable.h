@@ -337,6 +337,8 @@ struct TORCH_API Variable : public at::Tensor {
 //                            Variable::AutogradMeta
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+// yf225 TODO: first thing to do: break up this PR into several smaller PRs, e.g. 1. keep make_variable, but just attach AutogradMeta; 2. remove TensorOptions.is_variable; 3. remove make_variable
+
 /// Each `Variable` has one unique `AutogradMeta` struct, which stores autograd
 /// metadata fields that are necessary for tracking the Variable's autograd history.
 
