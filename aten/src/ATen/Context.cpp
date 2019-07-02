@@ -113,7 +113,7 @@ bool Context::setFlushDenormal(bool on) {
 // See NOTE [ Treating Variables as non-Variables in type dispatch ]
 TypeExtendedInterface& getType(TensorOptions options) {
   return globalContext().getType(
-            options.backend(), typeMetaToScalarType(options.dtype()), options.is_variable() && !at::NonVariableTypeMode::is_enabled());
+            options.backend(), typeMetaToScalarType(options.dtype()), !at::NonVariableTypeMode::is_enabled());
 }
 
 // NOTE: We also check `at::NonVariableTypeMode`, and if it's enabled we always

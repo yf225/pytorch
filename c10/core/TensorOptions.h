@@ -105,7 +105,6 @@ struct C10_API TensorOptions {
     , has_dtype_(false)
     , has_layout_(false)
     , has_requires_grad_(false)
-    , has_is_variable_(false)
     , has_pinned_memory_(false)
     {}
 
@@ -152,7 +151,6 @@ struct C10_API TensorOptions {
         has_layout_ == other.has_layout_ &&
         has_device_ == other.has_device_ &&
         has_requires_grad_ == other.has_requires_grad_ &&
-        has_is_variable_ == other.has_is_variable_ &&
         (!has_dtype_ || dtype_ == other.dtype_) &&
         (!has_layout_ || layout_ == other.layout_) &&
         (!has_device_ || device_ == other.device_) &&
@@ -229,8 +227,7 @@ struct C10_API TensorOptions {
 
   /// Sets the `is_variable` property on the `TensorOptions`.
   C10_NODISCARD TensorOptions is_variable(c10::optional<bool> is_variable) const noexcept {
-    TensorOptions r = *this;
-    r.set_is_variable(is_variable);
+    LOG(WARNING) << "TensorOptions.is_variable(bool) is deprecated, and all tensors are always Variables.";
     return r;
   }
 
@@ -314,12 +311,12 @@ struct C10_API TensorOptions {
 
   /// Returns the `is_variable` property of the `TensorOptions`.
   bool is_variable() const noexcept {
-    return has_is_variable_ ? is_variable_ : false;
+    return true;
   }
 
   /// Returns whether the `is_variable` is specified.
   bool has_is_variable() const noexcept {
-    return has_is_variable_;
+    return false;
   }
 
 
@@ -334,10 +331,9 @@ struct C10_API TensorOptions {
   }
 
 
-  /// Returns the `is_variable` property of the `TensorOptions`, or
-  /// `c10::nullopt` if `is_variable` is not specified.
+  /// Returns the `is_variable` property of the `TensorOptions`.
   c10::optional<bool> is_variable_opt() const noexcept {
-    return has_is_variable_ ? c10::make_optional(is_variable_) : c10::nullopt;
+    return c10::make_optional(true);
   }
 
 
@@ -475,12 +471,7 @@ struct C10_API TensorOptions {
 
   /// Mutably set the `is_variable` property of `TensorOptions`.
   void set_is_variable(c10::optional<bool> is_variable) & noexcept {
-    if (is_variable) {
-      is_variable_ = *is_variable;
-      has_is_variable_ = true;
-    } else {
-      has_is_variable_ = false;
-    }
+    LOG(WARNING) << "TensorOptions.set_is_variable(bool) is deprecated, and all tensors are always Variables.";
   }
 
   /// Mutably set the `pinned_memory` property of `TensorOptions`.
@@ -515,7 +506,6 @@ struct C10_API TensorOptions {
   bool has_dtype_         : 1;
   bool has_layout_        : 1;
   bool has_requires_grad_ : 1;
-  bool has_is_variable_   : 1;
   bool has_pinned_memory_ : 1;
 };
 
