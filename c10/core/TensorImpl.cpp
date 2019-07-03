@@ -17,20 +17,14 @@ C10_DEFINE_int64(
 
 namespace c10 {
 
+// yf225 TODO: how do we fix this situation???
 at::Tensor& TensorImpl::grad() {
-  if (autograd_meta()) {
-    return autograd_meta()->grad();
-  } else {
-    AT_ERROR("grad is not implemented for Tensor");
-  }
+  if (!autograd_meta()) set_autograd_meta(c10::AutogradMetaInterface::create_autograd_meta());
+  return autograd_meta()->grad();
 }
 
 const at::Tensor& TensorImpl::grad() const {
-  if (autograd_meta()) {
-    return autograd_meta()->grad();
-  } else {
-    AT_ERROR("grad is not implemented for Tensor");
-  }
+  return autograd_meta() ? autograd_meta()->grad() : UndefinedTensorImpl::singleton();
 }
 
 TensorImpl::TensorImpl(Storage&& storage, TensorTypeId type_id)

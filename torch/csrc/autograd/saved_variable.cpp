@@ -24,7 +24,7 @@ SavedVariable::SavedVariable(const Variable& variable, bool is_output) {
     // Do them here instead of in the init list in case data is undefined.
     data_ = variable.tensor_data();
     if (variable.is_leaf()) {
-      grad_accumulator_ = variable.grad_accumulator();
+      grad_accumulator_ = variable.try_get_grad_accumulator();
     } else if (!is_output) {
       grad_fn_ = variable.grad_fn();
     }

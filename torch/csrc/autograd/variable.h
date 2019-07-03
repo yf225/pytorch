@@ -298,6 +298,7 @@ struct TORCH_API Variable : public at::Tensor {
   //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
   void add_hook(std::shared_ptr<FunctionPreHook> hook);
+  bool has_hooks() const noexcept;
   const std::vector<std::shared_ptr<FunctionPreHook>>& hooks() const noexcept;
   void clear_hooks();
 
@@ -322,6 +323,7 @@ struct TORCH_API Variable : public at::Tensor {
 
   struct AutogradMeta;
   Variable::AutogradMeta* get_autograd_meta() const noexcept;
+  void set_autograd_meta(std::unique_ptr<c10::AutogradMetaInterface> autograd_meta) noexcept;
 
  private:
   struct DifferentiableViewMeta;
@@ -337,6 +339,8 @@ struct TORCH_API Variable : public at::Tensor {
 //                            Variable::AutogradMeta
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+// yf225 TODO: first thing to do: break up this PR into several smaller PRs, e.g. 1. keep make_variable, but just attach AutogradMeta; 2. remove TensorOptions.is_variable; 3. remove make_variable
+
 /// Each `Variable` has one unique `AutogradMeta` struct, which stores autograd
 /// metadata fields that are necessary for tracking the Variable's autograd history.
 
@@ -350,7 +354,7 @@ struct TORCH_API Variable::AutogradMeta : public c10::AutogradMetaInterface {
   std::vector<std::shared_ptr<FunctionPreHook>> hooks_;
 
   // Only meaningful on leaf variables (must be false otherwise)
-  bool requires_grad_;
+  bool requires_grad_;  // yf225 TODO: can we remove this field??
 
   bool is_view_;
 
@@ -365,18 +369,14 @@ struct TORCH_API Variable::AutogradMeta : public c10::AutogradMetaInterface {
   // grad_accumulator().
   std::mutex mutex_;
 
-  /// Sets the `requires_grad` property of `Variable`. This should be true for
-  /// leaf variables that want to accumulate gradients, and false for all other
-  /// variables.
-  void set_requires_grad(bool requires_grad, at::TensorImpl* self_impl) override {
-    TORCH_CHECK(
-      !requires_grad || at::isFloatingType(at::typeMetaToScalarType(self_impl->dtype())),
-      "Only Tensors of floating point dtype can require gradients");
-    requires_grad_ = requires_grad;
+  // yf225 TODO: can we remove this??
+  bool requires_grad() const override {
+    return requires_grad_;
   }
 
-  bool requires_grad() const override {
-    return requires_grad_ || grad_fn_;
+  // yf225 TODO: can we potentially remove this ??
+  void set_requires_grad(bool requires_grad) override {
+    requires_grad_ = requires_grad;
   }
 
   /// Accesses the gradient `Variable` of this `Variable`.
@@ -389,7 +389,6 @@ struct TORCH_API Variable::AutogradMeta : public c10::AutogradMetaInterface {
   }
 
   AutogradMeta(
-    at::TensorImpl* self_impl,
     bool requires_grad = false,
     Edge gradient_edge = Edge());
 };
@@ -476,6 +475,16 @@ struct TORCH_API Variable::DifferentiableViewMeta : public Variable::AutogradMet
   /// version_counter.current_version().
   uint32_t attr_version;
 
+  // yf225 TODO: can we potentially remove this and just check autograd_meta() ??
+  // yf225 TODO: scenario when this can return false:
+  /*
+>>> a=torch.randn(3)
+>>> b=a[:]
+>>> b
+tensor([-0.4192,  1.4405, -1.0867])
+>>> b.requires_grad
+False
+  */
   bool requires_grad() const override {
     return requires_grad_ || grad_fn_ || (is_view_ && base_.requires_grad());
   }
@@ -519,8 +528,10 @@ inline Variable make_variable_view(
       auto data_impl_copy = data.getIntrusivePtr()->shallow_copy_and_detach(
         /*version_counter=*/base.version_counter(),
         /*allow_tensor_metadata_change=*/allow_tensor_metadata_change);
-      data_impl_copy->set_autograd_meta(c10::guts::make_unique<Variable::AutogradMeta>(
-        data_impl_copy.get(), false, std::move(gradient_edge)));
+      if (gradient_edge.is_valid()) {
+        data_impl_copy->set_autograd_meta(c10::guts::make_unique<Variable::AutogradMeta>(
+          false, std::move(gradient_edge)));
+      }
       return Variable(data_impl_copy);
     }
   }
@@ -531,15 +542,14 @@ inline Variable make_variable(
     at::Tensor data,
     bool requires_grad = false,
     bool allow_tensor_metadata_change = true) {
-  TORCH_CHECK(
-      !data.is_variable(),
-      "Must not create a new variable from a variable, use its .tensor_data()");
+  // yf225 TODO: what does it mean to call `make_variable` with `at::NonVariableTypeMode` set to true (and data not a variable)?? Can we enforce that it's not set to true? Can we have a contract that "baseType ops (ATen/XLA) never calls make_variable()"?
+  // yf225 TODO: how many callsites of make_variable() rely on the fact that make_variable() makes shallow-copy of the data and create a new autograd_meta? Can we directly use the data (and not use make_variable), or use the data tensor's `variable_data()`/`detach()` instead?
+  // yf225 TODO: when we call make_variable(), is it just because we need new autograd history?
   if (data.defined()) {
     auto data_impl_copy = data.getIntrusivePtr()->shallow_copy_and_detach(
       /*version_counter=*/0,
       /*allow_tensor_metadata_change=*/allow_tensor_metadata_change);
-    data_impl_copy->set_autograd_meta(c10::guts::make_unique<Variable::AutogradMeta>(
-      data_impl_copy.get(), requires_grad));
+    data_impl_copy->set_requires_grad(requires_grad);
     return Variable(data_impl_copy);
   }
   return Variable();
@@ -549,14 +559,14 @@ inline Variable make_variable_consuming(
     at::Tensor data,
     bool requires_grad = false,
     bool allow_tensor_metadata_change = true) {
-  TORCH_CHECK(
-      !data.is_variable(),
-      "Must not create a new variable from a variable, use its .tensor_data()");
+  // yf225 TODO: what does it mean to call `make_variable` with `at::NonVariableTypeMode` set to true (and data not a variable)?? Can we enforce that it's not set to true? Can we have a contract that "baseType ops (ATen/XLA) never calls make_variable()"?
+  // yf225 TODO: how many callsites of make_variable() rely on the fact that make_variable() makes shallow-copy of the data? Can we directly use the data (and not use make_variable), or use the data tensor's `variable_data()`/`detach()` instead?
+  // yf225 TODO: when we call make_variable(), is it just because we need new autograd history?
   if (data.defined()) {
     AT_ASSERT(data.getIntrusivePtr().use_count() == 1);
     auto data_impl = data.getIntrusivePtr();
     data_impl->set_allow_tensor_metadata_change(allow_tensor_metadata_change);
-    data_impl->set_autograd_meta(c10::guts::make_unique<Variable::AutogradMeta>(data_impl.get(), requires_grad));
+    data_impl->set_requires_grad(requires_grad);
     return Variable(std::move(data_impl));
   }
   return Variable();
@@ -566,15 +576,15 @@ inline Variable make_variable(
     at::Tensor data,
     Edge gradient_edge,
     bool allow_tensor_metadata_change = true) {
-  TORCH_CHECK(
-      !data.is_variable(),
-      "Must not create a new variable from a variable, use its .tensor_data()");
+  // yf225 TODO: what does it mean to call `make_variable` with `at::NonVariableTypeMode` set to true (and data not a variable)?? Can we enforce that it's not set to true? Can we have a contract that "baseType ops (ATen/XLA) never calls make_variable()"?
+  // yf225 TODO: how many callsites of make_variable() rely on the fact that make_variable() makes shallow-copy of the data? Can we directly use the data (and not use make_variable), or use the data tensor's `variable_data()`/`detach()` instead?
+  // yf225 TODO: when we call make_variable(), is it just because we need new autograd history?
   if (data.defined()) {
     auto data_impl_copy = data.getIntrusivePtr()->shallow_copy_and_detach(
       /*version_counter=*/0,
       /*allow_tensor_metadata_change=*/allow_tensor_metadata_change);
     data_impl_copy->set_autograd_meta(c10::guts::make_unique<Variable::AutogradMeta>(
-      data_impl_copy.get(), false, std::move(gradient_edge)));
+      false, std::move(gradient_edge)));
     return Variable(data_impl_copy);
   }
   return Variable();
@@ -613,7 +623,7 @@ inline at::Tensor Variable::variable_data() const noexcept {
   auto self_impl_copy = get()->shallow_copy_and_detach(
     /*version_counter=*/0,
     /*allow_tensor_metadata_change=*/false);
-  self_impl_copy->set_autograd_meta(c10::guts::make_unique<Variable::AutogradMeta>(self_impl_copy.get(), false));
+  self_impl_copy->set_requires_grad(false);
   return at::Tensor(self_impl_copy);
 }
 
@@ -621,16 +631,25 @@ inline at::Tensor Variable::variable_data() const noexcept {
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 inline Function* Variable::grad_fn_unsafe() const {
-  return get_autograd_meta()->grad_fn_.get();
+  if (get_autograd_meta()) {
+    return get_autograd_meta()->grad_fn_.get();
+  } else {
+    return nullptr;
+  }
 }
 
 inline void Variable::set_grad_accumulator(
     std::weak_ptr<Function> grad_accumulator) {
+  AT_ASSERT(get_autograd_meta());  // yf225 TODO: should we change this to set_autograd_meta(...)?
   get_autograd_meta()->grad_accumulator_ = std::move(grad_accumulator);
 }
 
 inline std::shared_ptr<Function> Variable::try_get_grad_accumulator() const {
-  return get_autograd_meta()->grad_accumulator_.lock();
+  if (get_autograd_meta()) {
+    return get_autograd_meta()->grad_accumulator_.lock();
+  } else {
+    return nullptr;
+  }
 }
 
 inline Variable Variable::detach() const {
@@ -639,16 +658,25 @@ inline Variable Variable::detach() const {
 }
 
 inline void Variable::set_gradient_edge(Edge edge) noexcept {
+  if (!get_autograd_meta()) set_autograd_meta(c10::AutogradMetaInterface::create_autograd_meta()); // yf225 TODO: should we use the AutogradMeta constructor here? How to unify those two?
   get_autograd_meta()->grad_fn_ = std::move(edge.function);
   get_autograd_meta()->output_nr_ = edge.input_nr;
 }
 
 inline uint32_t Variable::output_nr() const noexcept {
-  return get_autograd_meta()->output_nr_;
+  if (get_autograd_meta()) {
+    return get_autograd_meta()->output_nr_;
+  } else {
+    return 0;
+  }
 }
 
 inline bool Variable::is_leaf() const noexcept {
-  return get_autograd_meta()->grad_fn_ == nullptr;
+  if (get_autograd_meta()) {
+    return get_autograd_meta()->grad_fn_ == nullptr;
+  } else {
+    return true;
+  }
 }
 
 // Versions
@@ -675,23 +703,39 @@ inline const c10::VariableVersion& Variable::version_counter() const noexcept {
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 inline void Variable::add_hook(std::shared_ptr<FunctionPreHook> hook) {
+  if (!get_autograd_meta()) set_autograd_meta(c10::AutogradMetaInterface::create_autograd_meta()); // yf225 TODO: should we use the AutogradMeta constructor here? How to unify those two?
   get_autograd_meta()->hooks_.push_back(std::move(hook));
+}
+
+inline bool Variable::has_hooks() const noexcept {
+  if (get_autograd_meta()) {
+    return get_autograd_meta()->hooks_.size() > 0;
+  } else {
+    return false;
+  }
 }
 
 inline const std::vector<std::shared_ptr<FunctionPreHook>>& Variable::hooks()
     const noexcept {
+  AT_ASSERT(get_autograd_meta());  // yf225 TODO: why should we assert here?
   return get_autograd_meta()->hooks_;
 }
 
 inline void Variable::clear_hooks() {
-  get_autograd_meta()->hooks_.clear();
+  if (get_autograd_meta()) {
+    get_autograd_meta()->hooks_.clear();
+  }
 }
 
 // View Variables
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 inline bool Variable::is_view() const noexcept {
-  return get_autograd_meta()->is_view_;
+  if (get_autograd_meta()) {
+    return get_autograd_meta()->is_view_;
+  } else {
+    return false;
+  }
 }
 
 inline const Variable& Variable::base() const {
@@ -707,10 +751,12 @@ inline const Variable& Variable::base() const {
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 inline void Variable::set_name(const std::string& name) {
+  AT_ASSERT(get_autograd_meta());  // yf225 TODO: why should we assert here?
   get_autograd_meta()->name = name;
 }
 
 inline const std::string& Variable::name() const noexcept {
+  AT_ASSERT(get_autograd_meta());  // yf225 TODO: why should we assert here?
   return get_autograd_meta()->name;
 }
 
@@ -724,6 +770,10 @@ inline PyObject* Variable::pyobj() const noexcept {
 
 inline Variable::AutogradMeta* Variable::get_autograd_meta() const noexcept {
   return static_cast<Variable::AutogradMeta*>(get()->autograd_meta());
+}
+
+inline void Variable::set_autograd_meta(std::unique_ptr<c10::AutogradMetaInterface> autograd_meta) noexcept {
+  get()->set_autograd_meta(std::move(autograd_meta));
 }
 
 // Private Methods

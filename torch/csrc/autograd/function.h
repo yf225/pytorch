@@ -359,7 +359,7 @@ struct MakeNextFunctionList : IterArgs<MakeNextFunctionList> {
   edge_list next_edges;
   using IterArgs<MakeNextFunctionList>::operator();
   void operator()(const Variable& variable) {
-    if (variable.defined()) {
+    if (variable.defined() && variable.unsafeGetTensorImpl()->autograd_meta()) {
       next_edges.push_back(variable.gradient_edge());
     } else {
       next_edges.emplace_back();

@@ -97,9 +97,11 @@ static int THPVariable_traverse(THPVariable *self, visitproc visit, void *arg)
   // for more details about the race condition involving traversing the grad_fn
   // and the python GC.
   if (self->cdata.defined()) {
-    for (const auto& hook : self->cdata.hooks()) {
-      if (auto pyhook = dynamic_cast<PyFunctionPreHook*>(hook.get())) {
-        Py_VISIT(pyhook->dict);
+    if (self->cdata.has_hooks()) {
+      for (const auto& hook : self->cdata.hooks()) {
+        if (auto pyhook = dynamic_cast<PyFunctionPreHook*>(hook.get())) {
+          Py_VISIT(pyhook->dict);
+        }
       }
     }
   }
@@ -187,7 +189,7 @@ PyObject *THPVariable_get_grad_fn(THPVariable *self)
 {
   HANDLE_TH_ERRORS
   auto& var = self->cdata;
-  if (!var.grad_fn()) {
+  if (var.is_leaf()) {
     Py_RETURN_NONE;
   }
   return functionToPyObject(var.grad_fn());
@@ -207,7 +209,7 @@ static int THPVariable_set_grad_fn(THPVariable *self, PyObject *obj)
 static PyObject *THPVariable_is_leaf(THPVariable *self)
 {
   HANDLE_TH_ERRORS
-  return PyBool_FromLong(!self->cdata.grad_fn());
+  return torch::autograd::utils::wrap(self->cdata.is_leaf());
   END_HANDLE_TH_ERRORS
 }
 
