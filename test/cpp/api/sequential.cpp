@@ -98,6 +98,12 @@ TEST_F(SequentialTest, ConstructsFromModuleHolder) {
   ASSERT_EQ(sequential->size(), 3);
 }
 
+TEST_F(SequentialTest, NestedSequential) {
+  torch::nn::Sequential layers;
+  auto S = torch::nn::Sequential();
+  layers->push_back(S);
+}
+
 TEST_F(SequentialTest, PushBackAddsAnElement) {
   struct M : torch::nn::Module {
     explicit M(int value_) : value(value_) {}

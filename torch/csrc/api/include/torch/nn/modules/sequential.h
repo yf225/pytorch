@@ -159,7 +159,7 @@ class SequentialImpl : public Cloneable<SequentialImpl> {
   ///   float value = sequential3->forward<float>(inputs);
   ///
   /// \endrst
-  template <typename ReturnType = Tensor, typename... InputTypes>
+  template <typename ReturnType, typename... InputTypes>
   ReturnType forward(InputTypes&&... inputs) {
     TORCH_CHECK(!is_empty(), "Cannot call forward() on an empty Sequential");
 
@@ -180,6 +180,21 @@ class SequentialImpl : public Cloneable<SequentialImpl> {
         c10::demangle(input.type_info().name()),
         ", but you asked for type ",
         c10::demangle(typeid(ReturnType).name()));
+  }
+
+  template <typename... InputTypes>
+  Tensor forward(InputTypes&&... inputs) {
+    TORCH_CHECK(!is_empty(), "Cannot call forward() on an empty Sequential");
+
+    auto iterator = modules_.begin();
+    auto input = iterator->any_forward(std::forward<InputTypes>(inputs)...);
+
+    for (++iterator; iterator != modules_.end(); ++iterator) {
+      input = iterator->any_forward(std::move(input));
+    }
+
+    auto* return_value = input.template try_get<Tensor>();
+    return std::move(*return_value);
   }
 
   /// Adds a new (boxed) `Module` to the `Sequential` container.
