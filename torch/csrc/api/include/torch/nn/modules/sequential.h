@@ -368,9 +368,11 @@ class AnySequentialImpl : public Cloneable<AnySequentialImpl> {
 /// module storage semantics.
 TORCH_MODULE(AnySequential);
 
+/// `Sequential` is derived from `AnySequential` and has a non-template
+/// returning type allowing `Sequential`s to be nested in each other making them
+/// compatible with the python API. The template input type helps warn users
+/// about the change in the API.
 class SequentialImpl : public AnySequentialImpl {
-  //  using AnySequentialImpl::forward;
-
  public:
   using AnySequentialImpl::AnySequentialImpl;
 
