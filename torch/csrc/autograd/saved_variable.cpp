@@ -23,6 +23,7 @@ SavedVariable::SavedVariable(const Variable& variable, bool is_output) {
     // These copies are all shared_ptr copies, so slightly more expensive.
     // Do them here instead of in the init list in case data is undefined.
     data_ = variable.tensor_data();
+    std::cout << "SavedVariable being saved: " << data_ << std::endl;
     if (variable.is_leaf()) {
       grad_accumulator_ = variable.grad_accumulator();
     } else if (!is_output) {
@@ -79,6 +80,7 @@ Variable SavedVariable::unpack(std::shared_ptr<Function> saved_for) const {
   // they still share the same storage. This works only because we never call
   // in-place functions on unpacked variables.
   Variable var;
+  std::cout << "SavedVariable being unpacked: " << data_ << std::endl;
   if (grad_fn) {
     var = make_variable(data_, Edge(std::move(grad_fn), output_nr_));
   } else {
