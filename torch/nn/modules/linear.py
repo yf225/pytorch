@@ -84,6 +84,8 @@ class Linear(Module):
             init.uniform_(self.bias, -bound, bound)
 
     def forward(self, input):
+        out = input[:]
+        print(out)
         return F.linear(input, self.weight, self.bias)
 
     def extra_repr(self):

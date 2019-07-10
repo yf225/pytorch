@@ -1071,10 +1071,15 @@ def _qualified_name(obj):
 def _is_recursive_script_enabled(value):
     # TODO: [enable recursive script]
     # when recursive script is made the default, remove this method
+    print(value)
     enabled = torch._C._jit_recursive_script()
     module = inspect.getmodule(value)
-    if module is not None and 'torch.nn' in module.__name__:
-        enabled = True
+    print(module)
+    if module is not None:
+        if 'torch.nn.functional' in module.__name__:
+            enabled = False
+        elif 'torch.nn' in module.__name__:
+            enabled = True
     return enabled
 
 @contextlib.contextmanager
@@ -1098,12 +1103,15 @@ def script(obj, optimize=True, _frames_up=0, _rcb=None):
         if not _is_new_style_class(obj):
             raise RuntimeError("TorchScript classes must be new-style classes. Please inherit from 'object'")
         qualified_name = _qualified_name(obj)
+        # yf225 TODO: get_jit_class_def is what we want!!!
         ast = get_jit_class_def(obj, obj.__name__)
+        print(ast)
         _jit_script_class_compile(qualified_name, ast, _rcb)
         _add_script_class(obj, qualified_name)
         return obj
     else:
         ast = get_jit_def(obj)
+        print(ast)
         fn = torch._C._jit_script_compile(ast, _rcb, get_default_args(obj))
         # Forward docstrings
         fn.__doc__ = obj.__doc__
@@ -1757,6 +1765,9 @@ def _convert_to_script_module(mod):
             raise RuntimeError("No forward method was defined on {}".format(mod))
         if not _jit_internal.is_ignored_fn(mod.forward):
             methods = ('forward',)
+    # if hasattr(mod, 'reset_parameters'):
+    #     methods = methods + ('reset_parameters',)
+
     exported = []
     for name in dir(mod):
         item = getattr(mod, name)
