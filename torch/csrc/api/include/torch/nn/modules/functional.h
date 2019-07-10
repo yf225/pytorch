@@ -1,10 +1,10 @@
 #pragma once
 
+#include <torch/csrc/WindowsTorchApiMacro.h>
 #include <torch/csrc/utils/variadic.h>
 #include <torch/nn/cloneable.h>
 #include <torch/nn/pimpl.h>
 #include <torch/types.h>
-#include <torch/csrc/WindowsTorchApiMacro.h>
 
 #include <functional>
 #include <utility>
@@ -16,12 +16,12 @@ namespace nn {
 ///
 /// The `Functional` module allows wrapping an arbitrary function or function
 /// object in an `nn::Module`. This is primarily handy for usage in
-/// `Sequential`.
+/// `AnySequential`.
 ///
 /// \rst
 /// .. code-block:: cpp
 ///
-///   Sequential sequential(
+///   AnySequential sequential(
 ///     Linear(3, 4),
 ///     Functional(torch::relu),
 ///     BatchNorm(3),
@@ -41,11 +41,11 @@ namespace nn {
 ///   Functional(torch::leaky_relu, /*slope=*/0.5)
 /// \endrst
 ///
-/// The value of `0.5` is then stored within the `Functional` object and supplied
-/// to the function call at invocation time. Note that such bound values are
-/// evaluated eagerly and stored a single time. See the documentation of
-/// [std::bind](https://en.cppreference.com/w/cpp/utility/functional/bind) for
-/// more information on the semantics of argument binding.
+/// The value of `0.5` is then stored within the `Functional` object and
+/// supplied to the function call at invocation time. Note that such bound
+/// values are evaluated eagerly and stored a single time. See the documentation
+/// of [std::bind](https://en.cppreference.com/w/cpp/utility/functional/bind)
+/// for more information on the semantics of argument binding.
 ///
 /// \rst
 /// .. attention::
