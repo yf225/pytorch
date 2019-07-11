@@ -666,7 +666,7 @@ Tensor _cudnn_rnn_flatten_weight(
          orig_param_it != weight[i].end() && new_param_it != params[i].end();
          orig_param_it++, new_param_it++) {
       auto orig_param = *orig_param_it, new_param = *new_param_it;
-      orig_param.set_(new_param.view_as(orig_param));
+      orig_param.copy_(new_param.view_as(orig_param));
     }
   }
 
