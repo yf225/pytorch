@@ -657,18 +657,18 @@ Tensor _cudnn_rnn_flatten_weight(
   MatrixRef<Tensor> weight{weight_arr, static_cast<size_t>(weight_stride0)},
                     params{params_arr, params_stride0};
 
-  // Copy weights
-  _copyParams(weight, params);
+  // // Copy weights
+  // _copyParams(weight, params);
 
-  // Update the storage
-  for (size_t i = 0; i < weight.size(0); i++) {
-    for (auto orig_param_it = weight[i].begin(), new_param_it = params[i].begin();
-         orig_param_it != weight[i].end() && new_param_it != params[i].end();
-         orig_param_it++, new_param_it++) {
-      auto orig_param = *orig_param_it, new_param = *new_param_it;
-      orig_param.copy_(new_param.view_as(orig_param));
-    }
-  }
+  // // Update the storage
+  // for (size_t i = 0; i < weight.size(0); i++) {
+  //   for (auto orig_param_it = weight[i].begin(), new_param_it = params[i].begin();
+  //        orig_param_it != weight[i].end() && new_param_it != params[i].end();
+  //        orig_param_it++, new_param_it++) {
+  //     auto orig_param = *orig_param_it, new_param = *new_param_it;
+  //     orig_param.copy_(new_param.view_as(orig_param));
+  //   }
+  // }
 
   return weight_buf;
 }
