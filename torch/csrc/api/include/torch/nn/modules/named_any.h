@@ -25,8 +25,8 @@ namespace nn {
 /// Stores a type erased `Module` with name.
 ///
 /// The `NamedAnyModule` class and the `modules_ordered_dict(...)` function
-/// enables the following API for constructing `nn::AnySequential` with named
-/// submodules: \rst
+/// enables the following API for constructing `nn::Sequential` and `nn::AnySequential`
+/// with named submodules: \rst
 /// .. code-block:: cpp
 ///
 ///   struct M : torch::nn::Module {
@@ -37,9 +37,9 @@ namespace nn {
 ///     }
 ///   };
 ///
-///   AnySequential sequential(modules_ordered_dict({
-///     {"m1", std::make_shared<M>(1)},  // shared pointer to `Module` is
-///     supported {std::string("m2"), M(2)},  // `Module` is supported
+///   Sequential sequential(modules_ordered_dict({
+///     {"m1", std::make_shared<M>(1)},  // shared pointer to `Module` is supported
+///     {std::string("m2"), M(2)},  // `Module` is supported
 ///     {"linear1", Linear(10, 3)}  // `ModuleHolder` is supported
 ///   }));
 /// \endrst

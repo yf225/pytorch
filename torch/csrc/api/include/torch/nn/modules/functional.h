@@ -15,13 +15,13 @@ namespace nn {
 /// Wraps a function in a `Module`.
 ///
 /// The `Functional` module allows wrapping an arbitrary function or function
-/// object in an `nn::Module`. This is primarily handy for usage in
-/// `AnySequential`.
+/// object in an `nn::Module`. This is primarily handy for usage in `Sequential`
+/// and `AnySequential`.
 ///
 /// \rst
 /// .. code-block:: cpp
 ///
-///   AnySequential sequential(
+///   Sequential sequential(
 ///     Linear(3, 4),
 ///     Functional(torch::relu),
 ///     BatchNorm(3),

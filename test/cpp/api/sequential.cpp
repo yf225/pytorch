@@ -29,11 +29,11 @@ TEST_F(SequentialTest, ConstructsFromSharedPointer) {
       return value;
     }
   };
-  AnySequential sequential(
+  Sequential sequential(
       std::make_shared<M>(1), std::make_shared<M>(2), std::make_shared<M>(3));
   ASSERT_EQ(sequential->size(), 3);
 
-  AnySequential sequential_named(modules_ordered_dict({
+  Sequential sequential_named(modules_ordered_dict({
     {"m1", std::make_shared<M>(1)},
     {std::string("m2"), std::make_shared<M>(2)},
     {"m3", std::make_shared<M>(3)}
@@ -56,7 +56,7 @@ TEST_F(SequentialTest, ConstructsFromConcreteType) {
   };
 
   copy_count = 0;
-  AnySequential sequential(M(1), M(2), M(3));
+  Sequential sequential(M(1), M(2), M(3));
   ASSERT_EQ(sequential->size(), 3);
   // NOTE: The current implementation expects each module to be copied exactly once,
   // which happens when the module is passed into `std::make_shared<T>()`.
@@ -64,7 +64,7 @@ TEST_F(SequentialTest, ConstructsFromConcreteType) {
   ASSERT_EQ(copy_count, 3);
 
   copy_count = 0;
-  AnySequential sequential_named(modules_ordered_dict({
+  Sequential sequential_named(modules_ordered_dict({
     {"m1", M(1)},
     {std::string("m2"), M(2)},
     {"m3", M(3)}
@@ -87,10 +87,10 @@ TEST_F(SequentialTest, ConstructsFromModuleHolder) {
     using torch::nn::ModuleHolder<MImpl>::get;
   };
 
-  AnySequential sequential(M(1), M(2), M(3));
+  Sequential sequential(M(1), M(2), M(3));
   ASSERT_EQ(sequential->size(), 3);
 
-  AnySequential sequential_named(modules_ordered_dict({
+  Sequential sequential_named(modules_ordered_dict({
     {"m1", M(1)},
     {std::string("m2"), M(2)},
     {"m3", M(3)}
@@ -108,7 +108,7 @@ TEST_F(SequentialTest, PushBackAddsAnElement) {
   };
 
   // Test unnamed submodules
-  AnySequential sequential;
+  Sequential sequential;
   ASSERT_EQ(sequential->size(), 0);
   ASSERT_TRUE(sequential->is_empty());
   sequential->push_back(Linear(3, 4));
@@ -119,7 +119,7 @@ TEST_F(SequentialTest, PushBackAddsAnElement) {
   ASSERT_EQ(sequential->size(), 3);
 
   // Mix named and unnamed submodules
-  AnySequential sequential_named;
+  Sequential sequential_named;
   ASSERT_EQ(sequential_named->size(), 0);
   ASSERT_TRUE(sequential_named->is_empty());
 
@@ -156,7 +156,7 @@ TEST_F(SequentialTest, AccessWithAt) {
   std::vector<std::shared_ptr<M>> modules = {
       std::make_shared<M>(1), std::make_shared<M>(2), std::make_shared<M>(3)};
 
-  AnySequential sequential;
+  Sequential sequential;
   for (auto& module : modules) {
     sequential->push_back(module);
   }
@@ -185,7 +185,7 @@ TEST_F(SequentialTest, AccessWithPtr) {
   std::vector<std::shared_ptr<M>> modules = {
       std::make_shared<M>(1), std::make_shared<M>(2), std::make_shared<M>(3)};
 
-  AnySequential sequential;
+  Sequential sequential;
   for (auto& module : modules) {
     sequential->push_back(module);
   }
@@ -205,9 +205,9 @@ TEST_F(SequentialTest, AccessWithPtr) {
 }
 
 TEST_F(SequentialTest, CallingForwardOnEmptySequentialIsDisallowed) {
-  AnySequential empty;
+  Sequential empty;
   ASSERT_THROWS_WITH(
-      empty->forward<int>(), "Cannot call forward() on an empty AnySequential");
+      empty->forward<int>(), "Cannot call forward() on an empty Sequential");
 }
 
 TEST_F(SequentialTest, CallingForwardChainsCorrectly) {
@@ -220,7 +220,7 @@ TEST_F(SequentialTest, CallingForwardChainsCorrectly) {
     }
   };
 
-  AnySequential sequential(MockModule{1}, MockModule{2}, MockModule{3});
+  Sequential sequential(MockModule{1}, MockModule{2}, MockModule{3});
 
   ASSERT_EQ(sequential->forward<int>(1), 4);
 }
@@ -232,7 +232,7 @@ TEST_F(SequentialTest, CallingForwardWithTheWrongReturnTypeThrows) {
     }
   };
 
-  AnySequential sequential(M{});
+  Sequential sequential(M{});
   ASSERT_EQ(sequential->forward<int>(), 5);
   ASSERT_THROWS_WITH(
       sequential->forward<float>(),
@@ -246,14 +246,14 @@ TEST_F(SequentialTest, TheReturnTypeOfForwardDefaultsToTensor) {
     }
   };
 
-  AnySequential sequential(M{});
+  Sequential sequential(M{});
   auto variable = torch::ones({3, 3}, torch::requires_grad());
   ASSERT_TRUE(sequential->forward(variable).equal(variable));
 }
 
 TEST_F(SequentialTest, ForwardReturnsTheLastValue) {
   torch::manual_seed(0);
-  AnySequential sequential(Linear(10, 3), Linear(3, 5), Linear(5, 100));
+  Sequential sequential(Linear(10, 3), Linear(3, 5), Linear(5, 100));
 
   auto x = torch::randn({1000, 10}, torch::requires_grad());
   auto y = sequential->forward(x);
@@ -263,7 +263,7 @@ TEST_F(SequentialTest, ForwardReturnsTheLastValue) {
 }
 
 TEST_F(SequentialTest, SanityCheckForHoldingStandardModules) {
-  AnySequential sequential(
+  Sequential sequential(
       Linear(10, 3),
       Conv2d(1, 2, 3),
       Dropout(0.5),
@@ -293,8 +293,8 @@ TEST_F(SequentialTest, ExtendPushesModulesFromOtherSequential) {
       return x;
     }
   };
-  AnySequential a(A{}, B{});
-  AnySequential b(C{}, D{});
+  Sequential a(A{}, B{});
+  Sequential b(C{}, D{});
   a->extend(*b);
 
   ASSERT_EQ(a->size(), 4);
@@ -319,8 +319,8 @@ TEST_F(SequentialTest, ExtendPushesModulesFromOtherSequential) {
 }
 
 TEST_F(SequentialTest, HasReferenceSemantics) {
-  AnySequential first(Linear(2, 3), Linear(4, 4), Linear(4, 5));
-  AnySequential second(first);
+  Sequential first(Linear(2, 3), Linear(4, 4), Linear(4, 5));
+  Sequential second(first);
 
   ASSERT_EQ(first.get(), second.get());
   ASSERT_EQ(first->size(), second->size());
@@ -334,9 +334,9 @@ TEST_F(SequentialTest, HasReferenceSemantics) {
 }
 
 TEST_F(SequentialTest, IsCloneable) {
-  AnySequential sequential(Linear(3, 4), Functional(torch::relu), BatchNorm(3));
-  AnySequential clone =
-      std::dynamic_pointer_cast<AnySequentialImpl>(sequential->clone());
+  Sequential sequential(Linear(3, 4), Functional(torch::relu), BatchNorm(3));
+  Sequential clone =
+      std::dynamic_pointer_cast<SequentialImpl>(sequential->clone());
   ASSERT_EQ(sequential->size(), clone->size());
 
   for (size_t i = 0; i < sequential->size(); ++i) {
@@ -365,7 +365,7 @@ TEST_F(SequentialTest, IsCloneable) {
 }
 
 TEST_F(SequentialTest, RegistersElementsAsSubmodules) {
-  AnySequential sequential(Linear(10, 3), Conv2d(1, 2, 3), FeatureDropout(0.5));
+  Sequential sequential(Linear(10, 3), Conv2d(1, 2, 3), FeatureDropout(0.5));
 
   auto modules = sequential->children();
   ASSERT_TRUE(modules[0]->as<Linear>());
@@ -374,10 +374,10 @@ TEST_F(SequentialTest, RegistersElementsAsSubmodules) {
 }
 
 TEST_F(SequentialTest, CloneToDevice_CUDA) {
-  AnySequential sequential(Linear(3, 4), Functional(torch::relu), BatchNorm(3));
+  Sequential sequential(Linear(3, 4), Functional(torch::relu), BatchNorm(3));
   torch::Device device(torch::kCUDA, 0);
-  AnySequential clone =
-      std::dynamic_pointer_cast<AnySequentialImpl>(sequential->clone(device));
+  Sequential clone =
+      std::dynamic_pointer_cast<SequentialImpl>(sequential->clone(device));
   for (const auto& p : clone->parameters()) {
     ASSERT_EQ(p.device(), device);
   }
@@ -387,7 +387,7 @@ TEST_F(SequentialTest, CloneToDevice_CUDA) {
 }
 
 TEST_F(SequentialTest, PrettyPrintSequential) {
-  AnySequential sequential(
+  Sequential sequential(
       Linear(10, 3),
       Conv2d(1, 2, 3),
       Dropout(0.5),
@@ -396,7 +396,7 @@ TEST_F(SequentialTest, PrettyPrintSequential) {
       LSTM(4, 5));
   ASSERT_EQ(
       c10::str(sequential),
-      "torch::nn::AnySequential(\n"
+      "torch::nn::Sequential(\n"
       "  (0): torch::nn::Linear(in=10, out=3, with_bias=true)\n"
       "  (1): torch::nn::Conv2d(input_channels=1, output_channels=2, kernel_size=[3, 3], stride=[1, 1])\n"
       "  (2): torch::nn::Dropout(rate=0.5)\n"
@@ -405,7 +405,7 @@ TEST_F(SequentialTest, PrettyPrintSequential) {
       "  (5): torch::nn::LSTM(input_size=4, hidden_size=5, layers=1, dropout=0)\n"
       ")");
 
-  AnySequential sequential_named(modules_ordered_dict({
+  Sequential sequential_named(modules_ordered_dict({
       {"linear", Linear(10, 3)},
       {"conv2d", Conv2d(1, 2, 3)},
       {"dropout", Dropout(0.5)},
@@ -415,7 +415,7 @@ TEST_F(SequentialTest, PrettyPrintSequential) {
   }));
   ASSERT_EQ(
       c10::str(sequential_named),
-      "torch::nn::AnySequential(\n"
+      "torch::nn::Sequential(\n"
       "  (linear): torch::nn::Linear(in=10, out=3, with_bias=true)\n"
       "  (conv2d): torch::nn::Conv2d(input_channels=1, output_channels=2, kernel_size=[3, 3], stride=[1, 1])\n"
       "  (dropout): torch::nn::Dropout(rate=0.5)\n"
