@@ -376,13 +376,13 @@ class SequentialImpl : public AnySequentialImpl {
  public:
   using AnySequentialImpl::AnySequentialImpl;
 
-  template <typename ReturnType = Tensor>
-  Tensor forward(const Tensor& input) {
+  template <typename ReturnType = Tensor, typename... InputTypes>
+  Tensor forward(InputTypes&&... inputs) {
     static_assert(
         std::is_same<ReturnType, Tensor>(),
         "Can only call Sequential::forward with Tensor as output type."
-        " If you would like to have a non-Tensor output type, please use AnySequential instead");
-    return AnySequentialImpl::forward(input);
+        " If you would like to have a non-Tensor output type, please use AnySequential instead.");
+    return AnySequentialImpl::forward(std::forward<InputTypes>(inputs)...);
   }
 
   void pretty_print(std::ostream& stream) const override {

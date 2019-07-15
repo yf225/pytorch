@@ -19,13 +19,14 @@
 using namespace torch::nn;
 using namespace torch::test;
 
+struct AnySequentialTest : torch::test::SeedingFixture {};
 struct SequentialTest : torch::test::SeedingFixture {};
 
 TEST_F(SequentialTest, ConstructsFromSharedPointer) {
   struct M : torch::nn::Module {
-    explicit M(int value_) : value(value_) {}
-    int value;
-    int forward() {
+      explicit M(int value_) : value(torch::tensor(value_)) { }
+    torch::Tensor value;
+    torch::Tensor forward() {
       return value;
     }
   };
@@ -45,12 +46,12 @@ TEST_F(SequentialTest, ConstructsFromConcreteType) {
   static int copy_count;
 
   struct M : torch::nn::Module {
-    explicit M(int value_) : value(value_) {}
+    explicit M(int value_) : value(torch::tensor(value_)) {}
     M(const M& other) : torch::nn::Module(other) {
       copy_count++;
     }
-    int value;
-    int forward() {
+    torch::Tensor value;
+    torch::Tensor forward() {
       return value;
     }
   };
@@ -75,11 +76,11 @@ TEST_F(SequentialTest, ConstructsFromConcreteType) {
 
 TEST_F(SequentialTest, ConstructsFromModuleHolder) {
   struct MImpl : torch::nn::Module {
-    explicit MImpl(int value_) : value(value_) {}
-    int forward() {
+    explicit MImpl(int value_) : value(torch::tensor(value_)) {}
+    torch::Tensor forward() {
       return value;
     }
-    int value;
+    torch::Tensor value;
   };
 
   struct M : torch::nn::ModuleHolder<MImpl> {
@@ -100,11 +101,11 @@ TEST_F(SequentialTest, ConstructsFromModuleHolder) {
 
 TEST_F(SequentialTest, PushBackAddsAnElement) {
   struct M : torch::nn::Module {
-    explicit M(int value_) : value(value_) {}
-    int forward() {
+    explicit M(int value_) : value(torch::tensor(value_)) {}
+    torch::Tensor forward() {
       return value;
     }
-    int value;
+    torch::Tensor value;
   };
 
   // Test unnamed submodules
@@ -147,11 +148,11 @@ TEST_F(SequentialTest, PushBackAddsAnElement) {
 
 TEST_F(SequentialTest, AccessWithAt) {
   struct M : torch::nn::Module {
-    explicit M(int value_) : value(value_) {}
-    int forward() {
+    explicit M(int value_) : value(torch::tensor(value_)) {}
+    torch::Tensor forward() {
       return value;
     }
-    int value;
+    torch::Tensor value;
   };
   std::vector<std::shared_ptr<M>> modules = {
       std::make_shared<M>(1), std::make_shared<M>(2), std::make_shared<M>(3)};
@@ -176,11 +177,11 @@ TEST_F(SequentialTest, AccessWithAt) {
 
 TEST_F(SequentialTest, AccessWithPtr) {
   struct M : torch::nn::Module {
-    explicit M(int value_) : value(value_) {}
-    int forward() {
+    explicit M(int value_) : value(torch::tensor(value_)) {}
+    torch::Tensor forward() {
       return value;
     }
-    int value;
+    torch::Tensor value;
   };
   std::vector<std::shared_ptr<M>> modules = {
       std::make_shared<M>(1), std::make_shared<M>(2), std::make_shared<M>(3)};
@@ -207,46 +208,46 @@ TEST_F(SequentialTest, AccessWithPtr) {
 TEST_F(SequentialTest, CallingForwardOnEmptySequentialIsDisallowed) {
   Sequential empty;
   ASSERT_THROWS_WITH(
-      empty->forward<int>(), "Cannot call forward() on an empty Sequential");
+      empty->forward(), "Cannot call forward() on an empty Sequential");
 }
 
 TEST_F(SequentialTest, CallingForwardChainsCorrectly) {
   struct MockModule : torch::nn::Module {
-    explicit MockModule(int value) : expected(value) {}
-    int expected;
-    int forward(int value) {
-      assert(value == expected);
+    explicit MockModule(int value) : expected(torch::tensor(value)) {}
+    torch::Tensor expected;
+    torch::Tensor forward(torch::Tensor value) {
+      assert((value == expected).item<bool>());
       return value + 1;
     }
   };
 
   Sequential sequential(MockModule{1}, MockModule{2}, MockModule{3});
 
-  ASSERT_EQ(sequential->forward<int>(1), 4);
+  ASSERT_TRUE((sequential->forward(torch::tensor(1)), torch::tensor(4)).item<float>());
 }
 
-TEST_F(SequentialTest, CallingForwardWithTheWrongReturnTypeThrows) {
+TEST_F(AnySequentialTest, CallingForwardWithTheWrongReturnTypeThrows) {
   struct M : public torch::nn::Module {
     int forward() {
       return 5;
     }
   };
 
-  Sequential sequential(M{});
+  AnySequential sequential(M{});
   ASSERT_EQ(sequential->forward<int>(), 5);
   ASSERT_THROWS_WITH(
       sequential->forward<float>(),
       "The type of the return value is int, but you asked for type float");
 }
 
-TEST_F(SequentialTest, TheReturnTypeOfForwardDefaultsToTensor) {
+TEST_F(AnySequentialTest, TheReturnTypeOfForwardDefaultsToTensor) {
   struct M : public torch::nn::Module {
     torch::Tensor forward(torch::Tensor v) {
       return v;
     }
   };
 
-  Sequential sequential(M{});
+  AnySequential sequential(M{});
   auto variable = torch::ones({3, 3}, torch::requires_grad());
   ASSERT_TRUE(sequential->forward(variable).equal(variable));
 }
@@ -274,22 +275,22 @@ TEST_F(SequentialTest, SanityCheckForHoldingStandardModules) {
 
 TEST_F(SequentialTest, ExtendPushesModulesFromOtherSequential) {
   struct A : torch::nn::Module {
-    int forward(int x) {
+    torch::Tensor forward(torch::Tensor x) {
       return x;
     }
   };
   struct B : torch::nn::Module {
-    int forward(int x) {
+    torch::Tensor forward(torch::Tensor x) {
       return x;
     }
   };
   struct C : torch::nn::Module {
-    int forward(int x) {
+    torch::Tensor forward(torch::Tensor x) {
       return x;
     }
   };
   struct D : torch::nn::Module {
-    int forward(int x) {
+    torch::Tensor forward(torch::Tensor x) {
       return x;
     }
   };
