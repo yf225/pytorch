@@ -354,37 +354,26 @@ class NestedIOFunction(Function):
             del self._to_save_nested
         return result
 
-    def backward(self, *gradients):
-        nested_gradients = _unflatten(gradients, self._nested_output)
-        result = self.backward_extended(*nested_gradients)
+    @staticmethod
+    def backward(ctx, *gradients):
+        nested_gradients = _unflatten(gradients, ctx._nested_output)
+        result = backward_extended(*nested_gradients)
         return tuple(_iter_None_tensors(result))
 
     __call__ = _do_forward
 
+    @staticmethod
     def forward(self, *args):
-        nested_tensors = _map_tensor_data(self._nested_input)
-        result = self.forward_extended(*nested_tensors)
-        del self._nested_input
-        self._nested_output = result
+        nested_tensors = _map_tensor_data(ctx._nested_input)
+        result = forward_extended(*nested_tensors)
+        del ctx._nested_input
+        ctx._nested_output = result
         return tuple(_iter_tensors(result))
 
-    def save_for_backward(self, *args):
-        self.to_save = tuple(_iter_tensors(args))
-        self._to_save_nested = args
-
-    @property
-    def saved_tensors(self):
-        flat_tensors = super(NestedIOFunction, self).saved_tensors
-        return _unflatten(flat_tensors, self._to_save_nested)
-
-    def mark_dirty(self, *args, **kwargs):
-        self.dirty_tensors = tuple(_iter_tensors((args, kwargs)))
-
-    def mark_non_differentiable(self, *args, **kwargs):
-        self.non_differentiable = tuple(_iter_tensors((args, kwargs)))
-
+    @staticmethod
     def forward_extended(self, *input):
         raise NotImplementedError
 
+    @staticmethod
     def backward_extended(self, *grad_output):
         raise NotImplementedError
