@@ -122,7 +122,7 @@ class AnySequentialImpl : public Cloneable<AnySequentialImpl> {
     for (const auto& module : modules_) {
       clone->push_back(module.clone(device));
     }
-    return clone;
+    return std::move(clone);
   }
 
   /// `reset()` is empty for `AnySequential`, since it does not have parameters
@@ -360,6 +360,8 @@ class AnySequentialImpl : public Cloneable<AnySequentialImpl> {
   // of the API. Note that this is not required otherwise, this could just be a
   // `vector<AnyModule>`.
   std::vector<AnyModule> modules_;
+
+  friend class SequentialImpl;
 };
 
 /// A `ModuleHolder` subclass for `AnySequentialImpl`.
@@ -383,6 +385,15 @@ class SequentialImpl : public AnySequentialImpl {
         "Can only call Sequential::forward with Tensor as output type."
         " If you would like to have a non-Tensor output type, please use AnySequential instead.");
     return AnySequentialImpl::forward(std::forward<InputTypes>(inputs)...);
+  }
+
+  std::shared_ptr<Module> clone(
+      const optional<Device>& device = nullopt) const override {
+    auto clone = std::make_shared<SequentialImpl>();
+    for (const auto& module : modules_) {
+      clone->push_back(module.clone(device));
+    }
+    return std::move(clone);
   }
 
   void pretty_print(std::ostream& stream) const override {

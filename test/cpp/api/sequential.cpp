@@ -208,7 +208,7 @@ TEST_F(SequentialTest, AccessWithPtr) {
 TEST_F(SequentialTest, CallingForwardOnEmptySequentialIsDisallowed) {
   Sequential empty;
   ASSERT_THROWS_WITH(
-      empty->forward(), "Cannot call forward() on an empty Sequential");
+      empty->forward(), "Cannot call forward() on an empty AnySequential");
 }
 
 TEST_F(SequentialTest, CallingForwardChainsCorrectly) {
@@ -216,14 +216,13 @@ TEST_F(SequentialTest, CallingForwardChainsCorrectly) {
     explicit MockModule(int value) : expected(torch::tensor(value)) {}
     torch::Tensor expected;
     torch::Tensor forward(torch::Tensor value) {
-      assert((value == expected).item<bool>());
+      assert(value.equal(expected));
       return value + 1;
     }
   };
 
   Sequential sequential(MockModule{1}, MockModule{2}, MockModule{3});
-
-  ASSERT_TRUE((sequential->forward(torch::tensor(1)), torch::tensor(4)).item<float>());
+  ASSERT_TRUE(sequential->forward(torch::tensor(1)).equal(torch::tensor(4)));
 }
 
 TEST_F(AnySequentialTest, CallingForwardWithTheWrongReturnTypeThrows) {
