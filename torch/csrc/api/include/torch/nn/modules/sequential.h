@@ -360,8 +360,6 @@ class AnySequentialImpl : public Cloneable<AnySequentialImpl> {
   // of the API. Note that this is not required otherwise, this could just be a
   // `vector<AnyModule>`.
   std::vector<AnyModule> modules_;
-
-  friend class SequentialImpl;
 };
 
 /// A `ModuleHolder` subclass for `AnySequentialImpl`.
@@ -372,7 +370,7 @@ TORCH_MODULE(AnySequential);
 
 /// `Sequential` is derived from `AnySequential` and has a non-template
 /// returning type allowing `Sequential`s to be nested in each other making them
-/// compatible with the python API. The template input type helps warn users
+/// compatible with the Python API. The template input type helps warn users
 /// about the change in the API.
 class SequentialImpl : public AnySequentialImpl {
  public:
@@ -387,15 +385,6 @@ class SequentialImpl : public AnySequentialImpl {
     return AnySequentialImpl::forward(std::forward<InputTypes>(inputs)...);
   }
 
-  std::shared_ptr<Module> clone(
-      const optional<Device>& device = nullopt) const override {
-    auto clone = std::make_shared<SequentialImpl>();
-    for (const auto& module : modules_) {
-      clone->push_back(module.clone(device));
-    }
-    return std::move(clone);
-  }
-
   void pretty_print(std::ostream& stream) const override {
     stream << "torch::nn::Sequential";
   }
@@ -405,7 +394,16 @@ class SequentialImpl : public AnySequentialImpl {
 /// See the documentation for `SequentialImpl` class to learn what methods it
 /// provides, or the documentation for `ModuleHolder` to learn about PyTorch's
 /// module storage semantics.
-TORCH_MODULE(Sequential);
+
+class Sequential : public torch::nn::ModuleHolder<SequentialImpl> {
+ public:
+  using torch::nn::ModuleHolder<SequentialImpl>::ModuleHolder;
+
+  Sequential(std::shared_ptr<AnySequentialImpl> any_impl) {
+    for (auto& module : *any_impl)
+      (*this)->push_back(std::move(module));
+  }
+};
 
 } // namespace nn
 } // namespace torch

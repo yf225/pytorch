@@ -24,7 +24,7 @@ struct SequentialTest : torch::test::SeedingFixture {};
 
 TEST_F(SequentialTest, ConstructsFromSharedPointer) {
   struct M : torch::nn::Module {
-      explicit M(int value_) : value(torch::tensor(value_)) { }
+    explicit M(int value_) : value(torch::tensor(value_)) {}
     torch::Tensor value;
     torch::Tensor forward() {
       return value;
@@ -34,11 +34,10 @@ TEST_F(SequentialTest, ConstructsFromSharedPointer) {
       std::make_shared<M>(1), std::make_shared<M>(2), std::make_shared<M>(3));
   ASSERT_EQ(sequential->size(), 3);
 
-  Sequential sequential_named(modules_ordered_dict({
-    {"m1", std::make_shared<M>(1)},
-    {std::string("m2"), std::make_shared<M>(2)},
-    {"m3", std::make_shared<M>(3)}
-  }));
+  Sequential sequential_named(
+      modules_ordered_dict({{"m1", std::make_shared<M>(1)},
+                            {std::string("m2"), std::make_shared<M>(2)},
+                            {"m3", std::make_shared<M>(3)}}));
   ASSERT_EQ(sequential->size(), 3);
 }
 
@@ -59,17 +58,15 @@ TEST_F(SequentialTest, ConstructsFromConcreteType) {
   copy_count = 0;
   Sequential sequential(M(1), M(2), M(3));
   ASSERT_EQ(sequential->size(), 3);
-  // NOTE: The current implementation expects each module to be copied exactly once,
-  // which happens when the module is passed into `std::make_shared<T>()`.
-  // TODO: Find a way to avoid copying, and then delete the copy constructor of `M`.
+  // NOTE: The current implementation expects each module to be copied exactly
+  // once, which happens when the module is passed into `std::make_shared<T>()`.
+  // TODO: Find a way to avoid copying, and then delete the copy constructor of
+  // `M`.
   ASSERT_EQ(copy_count, 3);
 
   copy_count = 0;
-  Sequential sequential_named(modules_ordered_dict({
-    {"m1", M(1)},
-    {std::string("m2"), M(2)},
-    {"m3", M(3)}
-  }));
+  Sequential sequential_named(modules_ordered_dict(
+      {{"m1", M(1)}, {std::string("m2"), M(2)}, {"m3", M(3)}}));
   ASSERT_EQ(sequential->size(), 3);
   ASSERT_EQ(copy_count, 3);
 }
@@ -91,11 +88,8 @@ TEST_F(SequentialTest, ConstructsFromModuleHolder) {
   Sequential sequential(M(1), M(2), M(3));
   ASSERT_EQ(sequential->size(), 3);
 
-  Sequential sequential_named(modules_ordered_dict({
-    {"m1", M(1)},
-    {std::string("m2"), M(2)},
-    {"m3", M(3)}
-  }));
+  Sequential sequential_named(modules_ordered_dict(
+      {{"m1", M(1)}, {std::string("m2"), M(2)}, {"m3", M(3)}}));
   ASSERT_EQ(sequential->size(), 3);
 }
 
@@ -316,6 +310,13 @@ TEST_F(SequentialTest, ExtendPushesModulesFromOtherSequential) {
   ASSERT_TRUE(b[1]->as<D>());
   ASSERT_TRUE(b[2]->as<A>());
   ASSERT_TRUE(b[3]->as<A>());
+
+  // Test case showing that nesting nn::Sequential is possible.
+  Sequential d(Sequential{}, Sequential{});
+
+  ASSERT_EQ(d->size(), 2);
+  ASSERT_TRUE(d[0]->as<Sequential>());
+  ASSERT_TRUE(d[1]->as<Sequential>());
 }
 
 TEST_F(SequentialTest, HasReferenceSemantics) {
@@ -405,14 +406,13 @@ TEST_F(SequentialTest, PrettyPrintSequential) {
       "  (5): torch::nn::LSTM(input_size=4, hidden_size=5, layers=1, dropout=0)\n"
       ")");
 
-  Sequential sequential_named(modules_ordered_dict({
-      {"linear", Linear(10, 3)},
-      {"conv2d", Conv2d(1, 2, 3)},
-      {"dropout", Dropout(0.5)},
-      {"batchnorm", BatchNorm(5)},
-      {"embedding", Embedding(4, 10)},
-      {"lstm", LSTM(4, 5)}
-  }));
+  Sequential sequential_named(
+      modules_ordered_dict({{"linear", Linear(10, 3)},
+                            {"conv2d", Conv2d(1, 2, 3)},
+                            {"dropout", Dropout(0.5)},
+                            {"batchnorm", BatchNorm(5)},
+                            {"embedding", Embedding(4, 10)},
+                            {"lstm", LSTM(4, 5)}}));
   ASSERT_EQ(
       c10::str(sequential_named),
       "torch::nn::Sequential(\n"
