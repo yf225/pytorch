@@ -240,8 +240,17 @@ class AnyModule::Value {
   Value& operator=(Value&&) = default;
 
   /// Copy is disallowed, because we don't need it.
-  Value(const Value& other) = delete;
-  Value& operator=(const Value& other) = delete;
+  Value(const Value& other) = default;
+  Value& operator=(const Value& other) = default;
+
+  /// Constructs the `Value` from value type.
+  template <
+      typename T,
+      typename =
+          torch::disable_if_t<std::is_same<autograd::Variable, T>::value>>
+  explicit Value(T&& value)
+      : content_(
+            torch::make_unique<Holder<decay_t<T>>>(std::forward<T>(value))) {}
 
   /// Returns a pointer to the value contained in the `Value` if the type passed
   /// as template parameter matches the type of the value stored, and returns a
@@ -284,15 +293,6 @@ class AnyModule::Value {
   friend class AnyModule;
   friend struct TestValue;
 
-  /// Constructs the `Value` from value type.
-  template <
-      typename T,
-      typename =
-          torch::disable_if_t<std::is_same<autograd::Variable, T>::value>>
-  explicit Value(T&& value)
-      : content_(
-            torch::make_unique<Holder<decay_t<T>>>(std::forward<T>(value))) {}
-
   /// Constructs the `Value` from an `autograd::Variable`, first converting it
   /// to a `torch::Tensor`.
   explicit Value(autograd::Variable variable)
@@ -322,7 +322,7 @@ class AnyModule::Value {
   };
 
   /// The type erased object.
-  std::unique_ptr<Placeholder> content_;
+  std::shared_ptr<Placeholder> content_;
 };
 
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~ AnyModule::Placeholder ~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -429,13 +429,13 @@ AnyModule::AnyModule(std::shared_ptr<ModuleType> module)
   static_assert(
       torch::detail::is_module<ModuleType>::value,
       "Can only store object derived from nn::Module into AnyModule");
-  static_assert(
-      torch::detail::has_forward<ModuleType>::value,
-      "Can only store module with a forward() method that has a non-templatized"
-      " return type into AnyModule (e.g. we cannot store nn::AnySequential"
-      " into AnyModule, because its forward() method's return type is templatized. "
-      "However, AnyModule can store nn::Sequential because its forward() method "
-      "has a non-templatized return type Tensor)");
+  // static_assert(
+  //     torch::detail::has_forward<ModuleType>::value,
+  //     "Can only store module with a forward() method that has a non-templatized"
+  //     " return type into AnyModule (e.g. we cannot store nn::AnySequential"
+  //     " into AnyModule, because its forward() method's return type is templatized. "
+  //     "However, AnyModule can store nn::Sequential because its forward() method "
+  //     "has a non-templatized return type Tensor)");
 }
 
 template <typename ModuleType, typename>

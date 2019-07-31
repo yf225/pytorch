@@ -376,14 +376,19 @@ class SequentialImpl : public AnySequentialImpl {
  public:
   using AnySequentialImpl::AnySequentialImpl;
 
-  template <typename ReturnType = Tensor, typename... InputTypes>
+  template <typename... InputTypes>
   Tensor forward(InputTypes&&... inputs) {
-    static_assert(
-        std::is_same<ReturnType, Tensor>(),
-        "Can only call Sequential::forward with Tensor as output type."
-        " If you would like to have a non-Tensor output type, please use AnySequential instead.");
-    return AnySequentialImpl::forward(std::forward<InputTypes>(inputs)...);
+    return Tensor();
   }
+
+  // template <typename ReturnType = Tensor, typename... InputTypes>
+  // Tensor forward(InputTypes&&... inputs) {
+  //   static_assert(
+  //       std::is_same<ReturnType, Tensor>(),
+  //       "Can only call Sequential::forward with Tensor as output type."
+  //       " If you would like to have a non-Tensor output type, please use AnySequential instead.");
+  //   return AnySequentialImpl::forward(std::forward<InputTypes>(inputs)...);
+  // }
 
   void pretty_print(std::ostream& stream) const override {
     stream << "torch::nn::Sequential";
@@ -394,16 +399,26 @@ class SequentialImpl : public AnySequentialImpl {
 /// See the documentation for `SequentialImpl` class to learn what methods it
 /// provides, or the documentation for `ModuleHolder` to learn about PyTorch's
 /// module storage semantics.
+TORCH_MODULE(Sequential);
 
-class Sequential : public torch::nn::ModuleHolder<SequentialImpl> {
- public:
-  using torch::nn::ModuleHolder<SequentialImpl>::ModuleHolder;
+// class Sequential : public AnySequential {
+//  public:
+//   using AnySequential::AnySequential;
 
-  Sequential(std::shared_ptr<AnySequentialImpl> any_impl) {
-    for (auto& module : *any_impl)
-      (*this)->push_back(std::move(module));
-  }
-};
+//   // explicit Sequential() : AnySequential() {}
+
+//   explicit Sequential(std::shared_ptr<Module> module_ptr) : AnySequential() {
+//     if (auto* any_seq = module_ptr->as<AnySequential>()) {
+//       (*this)->extend(*any_seq);
+//       // for (const auto& module : *any_seq) {
+//       //   (*this)->push_back(module);
+//       // }
+//     } else {
+//       // yf225 TODO
+//       AT_ERROR("some error message")
+//     }
+//   }
+// };
 
 } // namespace nn
 } // namespace torch
