@@ -112,7 +112,7 @@ TEST(SerializeTest, XOR) {
       inputs[i] = torch::randint(2, {2}, torch::kInt64);
       labels[i] = inputs[i][0].item<int64_t>() ^ inputs[i][1].item<int64_t>();
     }
-    auto x = model->forward<torch::Tensor>(inputs);
+    auto x = model->forward(inputs);
     return torch::binary_cross_entropy(x, labels);
   };
 
@@ -230,7 +230,7 @@ TEST(SerializeTest, XOR_CUDA) {
       inputs[i] = torch::randint(2, {2}, torch::kInt64);
       labels[i] = inputs[i][0].item<int64_t>() ^ inputs[i][1].item<int64_t>();
     }
-    auto x = model->forward<torch::Tensor>(inputs);
+    auto x = model->forward(inputs);
     return torch::binary_cross_entropy(x, labels);
   };
 
