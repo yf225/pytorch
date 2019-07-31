@@ -230,6 +230,17 @@ class AnySequentialImpl : public Cloneable<AnySequentialImpl> {
     push_back(std::move(name), module_holder.ptr());
   }
 
+  /// Adds a type-erased `AnyModule` to the `AnySequential`.
+  void push_back(AnyModule any_module) {
+    push_back(std::to_string(modules_.size()), std::move(any_module));
+  }
+
+  void push_back(std::string name, AnyModule any_module) {
+    modules_.push_back(std::move(any_module));
+    const auto index = modules_.size() - 1;
+    register_module(std::move(name), modules_[index].ptr());
+  }
+
   /// Iterates over the container and calls `push_back()` on each value.
   template <typename Container>
   void extend(const Container& container) {
@@ -342,17 +353,6 @@ class AnySequentialImpl : public Cloneable<AnySequentialImpl> {
     push_back(std::forward<Second>(second), std::forward<Rest>(rest)...);
   }
 
-  /// Adds a type-erased `AnyModule` to the `AnySequential`.
-  void push_back(AnyModule any_module) {
-    push_back(std::to_string(modules_.size()), std::move(any_module));
-  }
-
-  void push_back(std::string name, AnyModule any_module) {
-    modules_.push_back(std::move(any_module));
-    const auto index = modules_.size() - 1;
-    register_module(std::move(name), modules_[index].ptr());
-  }
-
   /// The base case, when the list of modules is empty.
   void push_back() {}
 
@@ -376,6 +376,16 @@ class SequentialImpl : public AnySequentialImpl {
  public:
   using AnySequentialImpl::AnySequentialImpl;
 
+  /// Constructs the `Sequential` from an `AnySequential`.
+  explicit SequentialImpl(std::shared_ptr<Module> module_ptr) {
+    if (auto* any_seq_impl = module_ptr->as<AnySequentialImpl>()) {
+      for(auto it = any_seq_impl->begin(); it != any_seq_impl->end(); it++) push_back(*it);
+    } else {
+      // yf225 TODO: fill this out!
+      AT_ERROR("some error message");
+    }
+  }
+
   template <typename ReturnType = Tensor, typename... InputTypes>
   Tensor forward(InputTypes&&... inputs) {
     static_assert(
@@ -394,16 +404,7 @@ class SequentialImpl : public AnySequentialImpl {
 /// See the documentation for `SequentialImpl` class to learn what methods it
 /// provides, or the documentation for `ModuleHolder` to learn about PyTorch's
 /// module storage semantics.
-
-class Sequential : public torch::nn::ModuleHolder<SequentialImpl> {
- public:
-  using torch::nn::ModuleHolder<SequentialImpl>::ModuleHolder;
-
-  Sequential(std::shared_ptr<AnySequentialImpl> any_impl) {
-    for (auto& module : *any_impl)
-      (*this)->push_back(std::move(module));
-  }
-};
+TORCH_MODULE(Sequential);
 
 } // namespace nn
 } // namespace torch
