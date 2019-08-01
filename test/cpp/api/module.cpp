@@ -358,8 +358,7 @@ TEST_F(ModuleTest, ClonePreservesExternalReferences) {
       pointer_equal(module->weight, module->named_parameters()["weight"]));
   ASSERT_TRUE(module->weight.allclose(module->named_parameters()["weight"]));
 
-  auto module2 = std::dynamic_pointer_cast<TestModule>(
-      std::shared_ptr<Module>(module->clone()));
+  std::shared_ptr<TestModule> module2 = module->clone();
   ASSERT_FALSE(pointer_equal(module2->weight, module->weight));
   ASSERT_TRUE(
       pointer_equal(module2->weight, module2->named_parameters()["weight"]));
@@ -398,7 +397,7 @@ TEST_F(ModuleTest, CloneCopiesTheValuesOfVariablesOfSubmodules) {
     a->module->value = 123;
   }
 
-  auto b = std::dynamic_pointer_cast<NestedModule>(a->clone());
+  std::shared_ptr<NestedModule> b = a->clone();
 
   ASSERT_FALSE(pointer_equal(b->module->weight, a->module->weight));
   ASSERT_TRUE(pointer_equal(

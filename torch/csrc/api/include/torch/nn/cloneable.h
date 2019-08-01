@@ -24,6 +24,12 @@ class Cloneable : public virtual Module {
  public:
   using Module::Module;
 
+  // /* implicit */ Cloneable(std::shared_ptr<torch::nn::Module> module)
+  //     : impl_(std::dynamic_pointer_cast<Contained>(std::move(module))) {
+  //   // yf225 TODO: improve err msg
+  //   TORCH_CHECK(impl_, "wrong container type!");
+  // }
+
   /// `reset()` must perform initialization of all members with reference
   /// semantics, most importantly parameters, buffers and submodules.
   virtual void reset() = 0;
@@ -31,8 +37,8 @@ class Cloneable : public virtual Module {
   /// Performs a recursive "deep copy" of the `Module`, such that all parameters
   /// and submodules in the cloned module are different from those in the
   /// original module.
-  std::shared_ptr<Module> clone(
-      const optional<Device>& device = nullopt) const override {
+  std::shared_ptr<Derived> clone(
+      const optional<Device>& device = nullopt) const {
     NoGradGuard no_grad;
 
     const auto& self = static_cast<const Derived&>(*this);
@@ -82,7 +88,7 @@ class Cloneable : public virtual Module {
     // Here we are *pretty* certain that `other's` type is `Derived` (because it
     // was registered under the same name as `this`), but you never know what
     // crazy things `reset()` does, so `dynamic_cast` just to be safe.
-    auto clone = std::dynamic_pointer_cast<Derived>(other.clone(device));
+    auto clone = dynamic_cast<Derived&>(other).clone(device);
     TORCH_CHECK(
         clone != nullptr,
         "Attempted to clone submodule, but it is of a "

@@ -335,8 +335,7 @@ TEST_F(SequentialTest, HasReferenceSemantics) {
 
 TEST_F(SequentialTest, IsCloneable) {
   Sequential sequential(Linear(3, 4), Functional(torch::relu), BatchNorm(3));
-  Sequential clone =
-      std::dynamic_pointer_cast<SequentialImpl>(sequential->clone());
+  Sequential clone = sequential->clone();
   ASSERT_EQ(sequential->size(), clone->size());
 
   for (size_t i = 0; i < sequential->size(); ++i) {
@@ -376,8 +375,7 @@ TEST_F(SequentialTest, RegistersElementsAsSubmodules) {
 TEST_F(SequentialTest, CloneToDevice_CUDA) {
   Sequential sequential(Linear(3, 4), Functional(torch::relu), BatchNorm(3));
   torch::Device device(torch::kCUDA, 0);
-  Sequential clone =
-      std::dynamic_pointer_cast<SequentialImpl>(sequential->clone(device));
+  Sequential clone = sequential->clone(device);
   for (const auto& p : clone->parameters()) {
     ASSERT_EQ(p.device(), device);
   }

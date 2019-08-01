@@ -109,8 +109,8 @@ class TORCH_API Module : public std::enable_shared_from_this<Module> {
   ///   `Module`. This method is provided on the base class' API solely for an
   ///   easier-to-use polymorphic interface.
   /// \endrst
-  virtual std::shared_ptr<Module> clone(
-      const optional<Device>& device = nullopt) const;
+  // virtual std::shared_ptr<Module> clone(
+  //     const optional<Device>& device = nullopt) const;
 
   /// Applies the `function` to the `Module` and recursively to every submodule.
   /// The function must accept a `Module&`.

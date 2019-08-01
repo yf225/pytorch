@@ -110,10 +110,10 @@ TEST_F(ParallelTest, Replicate_MultiCUDA) {
 TEST_F(ParallelTest, ParallelApply_MultiCUDA) {
   Linear a(3, 4);
 
-  Linear b(std::dynamic_pointer_cast<LinearImpl>(a->clone()));
+  Linear b(a->clone());
   b->to({torch::kCUDA, 0});
 
-  Linear c(std::dynamic_pointer_cast<LinearImpl>(a->clone()));
+  Linear c(a->clone());
   c->to({torch::kCUDA, 1});
 
   std::vector<Linear> modules = {a, b, c};
@@ -255,7 +255,7 @@ TEST_F(ParallelTest, DataParallelNumericalEquivalence_MultiCUDA) {
     auto input = torch::ones({16, 2, 3, 3});
     auto input_dp = torch::ones({16, 2, 3, 3});
     auto model = std::make_shared<M>();
-    auto model_dp = std::dynamic_pointer_cast<M>(model->clone());
+    M model_dp = model->clone();
 
     // run 3 training iterations
     for (int i = 0; i < 3; ++i) {

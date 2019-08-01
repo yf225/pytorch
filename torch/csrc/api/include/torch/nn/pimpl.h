@@ -70,6 +70,12 @@ class ModuleHolder : torch::detail::ModuleHolderIndicator {
   /* implicit */ ModuleHolder(std::shared_ptr<Contained> module)
       : impl_(std::move(module)) {}
 
+  /* implicit */ ModuleHolder(std::shared_ptr<torch::nn::Module> module)
+      : impl_(std::dynamic_pointer_cast<Contained>(std::move(module))) {
+    // yf225 TODO: improve err msg
+    TORCH_CHECK(impl_, "wrong container type!");
+  }
+
   /// Returns true if the `ModuleHolder` contains a module, or false if it is
   /// `nullptr`.
   explicit operator bool() const noexcept {
