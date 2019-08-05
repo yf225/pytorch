@@ -14,44 +14,6 @@
 namespace torch {
 namespace nn {
 namespace init {
-namespace {
-struct Fan {
-  explicit Fan(Tensor& tensor) {
-    const auto dimensions = tensor.ndimension();
-    TORCH_CHECK(
-        dimensions >= 2,
-        "Fan in and fan out can not be computed for tensor with fewer than 2 dimensions");
-
-    if (dimensions == 2) {
-      in = tensor.size(1);
-      out = tensor.size(0);
-    } else {
-      in = tensor.size(1) * tensor[0][0].numel();
-      out = tensor.size(0) * tensor[0][0].numel();
-    }
-  }
-
-  int64_t in;
-  int64_t out;
-};
-
-double calculate_kaiming_std(
-    Tensor tensor,
-    double a,
-    FanMode mode,
-    Nonlinearity nonlinearity) {
-  NoGradGuard guard;
-  Fan fan(tensor);
-  const auto gain = calculate_gain(nonlinearity, a);
-  double std = 0.0;
-  if (mode == FanMode::FanIn) {
-    std = gain / std::sqrt(fan.in);
-  } else {
-    std = gain / std::sqrt(fan.out);
-  }
-  return std;
-}
-} // namespace
 
 double calculate_gain(Nonlinearity nonlinearity, double param) {
   if (nonlinearity == Nonlinearity::Tanh) {
@@ -63,6 +25,67 @@ double calculate_gain(Nonlinearity nonlinearity, double param) {
   }
 
   return 1.0;
+}
+
+/*
+def _calculate_fan_in_and_fan_out(tensor):
+    dimensions = tensor.dim()
+    if dimensions < 2:
+        raise ValueError("Fan in and fan out can not be computed for tensor with fewer than 2 dimensions")
+
+    if dimensions == 2:  # Linear
+        fan_in = tensor.size(1)
+        fan_out = tensor.size(0)
+    else:
+        num_input_fmaps = tensor.size(1)
+        num_output_fmaps = tensor.size(0)
+        receptive_field_size = 1
+        if tensor.dim() > 2:
+            receptive_field_size = tensor[0][0].numel()
+        fan_in = num_input_fmaps * receptive_field_size
+        fan_out = num_output_fmaps * receptive_field_size
+
+    return fan_in, fan_out
+*/
+
+std::pair<int64_t, int64_t> _calculate_fan_in_and_fan_out(Tensor tensor) {
+  const auto dimensions = tensor.dim();
+  TORCH_CHECK(
+      dimensions >= 2,
+      "Fan in and fan out can not be computed for tensor with fewer than 2 dimensions");
+
+  int64_t fan_in, fan_out;
+  if (dimensions == 2) {  // Linear
+    fan_in = tensor.size(1);
+    fan_out = tensor.size(0);
+  } else {
+    const auto num_input_fmaps = tensor.size(1);
+    const auto num_output_fmaps = tensor.size(0);
+    auto receptive_field_size = 1;
+    if (tensor.dim() > 2) {
+      receptive_field_size = tensor[0][0].numel();
+    }
+    fan_in = num_input_fmaps * receptive_field_size;
+    fan_out = num_output_fmaps * receptive_field_size;
+  }
+  return {fan_in, fan_out};
+}
+
+/*
+def _calculate_correct_fan(tensor, mode):
+    mode = mode.lower()
+    valid_modes = ['fan_in', 'fan_out']
+    if mode not in valid_modes:
+        raise ValueError("Mode {} not supported, please use one of {}".format(mode, valid_modes))
+
+    fan_in, fan_out = _calculate_fan_in_and_fan_out(tensor)
+    return fan_in if mode == 'fan_in' else fan_out
+*/
+
+int64_t _calculate_correct_fan(Tensor tensor, FanMode mode) {
+  int64_t fan_in, fan_out;
+  std::tie(fan_in, fan_out) = _calculate_fan_in_and_fan_out(tensor);
+  return (mode == FanMode::FanIn) ? fan_in : fan_out;
 }
 
 Tensor constant_(Tensor tensor, Scalar value) {
@@ -180,10 +203,20 @@ Tensor kaiming_uniform_(
     double a,
     FanMode mode,
     Nonlinearity nonlinearity) {
+/*
+fan = _calculate_correct_fan(tensor, mode)
+gain = calculate_gain(nonlinearity, a)
+std = gain / math.sqrt(fan)
+bound = math.sqrt(3.0) * std  # Calculate uniform bounds from standard deviation
+with torch.no_grad():
+    return tensor.uniform_(-bound, bound)
+*/
+
+  const auto fan = _calculate_correct_fan(tensor, mode);
+  const auto gain = calculate_gain(nonlinearity, a);
+  const auto std = gain / std::sqrt(fan);
+  const auto bound = std::sqrt(3.0) * std;  // Calculate uniform bounds from standard deviation
   NoGradGuard guard;
-  auto std = calculate_kaiming_std(tensor, a, mode, nonlinearity);
-  // Calculate uniform bounds from standard deviation
-  const auto bound = std::sqrt(3.0) * std;
   return tensor.uniform_(-bound, bound);
 }
 
@@ -192,26 +225,50 @@ Tensor kaiming_normal_(
     double a,
     FanMode mode,
     Nonlinearity nonlinearity) {
+/*
+fan = _calculate_correct_fan(tensor, mode)
+gain = calculate_gain(nonlinearity, a)
+std = gain / math.sqrt(fan)
+with torch.no_grad():
+    return tensor.normal_(0, std)
+*/
+  
+  const auto fan = _calculate_correct_fan(tensor, mode);
+  const auto gain = calculate_gain(nonlinearity, a);
+  const auto std = gain / std::sqrt(fan);
   NoGradGuard guard;
-
-  auto std = calculate_kaiming_std(tensor, a, mode, nonlinearity);
   return tensor.normal_(0, std);
 }
 
 Tensor xavier_normal_(Tensor tensor, double gain) {
-  NoGradGuard guard;
+/*
+fan_in, fan_out = _calculate_fan_in_and_fan_out(tensor)
+std = gain * math.sqrt(2.0 / float(fan_in + fan_out))
 
-  Fan fan(tensor);
-  const auto std = gain * std::sqrt(2.0 / (fan.in + fan.out));
+return _no_grad_normal_(tensor, 0., std)
+*/
+  int64_t fan_in, fan_out;
+  std::tie(fan_in, fan_out) = _calculate_fan_in_and_fan_out(tensor);
+  const auto std = gain * std::sqrt(2.0 / (fan_in + fan_out));
+
+  NoGradGuard guard;
   return tensor.normal_(0, std);
 }
 
 Tensor xavier_uniform_(Tensor tensor, double gain) {
+/*
+fan_in, fan_out = _calculate_fan_in_and_fan_out(tensor)
+std = gain * math.sqrt(2.0 / float(fan_in + fan_out))
+a = math.sqrt(3.0) * std  # Calculate uniform bounds from standard deviation
+
+return _no_grad_uniform_(tensor, -a, a)
+*/
+  int64_t fan_in, fan_out;
+  std::tie(fan_in, fan_out) = _calculate_fan_in_and_fan_out(tensor);
+  const auto std = gain * std::sqrt(2.0 / (fan_in + fan_out));
+  const auto a = std::sqrt(3.0) * std;  // Calculate uniform bounds from standard deviation
+
   NoGradGuard guard;
-  Fan fan(tensor);
-  const auto std = gain * std::sqrt(2.0 / (fan.in + fan.out));
-  // Calculate uniform bounds from standard deviation with
-  const auto a = std::sqrt(3.0) * std;
   return tensor.uniform_(-a, a);
 }
 

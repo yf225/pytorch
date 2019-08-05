@@ -26,6 +26,8 @@ enum class FanMode { FanIn, FanOut };
 /// Return the recommended gain value for the given nonlinearity function.
 TORCH_API double calculate_gain(Nonlinearity nonlinearity, double param = 0.01);
 
+TORCH_API std::pair<int64_t, int64_t> _calculate_fan_in_and_fan_out(Tensor tensor);
+
 /// Fills the given `tensor` with the provided `value` in-place, and returns it.
 /// No gradient will be recorded for this operation.
 TORCH_API Tensor constant_(Tensor tensor, Scalar value);

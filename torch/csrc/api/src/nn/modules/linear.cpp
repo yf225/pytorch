@@ -2,6 +2,7 @@
 
 #include <torch/types.h>
 #include <torch/utils.h>
+#include <torch/nn/init.h>
 
 #include <cmath>
 #include <cstdint>
@@ -21,10 +22,19 @@ void LinearImpl::reset() {
     bias = register_parameter("bias", torch::empty(options.out_));
   }
 
-  const auto stdv = 1.0 / std::sqrt(weight.size(1));
-  NoGradGuard no_grad;
-  for (auto& p : this->parameters()) {
-    p.uniform_(-stdv, stdv);
+/*
+init.kaiming_uniform_(self.weight, a=math.sqrt(5))
+if self.bias is not None:
+    fan_in, _ = init._calculate_fan_in_and_fan_out(self.weight)
+    bound = 1 / math.sqrt(fan_in)
+    init.uniform_(self.bias, -bound, bound)
+*/
+  init::kaiming_uniform_(weight, /*a=*/std::sqrt(5));
+  if (bias.defined()) {
+    int64_t fan_in, fan_out;
+    std::tie(fan_in, fan_out) = init::_calculate_fan_in_and_fan_out(weight);
+    const auto bound = 1 / std::sqrt(fan_in);
+    init::uniform_(bias, -bound, bound);
   }
 }
 
