@@ -19,7 +19,6 @@ import torch.distributed as dist
 
 TESTS = [
     'autograd',
-    'cpp_api_parity',
     'cpp_extensions',
     'c10d',
     'c10d_spawn',
