@@ -1826,6 +1826,102 @@ jobs:
       - image: "soumith/manylinux-cuda100"
     <<: *binary_linux_build
 
+  binary_linux_libtorch_2.7m_cpu_gcc5.4_cxx11_shared-with-deps_build:
+    environment:
+      BUILD_ENVIRONMENT: "libtorch 2.7m cpu gcc5.4_cxx11"
+      LIBTORCH_VARIANT: "shared-with-deps"
+    docker:
+      - image: "soumith/manylinux-cuda100"
+    <<: *binary_linux_build
+
+  binary_linux_libtorch_2.7m_cpu_gcc5.4_cxx11_shared-without-deps_build:
+    environment:
+      BUILD_ENVIRONMENT: "libtorch 2.7m cpu gcc5.4_cxx11"
+      LIBTORCH_VARIANT: "shared-without-deps"
+    docker:
+      - image: "soumith/manylinux-cuda100"
+    <<: *binary_linux_build
+
+  binary_linux_libtorch_2.7m_cpu_gcc5.4_cxx11_static-with-deps_build:
+    environment:
+      BUILD_ENVIRONMENT: "libtorch 2.7m cpu gcc5.4_cxx11"
+      LIBTORCH_VARIANT: "static-with-deps"
+    docker:
+      - image: "soumith/manylinux-cuda100"
+    <<: *binary_linux_build
+
+  binary_linux_libtorch_2.7m_cpu_gcc5.4_cxx11_static-without-deps_build:
+    environment:
+      BUILD_ENVIRONMENT: "libtorch 2.7m cpu gcc5.4_cxx11"
+      LIBTORCH_VARIANT: "static-without-deps"
+    docker:
+      - image: "soumith/manylinux-cuda100"
+    <<: *binary_linux_build
+
+  binary_linux_libtorch_2.7m_cu92_gcc5.4_cxx11_shared-with-deps_build:
+    environment:
+      BUILD_ENVIRONMENT: "libtorch 2.7m cu92 gcc5.4_cxx11"
+      LIBTORCH_VARIANT: "shared-with-deps"
+    docker:
+      - image: "soumith/manylinux-cuda92"
+    <<: *binary_linux_build
+
+  binary_linux_libtorch_2.7m_cu92_gcc5.4_cxx11_shared-without-deps_build:
+    environment:
+      BUILD_ENVIRONMENT: "libtorch 2.7m cu92 gcc5.4_cxx11"
+      LIBTORCH_VARIANT: "shared-without-deps"
+    docker:
+      - image: "soumith/manylinux-cuda92"
+    <<: *binary_linux_build
+
+  binary_linux_libtorch_2.7m_cu92_gcc5.4_cxx11_static-with-deps_build:
+    environment:
+      BUILD_ENVIRONMENT: "libtorch 2.7m cu92 gcc5.4_cxx11"
+      LIBTORCH_VARIANT: "static-with-deps"
+    docker:
+      - image: "soumith/manylinux-cuda92"
+    <<: *binary_linux_build
+
+  binary_linux_libtorch_2.7m_cu92_gcc5.4_cxx11_static-without-deps_build:
+    environment:
+      BUILD_ENVIRONMENT: "libtorch 2.7m cu92 gcc5.4_cxx11"
+      LIBTORCH_VARIANT: "static-without-deps"
+    docker:
+      - image: "soumith/manylinux-cuda92"
+    <<: *binary_linux_build
+
+  binary_linux_libtorch_2.7m_cu100_gcc5.4_cxx11_shared-with-deps_build:
+    environment:
+      BUILD_ENVIRONMENT: "libtorch 2.7m cu100 gcc5.4_cxx11"
+      LIBTORCH_VARIANT: "shared-with-deps"
+    docker:
+      - image: "soumith/manylinux-cuda100"
+    <<: *binary_linux_build
+
+  binary_linux_libtorch_2.7m_cu100_gcc5.4_cxx11_shared-without-deps_build:
+    environment:
+      BUILD_ENVIRONMENT: "libtorch 2.7m cu100 gcc5.4_cxx11"
+      LIBTORCH_VARIANT: "shared-without-deps"
+    docker:
+      - image: "soumith/manylinux-cuda100"
+    <<: *binary_linux_build
+
+  binary_linux_libtorch_2.7m_cu100_gcc5.4_cxx11_static-with-deps_build:
+    environment:
+      BUILD_ENVIRONMENT: "libtorch 2.7m cu100 gcc5.4_cxx11"
+      LIBTORCH_VARIANT: "static-with-deps"
+    docker:
+      - image: "soumith/manylinux-cuda100"
+    <<: *binary_linux_build
+
+  binary_linux_libtorch_2.7m_cu100_gcc5.4_cxx11_static-without-deps_build:
+    environment:
+      BUILD_ENVIRONMENT: "libtorch 2.7m cu100 gcc5.4_cxx11"
+      LIBTORCH_VARIANT: "static-without-deps"
+    docker:
+      - image: "soumith/manylinux-cuda100"
+    <<: *binary_linux_build
+
   binary_macos_wheel_2.7_cpu_build:
     environment:
       BUILD_ENVIRONMENT: "wheel 2.7 cpu"
@@ -2301,6 +2397,78 @@ jobs:
   binary_linux_libtorch_2.7m_cu100_devtoolset7_static-without-deps_upload:
     environment:
       BUILD_ENVIRONMENT: "libtorch 2.7m cu100 devtoolset7"
+      LIBTORCH_VARIANT: "static-without-deps"
+    <<: *binary_linux_upload
+
+  binary_linux_libtorch_2.7m_cpu_gcc5.4_cxx11_shared-with-deps_upload:
+    environment:
+      BUILD_ENVIRONMENT: "libtorch 2.7m cpu gcc5.4_cxx11"
+      LIBTORCH_VARIANT: "shared-with-deps"
+    <<: *binary_linux_upload
+
+  binary_linux_libtorch_2.7m_cpu_gcc5.4_cxx11_shared-without-deps_upload:
+    environment:
+      BUILD_ENVIRONMENT: "libtorch 2.7m cpu gcc5.4_cxx11"
+      LIBTORCH_VARIANT: "shared-without-deps"
+    <<: *binary_linux_upload
+
+  binary_linux_libtorch_2.7m_cpu_gcc5.4_cxx11_static-with-deps_upload:
+    environment:
+      BUILD_ENVIRONMENT: "libtorch 2.7m cpu gcc5.4_cxx11"
+      LIBTORCH_VARIANT: "static-with-deps"
+    <<: *binary_linux_upload
+
+  binary_linux_libtorch_2.7m_cpu_gcc5.4_cxx11_static-without-deps_upload:
+    environment:
+      BUILD_ENVIRONMENT: "libtorch 2.7m cpu gcc5.4_cxx11"
+      LIBTORCH_VARIANT: "static-without-deps"
+    <<: *binary_linux_upload
+
+  binary_linux_libtorch_2.7m_cu92_gcc5.4_cxx11_shared-with-deps_upload:
+    environment:
+      BUILD_ENVIRONMENT: "libtorch 2.7m cu92 gcc5.4_cxx11"
+      LIBTORCH_VARIANT: "shared-with-deps"
+    <<: *binary_linux_upload
+
+  binary_linux_libtorch_2.7m_cu92_gcc5.4_cxx11_shared-without-deps_upload:
+    environment:
+      BUILD_ENVIRONMENT: "libtorch 2.7m cu92 gcc5.4_cxx11"
+      LIBTORCH_VARIANT: "shared-without-deps"
+    <<: *binary_linux_upload
+
+  binary_linux_libtorch_2.7m_cu92_gcc5.4_cxx11_static-with-deps_upload:
+    environment:
+      BUILD_ENVIRONMENT: "libtorch 2.7m cu92 gcc5.4_cxx11"
+      LIBTORCH_VARIANT: "static-with-deps"
+    <<: *binary_linux_upload
+
+  binary_linux_libtorch_2.7m_cu92_gcc5.4_cxx11_static-without-deps_upload:
+    environment:
+      BUILD_ENVIRONMENT: "libtorch 2.7m cu92 gcc5.4_cxx11"
+      LIBTORCH_VARIANT: "static-without-deps"
+    <<: *binary_linux_upload
+
+  binary_linux_libtorch_2.7m_cu100_gcc5.4_cxx11_shared-with-deps_upload:
+    environment:
+      BUILD_ENVIRONMENT: "libtorch 2.7m cu100 gcc5.4_cxx11"
+      LIBTORCH_VARIANT: "shared-with-deps"
+    <<: *binary_linux_upload
+
+  binary_linux_libtorch_2.7m_cu100_gcc5.4_cxx11_shared-without-deps_upload:
+    environment:
+      BUILD_ENVIRONMENT: "libtorch 2.7m cu100 gcc5.4_cxx11"
+      LIBTORCH_VARIANT: "shared-without-deps"
+    <<: *binary_linux_upload
+
+  binary_linux_libtorch_2.7m_cu100_gcc5.4_cxx11_static-with-deps_upload:
+    environment:
+      BUILD_ENVIRONMENT: "libtorch 2.7m cu100 gcc5.4_cxx11"
+      LIBTORCH_VARIANT: "static-with-deps"
+    <<: *binary_linux_upload
+
+  binary_linux_libtorch_2.7m_cu100_gcc5.4_cxx11_static-without-deps_upload:
+    environment:
+      BUILD_ENVIRONMENT: "libtorch 2.7m cu100 gcc5.4_cxx11"
       LIBTORCH_VARIANT: "static-without-deps"
     <<: *binary_linux_upload
 
@@ -3273,6 +3441,42 @@ workflows:
       - binary_linux_libtorch_2.7m_cu100_devtoolset7_static-without-deps_build:
           requires:
             - setup
+      - binary_linux_libtorch_2.7m_cpu_gcc5.4_cxx11_shared-with-deps_build:
+          requires:
+            - setup
+      - binary_linux_libtorch_2.7m_cpu_gcc5.4_cxx11_shared-without-deps_build:
+          requires:
+            - setup
+      - binary_linux_libtorch_2.7m_cpu_gcc5.4_cxx11_static-with-deps_build:
+          requires:
+            - setup
+      - binary_linux_libtorch_2.7m_cpu_gcc5.4_cxx11_static-without-deps_build:
+          requires:
+            - setup
+      - binary_linux_libtorch_2.7m_cu92_gcc5.4_cxx11_shared-with-deps_build:
+          requires:
+            - setup
+      - binary_linux_libtorch_2.7m_cu92_gcc5.4_cxx11_shared-without-deps_build:
+          requires:
+            - setup
+      - binary_linux_libtorch_2.7m_cu92_gcc5.4_cxx11_static-with-deps_build:
+          requires:
+            - setup
+      - binary_linux_libtorch_2.7m_cu92_gcc5.4_cxx11_static-without-deps_build:
+          requires:
+            - setup
+      - binary_linux_libtorch_2.7m_cu100_gcc5.4_cxx11_shared-with-deps_build:
+          requires:
+            - setup
+      - binary_linux_libtorch_2.7m_cu100_gcc5.4_cxx11_shared-without-deps_build:
+          requires:
+            - setup
+      - binary_linux_libtorch_2.7m_cu100_gcc5.4_cxx11_static-with-deps_build:
+          requires:
+            - setup
+      - binary_linux_libtorch_2.7m_cu100_gcc5.4_cxx11_static-without-deps_build:
+          requires:
+            - setup
       - binary_macos_wheel_2.7_cpu_build:
           requires:
             - setup
@@ -3618,6 +3822,66 @@ workflows:
           requires:
             - setup
             - binary_linux_libtorch_2.7m_cu100_devtoolset7_static-without-deps_build
+      - binary_linux_libtorch_2.7m_cpu_gcc5.4_cxx11_shared-with-deps_upload:
+          context: org-member
+          requires:
+            - setup
+            - binary_linux_libtorch_2.7m_cpu_gcc5.4_cxx11_shared-with-deps_build
+      - binary_linux_libtorch_2.7m_cpu_gcc5.4_cxx11_shared-without-deps_upload:
+          context: org-member
+          requires:
+            - setup
+            - binary_linux_libtorch_2.7m_cpu_gcc5.4_cxx11_shared-without-deps_build
+      - binary_linux_libtorch_2.7m_cpu_gcc5.4_cxx11_static-with-deps_upload:
+          context: org-member
+          requires:
+            - setup
+            - binary_linux_libtorch_2.7m_cpu_gcc5.4_cxx11_static-with-deps_build
+      - binary_linux_libtorch_2.7m_cpu_gcc5.4_cxx11_static-without-deps_upload:
+          context: org-member
+          requires:
+            - setup
+            - binary_linux_libtorch_2.7m_cpu_gcc5.4_cxx11_static-without-deps_build
+      - binary_linux_libtorch_2.7m_cu92_gcc5.4_cxx11_shared-with-deps_upload:
+          context: org-member
+          requires:
+            - setup
+            - binary_linux_libtorch_2.7m_cu92_gcc5.4_cxx11_shared-with-deps_build
+      - binary_linux_libtorch_2.7m_cu92_gcc5.4_cxx11_shared-without-deps_upload:
+          context: org-member
+          requires:
+            - setup
+            - binary_linux_libtorch_2.7m_cu92_gcc5.4_cxx11_shared-without-deps_build
+      - binary_linux_libtorch_2.7m_cu92_gcc5.4_cxx11_static-with-deps_upload:
+          context: org-member
+          requires:
+            - setup
+            - binary_linux_libtorch_2.7m_cu92_gcc5.4_cxx11_static-with-deps_build
+      - binary_linux_libtorch_2.7m_cu92_gcc5.4_cxx11_static-without-deps_upload:
+          context: org-member
+          requires:
+            - setup
+            - binary_linux_libtorch_2.7m_cu92_gcc5.4_cxx11_static-without-deps_build
+      - binary_linux_libtorch_2.7m_cu100_gcc5.4_cxx11_shared-with-deps_upload:
+          context: org-member
+          requires:
+            - setup
+            - binary_linux_libtorch_2.7m_cu100_gcc5.4_cxx11_shared-with-deps_build
+      - binary_linux_libtorch_2.7m_cu100_gcc5.4_cxx11_shared-without-deps_upload:
+          context: org-member
+          requires:
+            - setup
+            - binary_linux_libtorch_2.7m_cu100_gcc5.4_cxx11_shared-without-deps_build
+      - binary_linux_libtorch_2.7m_cu100_gcc5.4_cxx11_static-with-deps_upload:
+          context: org-member
+          requires:
+            - setup
+            - binary_linux_libtorch_2.7m_cu100_gcc5.4_cxx11_static-with-deps_build
+      - binary_linux_libtorch_2.7m_cu100_gcc5.4_cxx11_static-without-deps_upload:
+          context: org-member
+          requires:
+            - setup
+            - binary_linux_libtorch_2.7m_cu100_gcc5.4_cxx11_static-without-deps_build
       - binary_macos_wheel_2.7_cpu_upload:
           context: org-member
           requires:
