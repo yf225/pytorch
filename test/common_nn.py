@@ -3162,6 +3162,9 @@ class TestBase(object):
 
     def get_name(self):
         if self.fullname is not None:
+            # yf225 TODO debug
+            print(self.fullname)
+            raise Exception("fullname should not be used anymore!")
             return 'test_' + self.fullname
 
         test_name = 'test_' + self.constructor.__name__

@@ -9785,6 +9785,9 @@ for test_params in module_tests + new_module_tests:
     if 'check_with_long_tensor' in test_params:
         fullname = test_params.get('fullname', None)
         if fullname:
+            # yf225 TODO debug
+            print(test_params)
+            raise Exception("fullname should not be used anymore!")
             test_params['fullname'] = fullname + '_with_long_tensor'
         else:
             desc = test_params.get('desc', None)
