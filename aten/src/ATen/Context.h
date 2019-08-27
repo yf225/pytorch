@@ -127,6 +127,7 @@ CAFFE2_API Context& globalContext();
 
 static inline void init() {
   globalContext();
+  at::init_num_threads();
 }
 
 CAFFE2_API Allocator* getCPUAllocator();
