@@ -138,4 +138,15 @@ void load(std::vector<torch::Tensor>& tensor_vec, LoadFromArgs&&... args) {
     index++;
   }
 }
+
+/*
+template <typename Value, typename... LoadFromArgs>
+Value load(LoadFromArgs&&... args) {
+  Value value;
+  serialize::InputArchive archive;
+  archive.load_from(std::forward<LoadFromArgs>(args)...);
+  archive >> value;
+  return value;
+}
+*/
 } // namespace torch

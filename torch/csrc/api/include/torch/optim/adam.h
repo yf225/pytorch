@@ -20,12 +20,12 @@ namespace optim {
 
 struct TORCH_API AdamOptions {
   /* implicit */ AdamOptions(double learning_rate);
-  TORCH_ARG(double, learning_rate);
-  TORCH_ARG(double, beta1) = 0.9;
-  TORCH_ARG(double, beta2) = 0.999;
-  TORCH_ARG(double, weight_decay) = 0;
-  TORCH_ARG(double, eps) = 1e-8;
-  TORCH_ARG(bool, amsgrad) = false;
+  TORCH_OPTIONS_ARG(double, learning_rate);
+  TORCH_OPTIONS_ARG(double, beta1) = 0.9;
+  TORCH_OPTIONS_ARG(double, beta2) = 0.999;
+  TORCH_OPTIONS_ARG(double, weight_decay) = 0;
+  TORCH_OPTIONS_ARG(double, eps) = 1e-8;
+  TORCH_OPTIONS_ARG(bool, amsgrad) = false;
 };
 
 class TORCH_API Adam : public Optimizer {

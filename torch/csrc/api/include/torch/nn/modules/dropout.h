@@ -18,7 +18,7 @@ struct TORCH_API DropoutOptions {
   /// The probability with which a particular component of the input is set to
   /// zero.
   /// Changes to this parameter at runtime are effective.
-  TORCH_ARG(double, rate);
+  TORCH_OPTIONS_ARG(double, rate);
 };
 
 namespace detail {

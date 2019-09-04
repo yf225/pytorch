@@ -16,12 +16,12 @@ namespace optim {
 
 struct TORCH_API LBFGSOptions {
   LBFGSOptions(double learning_rate);
-  TORCH_ARG(double, learning_rate);
-  TORCH_ARG(int64_t, max_iter) = 20;
-  TORCH_ARG(int64_t, max_eval) = 25;
-  TORCH_ARG(float, tolerance_grad) = 1e-5;
-  TORCH_ARG(float, tolerance_change) = 1e-9;
-  TORCH_ARG(size_t, history_size) = 100;
+  TORCH_OPTIONS_ARG(double, learning_rate);
+  TORCH_OPTIONS_ARG(int64_t, max_iter) = 20;
+  TORCH_OPTIONS_ARG(int64_t, max_eval) = 25;
+  TORCH_OPTIONS_ARG(float, tolerance_grad) = 1e-5;
+  TORCH_OPTIONS_ARG(float, tolerance_change) = 1e-9;
+  TORCH_OPTIONS_ARG(size_t, history_size) = 100;
 };
 
 class TORCH_API LBFGS : public LossClosureOptimizer {

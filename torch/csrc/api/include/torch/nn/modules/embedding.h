@@ -14,9 +14,9 @@ namespace nn {
 struct TORCH_API EmbeddingOptions {
   EmbeddingOptions(int64_t count, int64_t dimension);
   /// The number of embeddings (number of rows in the table).
-  TORCH_ARG(int64_t, count);
+  TORCH_OPTIONS_ARG(int64_t, count);
   /// The size of each embedding vector (number of columns in the table).
-  TORCH_ARG(int64_t, dimension);
+  TORCH_OPTIONS_ARG(int64_t, dimension);
 };
 
 /// Performs a lookup in a fixed size embedding table.

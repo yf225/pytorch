@@ -7,6 +7,7 @@
 #include <torch/optim.h>
 #include <torch/types.h>
 #include <torch/utils.h>
+#include <torch/options.h>
 
 #include <test/cpp/api/optim_baseline.h>
 #include <test/cpp/api/support.h>
@@ -337,4 +338,16 @@ TEST(OptimTest, AddParameter_LBFGS) {
   optimizer.step([]() { return torch::tensor(1); });
 
   // REQUIRE this doesn't throw
+}
+
+TEST(OptimTest, TorchArgTest) {
+  struct TestOptions : public torch::Options {
+    TestOptions() {}
+    TORCH_OPTIONS_ARG(double, learning_rate) = 0;
+  };
+  // yf225 TODO: do we care about this use case?
+  TestOptions options = TestOptions().learning_rate(1.0);
+  double lr = options.learning_rate();
+  options.learning_rate(0.5);
+  ASSERT_TRUE(lr != options.learning_rate());
 }

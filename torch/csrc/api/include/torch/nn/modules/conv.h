@@ -26,54 +26,54 @@ struct ConvOptions {
 
   /// The number of channels the input volumes will have.
   /// Changing this parameter after construction __has no effect__.
-  TORCH_ARG(int64_t, input_channels);
+  TORCH_OPTIONS_ARG(int64_t, input_channels);
 
   /// The number of output channels the convolution should produce.
   /// Changing this parameter after construction __has no effect__.
-  TORCH_ARG(int64_t, output_channels);
+  TORCH_OPTIONS_ARG(int64_t, output_channels);
 
   /// The kernel size to use.
   /// For a `D`-dim convolution, must be a single number or a list of `D`
   /// numbers.
   /// This parameter __can__ be changed after construction.
-  TORCH_ARG(ExpandingArray<D>, kernel_size);
+  TORCH_OPTIONS_ARG(ExpandingArray<D>, kernel_size);
 
   /// The stride of the convolution.
   /// For a `D`-dim convolution, must be a single number or a list of `D`
   /// numbers.
   /// This parameter __can__ be changed after construction.
-  TORCH_ARG(ExpandingArray<D>, stride) = 1;
+  TORCH_OPTIONS_ARG(ExpandingArray<D>, stride) = 1;
 
   /// The padding to add to the input volumes.
   /// For a `D`-dim convolution, must be a single number or a list of `D`
   /// numbers.
   /// This parameter __can__ be changed after construction.
-  TORCH_ARG(ExpandingArray<D>, padding) = 0;
+  TORCH_OPTIONS_ARG(ExpandingArray<D>, padding) = 0;
 
   /// The kernel dilation.
   /// For a `D`-dim convolution, must be a single number or a list of `D`
   /// numbers.
   /// This parameter __can__ be changed after construction.
-  TORCH_ARG(ExpandingArray<D>, dilation) = 1;
+  TORCH_OPTIONS_ARG(ExpandingArray<D>, dilation) = 1;
 
   /// For transpose convolutions, the padding to add to output volumes.
   /// For a `D`-dim convolution, must be a single number or a list of `D`
   /// numbers.
   /// This parameter __can__ be changed after construction.
-  TORCH_ARG(ExpandingArray<D>, output_padding) = 0;
+  TORCH_OPTIONS_ARG(ExpandingArray<D>, output_padding) = 0;
 
   /// If true, convolutions will be transpose convolutions (a.k.a.
   /// deconvolutions).
   /// Changing this parameter after construction __has no effect__.
-  TORCH_ARG(bool, transposed) = false;
+  TORCH_OPTIONS_ARG(bool, transposed) = false;
 
   /// Whether to add a bias after individual applications of the kernel.
   /// Changing this parameter after construction __has no effect__.
-  TORCH_ARG(bool, with_bias) = true;
+  TORCH_OPTIONS_ARG(bool, with_bias) = true;
 
   /// The number of convolution groups.
   /// This parameter __can__ be changed after construction.
-  TORCH_ARG(int64_t, groups) = 1;
+  TORCH_OPTIONS_ARG(int64_t, groups) = 1;
 };
 
 /// Base class for all (dimension-specialized) convolution modules.

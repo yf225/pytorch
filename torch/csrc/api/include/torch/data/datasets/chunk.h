@@ -242,6 +242,7 @@ class BatchDataBuffer {
 } // namespace detail
 
 /// Options to configure a `ChunkDataset`.
+// yf225 TODO: we should fix the serialization for all Datasets as well!
 struct ChunkDatasetOptions {
   ChunkDatasetOptions() = delete;
   ChunkDatasetOptions(
@@ -272,13 +273,13 @@ struct ChunkDatasetOptions {
   }
 
   /// The number of worker thread to preload chunk data.
-  TORCH_ARG(size_t, preloader_count);
+  TORCH_OPTIONS_ARG(size_t, preloader_count);
 
   /// The size of each batch.
-  TORCH_ARG(size_t, batch_size);
+  TORCH_OPTIONS_ARG(size_t, batch_size);
 
   /// The capacity of the queue for batch caching.
-  TORCH_ARG(size_t, cache_size) = 2048;
+  TORCH_OPTIONS_ARG(size_t, cache_size) = 2048;
 
   // The number of chunks to perfrom cross-chunk shuffling. Default to 1 meaning
   // no cross-chunk shuffling. When it is equal to n (n > 1), n random
@@ -289,7 +290,7 @@ struct ChunkDatasetOptions {
   // you know cross-shuffle is needed in your case. Also there is a performance
   // penalty when this value is greater than 1, as we need to do extra merge
   // between multiple chunks before performing example sampling.
-  TORCH_ARG(size_t, cross_chunk_shuffle_count) = 1;
+  TORCH_OPTIONS_ARG(size_t, cross_chunk_shuffle_count) = 1;
 };
 
 /// A stateful dataset that support hierarchical sampling and prefetching of

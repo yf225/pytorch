@@ -23,12 +23,12 @@ namespace optim {
 
 struct TORCH_API RMSpropOptions {
   RMSpropOptions(double learning_rate);
-  TORCH_ARG(double, learning_rate);
-  TORCH_ARG(double, alpha) = 0.99;
-  TORCH_ARG(double, eps) = 1e-8;
-  TORCH_ARG(double, weight_decay) = 0;
-  TORCH_ARG(double, momentum) = 0;
-  TORCH_ARG(bool, centered) = false;
+  TORCH_OPTIONS_ARG(double, learning_rate);
+  TORCH_OPTIONS_ARG(double, alpha) = 0.99;
+  TORCH_OPTIONS_ARG(double, eps) = 1e-8;
+  TORCH_OPTIONS_ARG(double, weight_decay) = 0;
+  TORCH_OPTIONS_ARG(double, momentum) = 0;
+  TORCH_OPTIONS_ARG(bool, centered) = false;
 };
 
 class TORCH_API RMSprop : public Optimizer {

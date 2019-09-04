@@ -21,11 +21,11 @@ namespace optim {
 
 struct TORCH_API SGDOptions {
   /* implicit */ SGDOptions(double learning_rate);
-  TORCH_ARG(double, learning_rate);
-  TORCH_ARG(double, momentum) = 0;
-  TORCH_ARG(double, dampening) = 0;
-  TORCH_ARG(double, weight_decay) = 0;
-  TORCH_ARG(bool, nesterov) = false;
+  TORCH_OPTIONS_ARG(double, learning_rate);
+  TORCH_OPTIONS_ARG(double, momentum) = 0;
+  TORCH_OPTIONS_ARG(double, dampening) = 0;
+  TORCH_OPTIONS_ARG(double, weight_decay) = 0;
+  TORCH_OPTIONS_ARG(bool, nesterov) = false;
 };
 
 class TORCH_API SGD : public Optimizer {

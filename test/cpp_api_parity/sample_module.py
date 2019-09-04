@@ -44,14 +44,14 @@ class SampleModule(torch.nn.Module):
 SAMPLE_MODULE_CPP_SOURCE = """\n
 namespace torch {
 namespace nn{
-struct C10_EXPORT SampleModuleOptions {
+struct C10_EXPORT SampleModuleOptions : public Options {
   SampleModuleOptions(bool has_submodule) : has_submodule_(has_submodule) {}
-  TORCH_ARG(bool, has_submodule);
-  TORCH_ARG(int64_t, int_option);
-  TORCH_ARG(double, double_option);
-  TORCH_ARG(bool, bool_option);
-  TORCH_ARG(std::string, string_option);
-  TORCH_ARG(torch::Tensor, tensor_option);
+  TORCH_OPTIONS_ARG(bool, has_submodule);
+  TORCH_OPTIONS_ARG(int64_t, int_option);
+  TORCH_OPTIONS_ARG(double, double_option);
+  TORCH_OPTIONS_ARG(bool, bool_option);
+  TORCH_OPTIONS_ARG(std::string, string_option);
+  TORCH_OPTIONS_ARG(torch::Tensor, tensor_option);
 };
 
 struct C10_EXPORT SampleModuleImpl : public torch::nn::Cloneable<SampleModuleImpl> {

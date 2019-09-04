@@ -10,33 +10,34 @@ namespace torch {
 namespace data {
 
 /// Options to configure a `DataLoader`.
+// yf225 TODO: question: do we actually care about serializing a dataloader? If not, there is no need to subclass from SerializableOptions or use TORCH_OPTIONS_ARG
 struct DataLoaderOptions {
   DataLoaderOptions() = default;
   /* implicit */ DataLoaderOptions(size_t batch_size)
       : batch_size_(batch_size) {}
 
   /// The size of each batch to fetch.
-  TORCH_ARG(size_t, batch_size) = 1;
+  TORCH_OPTIONS_ARG(size_t, batch_size) = 1;
 
   /// The number of worker threads to launch. If zero, the main thread will
   /// synchronously perform the data loading.
-  TORCH_ARG(size_t, workers) = 0;
+  TORCH_OPTIONS_ARG(size_t, workers) = 0;
 
   /// The maximum number of jobs to enqueue for fetching by worker threads.
   /// Defaults to two times the number of worker threads.
-  TORCH_ARG(optional<size_t>, max_jobs);
+  TORCH_OPTIONS_ARG(optional<size_t>, max_jobs);
 
   /// An optional limit on the time to wait for the next batch.
-  TORCH_ARG(optional<std::chrono::milliseconds>, timeout);
+  TORCH_OPTIONS_ARG(optional<std::chrono::milliseconds>, timeout);
 
   /// Whether to enforce ordering of batches when multiple are loaded
   /// asynchronously by worker threads. Set to `false` for better performance if
   /// you do not care about determinism.
-  TORCH_ARG(bool, enforce_ordering) = true;
+  TORCH_OPTIONS_ARG(bool, enforce_ordering) = true;
 
   /// Whether to omit the last batch if it contains less than `batch_size`
   /// examples.
-  TORCH_ARG(bool, drop_last) = false;
+  TORCH_OPTIONS_ARG(bool, drop_last) = false;
 };
 
 /// Like `DataLoaderOptions`, but without any unconfigured state.

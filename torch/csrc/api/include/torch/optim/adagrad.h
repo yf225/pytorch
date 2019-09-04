@@ -20,9 +20,9 @@ namespace optim {
 
 struct TORCH_API AdagradOptions {
   AdagradOptions(double learning_rate);
-  TORCH_ARG(double, learning_rate);
-  TORCH_ARG(double, lr_decay) = 0;
-  TORCH_ARG(double, weight_decay) = 0;
+  TORCH_OPTIONS_ARG(double, learning_rate);
+  TORCH_OPTIONS_ARG(double, lr_decay) = 0;
+  TORCH_OPTIONS_ARG(double, weight_decay) = 0;
 };
 
 class TORCH_API Adagrad : public Optimizer {
