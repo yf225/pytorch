@@ -30,7 +30,10 @@ module_metadata_map = {
     'ConvTranspose2d': TorchNNModuleMetadata(),
     'ConvTranspose3d': TorchNNModuleMetadata(),
     'Unfold': TorchNNModuleMetadata(),
-    'Fold': TorchNNModuleMetadata(),
+    'Fold': TorchNNModuleMetadata(
+        cpp_default_constructor_args="(torch::nn::FoldOptions(3, 2))",
+        num_attrs_recursive=  # yf225 TODO NOW: we need to figure out how to map Python fields to C++ `options` fields
+    ),
     'MaxPool1d': TorchNNModuleMetadata(),
     'MaxPool2d': TorchNNModuleMetadata(),
     'MaxPool3d': TorchNNModuleMetadata(),
