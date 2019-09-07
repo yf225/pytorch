@@ -5,8 +5,10 @@ import copy
 import unittest
 import warnings
 import inspect
+import re
 
 import torch
+from torch._C import ListType
 from torch._six import PY2
 import common_utils as common
 import common_nn
@@ -35,22 +37,37 @@ bool check_tensor_equality(const torch::Tensor& tensor1, const torch::Tensor& te
     tensor1.allclose(tensor2);
 }
 
-bool check_ivalue_equality(const c10::IValue& ivalue1, const c10::IValue& ivalue2) {
-  if (ivalue1.tagKind() != ivalue2.tagKind()) {
-    AT_ERROR("Value type mismatch: ", "ivalue1: ", ivalue1.tagKind(), ", ivalue2: ", ivalue2.tagKind());
+bool check_ivalue_equality(const c10::IValue& ivalue_python, const c10::IValue& ivalue_cpp) {
+  // For Python modules, we allow the use of `int` to represent attributes that
+  // are multidimensional but have the same value in all dimensions. The corresponding
+  // data type for C++ modules is `ExpandingArray` (which is converted to `IntList` by the
+  // `IValue` constructor), and here we check that all elements in the `ExpandingArray`
+  // equal to the Python `int` attribute.
+  if (ivalue_python.isInt() && ivalue_cpp.isIntList()) {
+    auto ivalue_cpp_list = ivalue_cpp.toIntListRef();
+    std::vector<int64_t> ivalue_python_vec(ivalue_cpp_list.size());
+    std::fill(ivalue_python_vec.begin(), ivalue_python_vec.end(), ivalue_python.toInt());
+    return ivalue_python_vec == ivalue_cpp_list;
   }
-  if (ivalue1.isInt()) {
-    return ivalue1.toInt() == ivalue2.toInt();
-  } else if (ivalue1.isDouble()) {
-    return ivalue1.toDouble() == ivalue2.toDouble();
-  } else if (ivalue1.isBool()) {
-    return ivalue1.toBool() == ivalue2.toBool();
-  } else if (ivalue1.isString()) {
-    return ivalue1.toStringRef() == ivalue2.toStringRef();
-  } else if (ivalue1.isTensor()) {
-    return check_tensor_equality(ivalue1.toTensor(), ivalue2.toTensor());
+
+  if (ivalue_python.tagKind() != ivalue_cpp.tagKind()) {
+    AT_ERROR("Value type mismatch: ", "from Python: ", ivalue_python.tagKind(), ", from C++: ", ivalue_cpp.tagKind());
+  }
+
+  if (ivalue_python.isInt()) {
+    return ivalue_python.toInt() == ivalue_cpp.toInt();
+  } else if (ivalue_python.isDouble()) {
+    return ivalue_python.toDouble() == ivalue_cpp.toDouble();
+  } else if (ivalue_python.isBool()) {
+    return ivalue_python.toBool() == ivalue_cpp.toBool();
+  } else if (ivalue_python.isString()) {
+    return ivalue_python.toStringRef() == ivalue_cpp.toStringRef();
+  } else if (ivalue_python.isTensor()) {
+    return check_tensor_equality(ivalue_python.toTensor(), ivalue_cpp.toTensor());
+  } else if (ivalue_python.isIntList()) {
+    return ivalue_python.toIntListRef() == ivalue_cpp.toIntListRef();
   } else {
-    AT_ERROR("Unsupported value type: ", ivalue1.tagKind());
+    AT_ERROR("Unsupported value type: ", ivalue_python.tagKind());
   }
 }
 """
@@ -186,7 +203,7 @@ class TestCppApiParity(common.TestCase):
                 value='torch::empty({})'.format(str(list(python_arg.shape)).replace('[', '{').replace(']', '}')))
         else:
             raise RuntimeError(
-                "{} is not a supported arg type for C++ module methods".format(type(python_default_value)))
+                "{} is not a supported arg type for C++ module methods".format(type(python_arg)))
 
     def _compile_cpp_code_inline(self, name, cpp_sources, functions):
         # Just-in-time compile the C++ test code
@@ -198,18 +215,22 @@ class TestCppApiParity(common.TestCase):
         )
         return cpp_module
 
-    # This tests that Python and C++ torch.nn modules have matching constructor arg names and types.
-    def _test_torch_nn_module_ctor_args(self, module_name):
+    def _get_python_module_init_arg_spec(self, module_name):
         python_module_class = getattr(torch.nn, module_name)
-        module_metadata = torch_nn_modules.module_metadata_map[module_name]
-        cpp_default_constructor_args_str = module_metadata.cpp_default_constructor_args
         if PY2:
             init_arg_spec = inspect.getargspec(python_module_class.__init__)
         else:
             init_arg_spec = inspect.getfullargspec(python_module_class.__init__)
+        return init_arg_spec
+
+    # This tests that Python and C++ torch.nn modules have matching constructor arg names and types.
+    def _test_torch_nn_module_ctor_args(self, module_name):
+        module_metadata = torch_nn_modules.module_metadata_map[module_name]
+        cpp_default_constructor_args_str = module_metadata.cpp_default_constructor_args
+        init_arg_spec = self._get_python_module_init_arg_spec(module_name)
         init_kwargs_defaults = init_arg_spec.defaults
         python_default_constructor_arg_names = [x for x in init_arg_spec.args[1:-len(init_kwargs_defaults)] if x != 'has_parity']
-        cpp_default_constructor_arg_values = cpp_default_constructor_args_str.strip('()').split(',')
+        cpp_default_constructor_arg_values = re.findall(r'{[^}]*}|[^,\s]+', cpp_default_constructor_args_str.strip('()'))
         self.assertEqual(
             len(cpp_default_constructor_arg_values),
             len(python_default_constructor_arg_names),
@@ -225,7 +246,8 @@ class TestCppApiParity(common.TestCase):
         cpp_module_option = 'torch::nn::{}Options{}'.format(module_name, cpp_default_constructor_args_str)
         init_kwargs = init_arg_spec.args[-len(init_kwargs_defaults):]
         for arg_name, python_default_value in zip(init_kwargs, init_kwargs_defaults):
-            cpp_module_option += '.{}({})'.format(arg_name, self._python_arg_to_cpp_arg(python_default_value).value)
+            if python_default_value is not None:
+                cpp_module_option += '.{}({})'.format(arg_name, self._python_arg_to_cpp_arg(python_default_value).value)
 
         cpp_sources = TORCH_NN_MODULE_COMMON_TEST_HARNESS + module_metadata.cpp_sources
         cpp_sources += TORCH_NN_MODULE_TEST_CTOR_ARGS.substitute(
@@ -275,10 +297,14 @@ class TestCppApiParity(common.TestCase):
                         script_module_prefix=script_module_prefix,
                         cpp_module_prefix=cpp_module_prefix,
                         buffer_name=name))
-                module_metadata = torch_nn_modules.module_metadata_map[module.__class__.__name__]
+
+                init_arg_spec = self._get_python_module_init_arg_spec(module.__class__.__name__)
+                python_constructor_arg_names = [x for x in init_arg_spec.args[1:] if x != 'has_parity']
                 for name, attr in module.__dict__.items():
                     if name not in TORCH_NN_MODULE_IGNORED_ATTRS:
-                        if name in module_metadata.options_args:
+                        # Every constructor arg of the Python module must have
+                        # a corresponding C++ module options arg.
+                        if name in python_constructor_arg_names:
                             cpp_attr_name = 'options.{}()'.format(name)
                         else:
                             cpp_attr_name = name
@@ -352,8 +378,18 @@ class TestCppApiParity(common.TestCase):
                     register_attrs(sub_module, sub_script_module)
                 for key, value in module.__dict__.items():
                     if key not in TORCH_NN_MODULE_IGNORED_ATTRS:
+                        if type(value) == tuple:
+                            assert all(isinstance(x, type(value[0])) for x in value), \
+                                "All elements in a tuple attribute of a Python torch.nn module must have the same type."
+                            # Here, we set the Python attribute's type to `ListType` in the ScriptModule,
+                            # which will automatically be converted to `IntList` later and match the type
+                            # of the corresponding attribute in C++ module (which is initially an `ExpandingArray`
+                            # and is converted to `IntList` by the `IValue` constructor).
+                            value_type = ListType(torch.jit.annotations.ann_to_type(type(value[0])))
+                        else:
+                            value_type = torch.jit.annotations.ann_to_type(type(value))
                         script_module._c._register_attribute(
-                            key, torch.jit.annotations.ann_to_type(type(value)), value)
+                            key, value_type, value)
 
             # We use JIT tracing to serialize Python module state, so that we can load it into C++
             traced_script_module = torch.jit.trace(module, example_inputs)
@@ -450,6 +486,9 @@ def _process_test_params(test_params_dict, module_metadata, device):
     else:
         raise RuntimeError("Unexpected input type: {}".format(type(example_inputs)))
 
+    if module_name not in ["Embedding", "Embedding_sparse", "EmbeddingBag", "EmbeddingBag_sparse"]:
+        example_inputs = [x.requires_grad_() for x in example_inputs]
+
     if device != 'cuda' or TEST_CUDA:
         example_inputs = [x.to(device) for x in example_inputs]
     return TorchNNTestParams(
@@ -462,7 +501,6 @@ def _process_test_params(test_params_dict, module_metadata, device):
         has_parity=test_params_dict.get('has_parity', True),
         cpp_sources=module_metadata.cpp_sources,
         num_attrs_recursive=module_metadata.num_attrs_recursive,
-        options_args=module_metadata.options_args,
         device=device,
     )
 
