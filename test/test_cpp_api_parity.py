@@ -260,11 +260,8 @@ class TestCppApiParity(common.TestCase):
             if python_default_value is not None:
                 cpp_module_option += '.{}({})'.format(arg_name, self._python_arg_to_cpp_arg(python_default_value).value)
 
-        extra_stmts = []
-        for arg_name in python_default_constructor_arg_names + init_kwargs:
-            extra_stmts.append(TORCH_NN_MODULE_TEST_OPTIONS_ARG.substitute(
-                options_arg_name=arg_name,
-            ))
+        extra_stmts = [TORCH_NN_MODULE_TEST_OPTIONS_ARG.substitute(options_arg_name=arg_name)
+            for arg_name in python_default_constructor_arg_names + init_kwargs]
 
         cpp_sources = TORCH_NN_MODULE_COMMON_TEST_HARNESS + module_metadata.cpp_sources
         cpp_sources += TORCH_NN_MODULE_TEST_CTOR_ARGS.substitute(
@@ -317,6 +314,7 @@ class TestCppApiParity(common.TestCase):
                         buffer_name=name))
 
                 init_arg_spec = self._get_python_module_init_arg_spec(module.__class__.__name__)
+                print(init_arg_spec.args[0])
                 python_constructor_arg_names = [x for x in init_arg_spec.args[1:] if x != 'has_parity']
                 for name, attr in module.__dict__.items():
                     if name not in TORCH_NN_MODULE_IGNORED_ATTRS:
