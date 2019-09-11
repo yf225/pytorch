@@ -5,6 +5,7 @@ from copy import deepcopy
 from itertools import product
 from functools import reduce
 from operator import mul
+import inspect
 
 
 import torch
@@ -272,6 +273,12 @@ def _rand_tensor_non_equal(*size):
 
 def wrap_functional(fn, **kwargs):
     class FunctionalModule(nn.Module):
+        def fn_name(self):
+            if fn.__name__ == '<lambda>':
+                return inspect.getsourcelines(fn)[0][0].split('F.')[1].split('(')[0]
+            else:
+                return inspect.getsourcelines(fn)[0][0].split('def ')[1].split('(')[0]
+
         def forward(self, *args):
             return fn(*args, **kwargs)
     return FunctionalModule

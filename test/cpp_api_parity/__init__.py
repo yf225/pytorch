@@ -1,10 +1,13 @@
+import torch
+import inspect
+
 from collections import namedtuple
 
 TorchNNTestParams = namedtuple(
     'TorchNNTestParams',
     [
-        'module_name',
-        'module_variant_name',
+        'name',
+        'variant_name',
         'test_instance',
         'cpp_constructor_args',
         'has_parity',
@@ -14,9 +17,24 @@ TorchNNTestParams = namedtuple(
     ]
 )
 
+TorchNNFunctionalTestParams = namedtuple(
+    'TorchNNFunctionalTestParams',
+    [
+        'name',
+        'variant_name',
+        'test_instance',
+        'cpp_options',
+        'has_parity',
+        'cpp_sources',
+        'device',
+    ]
+)
+
 CppArg = namedtuple('CppArg', ['type', 'value'])
 
 ParityStatus = namedtuple('ParityStatus', ['has_impl_parity', 'has_doc_parity'])
+
+TestMethodConfig = namedtuple('TestMethodConfig', ['args', 'cpp_sources', 'teardown_callback'])
 
 TorchNNModuleMetadata = namedtuple(
     'TorchNNModuleMetadata',
@@ -28,6 +46,25 @@ TorchNNModuleMetadata = namedtuple(
     ]
 )
 TorchNNModuleMetadata.__new__.__defaults__ = (None, None, [], '')
+
+TorchNNFunctionalMetadata = namedtuple(
+    'TorchNNFunctionalMetadata',
+    [
+        'cpp_sources',
+    ]
+)
+TorchNNFunctionalMetadata.__new__.__defaults__ = ('',)
+
+
+def wrap_functional(fn, **kwargs):
+    class FunctionalModule(torch.nn.Module):
+        def fn_name(self):
+            return inspect.getsourcelines(fn)[0][0].split('F.')[1].split('(')[0]
+
+        def forward(self, *args):
+            return fn(*args, **kwargs)
+    return FunctionalModule
+
 
 '''
 This function expects the parity tracker Markdown file to have the following format:
