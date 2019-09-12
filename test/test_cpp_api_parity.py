@@ -298,6 +298,12 @@ class TestCppApiParity(common.TestCase):
 
         return input_args
 
+    def serialize_module_into_file(self, script_module):
+        module_file = tempfile.NamedTemporaryFile(delete=False)
+        script_module.save(module_file.name)
+        module_file.close()
+        return module_file.name
+
     # This tests that Python and C++ torch.nn modules have matching constructor arg names and types.
     def _test_torch_nn_module_ctor_args(self, module_name):
         module_metadata = torch_nn_modules.module_metadata_map[module_name]
@@ -487,12 +493,6 @@ class TestCppApiParity(common.TestCase):
             register_attrs(module, traced_script_module)
             return traced_script_module
 
-        def serialize_module_into_file(script_module):
-            module_file = tempfile.NamedTemporaryFile(delete=False)
-            script_module.save(module_file.name)
-            module_file.close()
-            return module_file.name
-
         def test_methods(test_params):
             module_variant_name = test_params.module_variant_name
             input_args = self._get_forward_input_args(test_params)
@@ -521,7 +521,7 @@ class TestCppApiParity(common.TestCase):
                 args = args_map[method_name]
                 modules = args[0]
                 script_modules = [trace_module(module, input_args) for module in modules]
-                module_file_names = [serialize_module_into_file(script_module) for script_module in script_modules]
+                module_file_names = [self.serialize_module_into_file(script_module) for script_module in script_modules]
 
                 cpp_args = module_file_names[:]
                 for arg in args[1:]:
