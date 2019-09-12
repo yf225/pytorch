@@ -42,10 +42,11 @@ TorchNNModuleMetadata = namedtuple(
         'cpp_default_constructor_args',
         'num_attrs_recursive',
         'python_legacy_constructor_args',
+        'python_optional_attribute_to_jit_type',
         'cpp_sources',
     ]
 )
-TorchNNModuleMetadata.__new__.__defaults__ = (None, None, [], '')
+TorchNNModuleMetadata.__new__.__defaults__ = (None, None, [], {}, '')
 
 TorchNNFunctionalMetadata = namedtuple(
     'TorchNNFunctionalMetadata',
