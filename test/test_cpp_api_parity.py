@@ -380,7 +380,7 @@ class TestCppApiParity(common.TestCase):
             finally:
                 teardown_callback = teardown_callback_map[method_name]
                 if teardown_callback:
-                    teardown_callback(args)
+                    teardown_callback()
 
     def _test_torch_nn_functional_options(self, functional_name):
         functional_metadata = torch_nn_functionals.functional_metadata_map.get(functional_name, None)
@@ -625,7 +625,7 @@ class TestCppApiParity(common.TestCase):
                 args=(*module_file_names, device),
                 cpp_sources=generate_test_cpp_sources(
                     test_params=test_params, template=TORCH_NN_MODULE_TEST_INIT, extra_stmts=extra_stmts_str),
-                teardown_callback=lambda args: remove_files(args[:1]),
+                teardown_callback=lambda file_names=module_file_names: remove_files(file_names),
             )
 
         def setup_forward_test(test_params):
@@ -643,7 +643,7 @@ class TestCppApiParity(common.TestCase):
                 args=(*module_file_names, device, python_output, input_args),
                 cpp_sources=generate_test_cpp_sources(
                     test_params=test_params, template=TORCH_NN_MODULE_TEST_FORWARD, extra_stmts=''),
-                teardown_callback=lambda args: remove_files(args[:1]),
+                teardown_callback=lambda file_names=module_file_names: remove_files(file_names),
             )
 
         def setup_backward_test(test_params):
@@ -671,7 +671,7 @@ class TestCppApiParity(common.TestCase):
                 args=(*module_file_names, device, input_args),
                 cpp_sources=generate_test_cpp_sources(
                     test_params=test_params, template=TORCH_NN_MODULE_TEST_BACKWARD, extra_stmts=''),
-                teardown_callback=lambda args: remove_files(args[:2]),
+                teardown_callback=lambda file_names=module_file_names: remove_files(file_names),
             )
 
         self._test_methods(
@@ -875,6 +875,9 @@ for test_params_dict in common_nn.criterion_tests + common_nn.new_criterion_test
 assert len([name for name in TestCppApiParity.__dict__ if 'SampleModule' in name]) == \
     len(sample_module.module_tests) * len(devices) + 1
 
+# Assert that there exists auto-generated tests for sample_functional.
+assert len([name for name in TestCppApiParity.__dict__ if 'sample_functional' in name]) == \
+    len(sample_functional.functional_tests) * len(devices) + 1
 
 if __name__ == "__main__":
     common.run_tests()
