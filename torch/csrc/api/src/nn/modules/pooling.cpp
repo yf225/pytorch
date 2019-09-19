@@ -69,5 +69,47 @@ template class MaxPoolImpl<1, MaxPool1dImpl>;
 template class MaxPoolImpl<2, MaxPool2dImpl>;
 template class MaxPoolImpl<3, MaxPool3dImpl>;
 
+// ============================================================================
+
+template <size_t D, typename Derived>
+MaxUnpoolImpl<D, Derived>::MaxUnpoolImpl(const MaxUnpoolOptions<D>& options_)
+    : options(options_) {}
+
+template <size_t D, typename Derived>
+void MaxUnpoolImpl<D, Derived>::reset() {}
+
+template <size_t D, typename Derived>
+void MaxUnpoolImpl<D, Derived>::pretty_print(std::ostream& stream) const {
+  stream << "torch::nn::MaxUnpool" << D << "d"
+         << "(kernel_size=" << options.kernel_size()
+         << ", stride=" << options.stride()
+         << ", padding=" << options.padding() << ")";
+}
+
+Tensor MaxUnpool1dImpl::forward(
+    const Tensor& input,
+    const Tensor& indices,
+    const c10::Optional<ExpandingArray<1>>& output_size) {
+  return F::max_unpool1d(input, indices, options.output_size(output_size));
+}
+
+Tensor MaxUnpool2dImpl::forward(
+    const Tensor& input,
+    const Tensor& indices,
+    const c10::Optional<ExpandingArray<2>>& output_size) {
+  return F::max_unpool2d(input, indices, options.output_size(output_size));
+}
+
+Tensor MaxUnpool3dImpl::forward(
+    const Tensor& input,
+    const Tensor& indices,
+    const c10::Optional<ExpandingArray<3>>& output_size) {
+  return F::max_unpool3d(input, indices, options.output_size(output_size));
+}
+
+template class MaxUnpoolImpl<1, MaxUnpool1dImpl>;
+template class MaxUnpoolImpl<2, MaxUnpool2dImpl>;
+template class MaxUnpoolImpl<3, MaxUnpool3dImpl>;
+
 } // namespace nn
 } // namespace torch

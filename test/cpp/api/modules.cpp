@@ -147,6 +147,114 @@ TEST_F(ModulesTest, MaxPool3d) {
   ASSERT_EQ(y.sizes(), torch::IntArrayRef({2, 2, 2, 2}));
 }
 
+/*
+        >>> pool = nn.MaxPool1d(2, stride=2, return_indices=True)
+        >>> unpool = nn.MaxUnpool1d(2, stride=2)
+        >>> input = torch.tensor([[[1., 2, 3, 4, 5, 6, 7, 8]]])
+        >>> output, indices = pool(input)
+        >>> unpool(output, indices)
+        tensor([[[ 0.,  2.,  0.,  4.,  0.,  6.,  0., 8.]]])
+
+        >>> # Example showcasing the use of output_size
+        >>> input = torch.tensor([[[1., 2, 3, 4, 5, 6, 7, 8, 9]]])
+        >>> output, indices = pool(input)
+        >>> unpool(output, indices, output_size=input.size())
+        tensor([[[ 0.,  2.,  0.,  4.,  0.,  6.,  0., 8.,  0.]]])
+
+        >>> unpool(output, indices)
+        tensor([[[ 0.,  2.,  0.,  4.,  0.,  6.,  0., 8.]]])
+*/
+TEST_F(ModulesTest, MaxUnpool1d) {
+  {
+    MaxPool1d pool(MaxPool1dOptions(2).stride(2).return_indices(true));
+    MaxUnpool1d unpool(MaxUnpool1dOptions(2).stride(2));
+    auto input = torch::tensor({{{1., 2., 3., 4., 5., 6., 7., 8.}}});
+    output, indices = pool(input); // yf225 TODO: how can we make this work??
+    ASSERT_TRUE(torch::allclose(
+      unpool(output, indices),
+      torch::tensor({{{0., 2., 0., 4., 0., 6., 0., 8.}}})));
+  }
+  {
+    auto input = torch::tensor({{{1., 2., 3., 4., 5., 6., 7., 8., 9.}}});
+    output, indices = pool(input); // yf225 TODO: how can we make this work??
+    ASSERT_TRUE(torch::allclose(
+      unpool(output, indices, /*output_size=*/input.sizes()),
+      torch::tensor({{{0., 2., 0., 4., 0., 6., 0., 8., 0.}}})));
+    ASSERT_TRUE(torch::allclose(
+      unpool(output, indices),
+      torch::tensor({{{0., 2., 0., 4., 0., 6., 0., 8.}}})));
+  }
+}
+
+/*
+        >>> pool = nn.MaxPool2d(2, stride=2, return_indices=True)
+        >>> unpool = nn.MaxUnpool2d(2, stride=2)
+        >>> input = torch.tensor([[[[ 1.,  2,  3,  4],
+                                    [ 5,  6,  7,  8],
+                                    [ 9, 10, 11, 12],
+                                    [13, 14, 15, 16]]]])
+        >>> output, indices = pool(input)
+        >>> unpool(output, indices)
+        tensor([[[[  0.,   0.,   0.,   0.],
+                  [  0.,   6.,   0.,   8.],
+                  [  0.,   0.,   0.,   0.],
+                  [  0.,  14.,   0.,  16.]]]])
+
+        >>> # specify a different output size than input size
+        >>> unpool(output, indices, output_size=torch.Size([1, 1, 5, 5]))
+        tensor([[[[  0.,   0.,   0.,   0.,   0.],
+                  [  6.,   0.,   8.,   0.,   0.],
+                  [  0.,   0.,   0.,  14.,   0.],
+                  [ 16.,   0.,   0.,   0.,   0.],
+                  [  0.,   0.,   0.,   0.,   0.]]]])
+*/
+
+TEST_F(ModulesTest, MaxUnpool2d) {
+  {
+    MaxPool2d pool(MaxPool2dOptions(2).stride(2).return_indices(true));
+    MaxUnpool2d unpool(MaxUnpool2dOptions(2).stride(2));
+    auto input = torch::tensor({{{{ 1.,  2.,  3.,  4.},
+                                  { 5.,  6.,  7.,  8.},
+                                  { 9., 10., 11., 12.},
+                                  {13., 14., 15., 16.}}}});
+    output, indices = pool(input); // yf225 TODO: how can we make this work??
+    ASSERT_TRUE(torch::allclose(
+      unpool(output, indices),
+      torch::tensor({{{{  0.,   0.,   0.,   0.},
+                       {  0.,   6.,   0.,   8.},
+                       {  0.,   0.,   0.,   0.},
+                       {  0.,  14.,   0.,  16.}}}})));
+    ASSERT_TRUE(torch::allclose(
+      unpool(output, indices, /*output_size=*/{1, 1, 5, 5}),
+      torch::tensor({{{{  0.,   0.,   0.,   0.,   0.},
+                       {  6.,   0.,   8.,   0.,   0.},
+                       {  0.,   0.,   0.,  14.,   0.},
+                       { 16.,   0.,   0.,   0.,   0.},
+                       {  0.,   0.,   0.,   0.,   0.}}}})));
+  }
+}
+
+/*
+        >>> # pool of square window of size=3, stride=2
+        >>> pool = nn.MaxPool3d(3, stride=2, return_indices=True)
+        >>> unpool = nn.MaxUnpool3d(3, stride=2)
+        >>> output, indices = pool(torch.randn(20, 16, 51, 33, 15))
+        >>> unpooled_output = unpool(output, indices)
+        >>> unpooled_output.size()
+        torch.Size([20, 16, 51, 33, 15])
+*/
+
+TEST_F(ModulesTest, MaxUnpool3d) {
+  {
+    MaxPool3d pool(MaxPool3dOptions(3).stride(2).return_indices(true));
+    MaxUnpool3d unpool(MaxUnpool3dOptions(3).stride(2));
+    output, indices = pool(torch::randn({20, 16, 51, 33, 15})); // yf225 TODO: how can we make this work??
+    ASSERT_EQ(
+      unpool(output, indices).sizes(),
+      torch::IntArrayRef({20, 16, 51, 33, 15}));
+  }
+}
+
 TEST_F(ModulesTest, AvgPool1d) {
   AvgPool1d model(AvgPool1dOptions(3).stride(2));
   auto x = torch::ones({1, 1, 5}, torch::requires_grad());

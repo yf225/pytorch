@@ -70,6 +70,80 @@ inline Tensor max_pool3d(const Tensor& input, const MaxPool3dOptions& options) {
       options.ceil_mode_);
 }
 
+// ============================================================================
+
+inline std::vector<int64_t> _unpool_output_size(
+  const Tensor& input,
+  const at::ArrayRef<int64_t>& kernel_size,
+  const at::ArrayRef<int64_t>& stride,
+  const at::ArrayRef<int64_t>& padding,
+  const c10::optional<at::ArrayRef<int64_t>>& output_size) {
+  ArrayRef<int64_t>& input_size = input.sizes();
+  std::vector<int64_t> default_size, ret;
+  for (size_t d = 0; d < kernel_size.size(); d++)
+    default_size.push_back((input_size[d + 2] - 1) * stride[d] +
+                           kernel_size[d] - 2 * padding[d]);
+  if (output_size == c10::nullopt) {
+    ret = default_size;
+  } else {
+    if (output_size->size() == (kernel_size.size() + 2)) {
+      output_size = output_size->slice(2);
+    }
+    if (output_size->size() != kernel_size.size()) {
+      TORCH_CHECK(false,
+        "output_size should be a sequence containing ",
+        kernel_size.size(), " or ", kernel_size.size() + 2, " elements, ",
+        "but it has a length of '", output_size->size(), "'");
+    }
+    for (size_t d = 0; d < kernel_size.size(); d++) {
+      int64_t min_size = default_size[d] - stride[d];
+      int64_t max_size = default_size[d] + stride[d];
+      if (!(min_size < output_size[d] && output_size[d] < max_size)) {
+        TORCH_CHECK(false,
+          "invalid output_size \"", output_size, "\" ",
+          "(dim ", d, " must be between ", min_size, " and ", max_size, ")");
+      }
+    }
+    ret = output_size;
+  }
+  return ret;
+}
+
+inline Tensor max_unpool1d(const Tensor& input, const Tensor& indices, const MaxUnpool1dOption& options) {
+  std::vector<int64_t> output_size = _unpool_output_size(
+    input,
+    options.kernel_size(),
+    options.stride(),
+    options.padding(),
+    options.output_size());
+
+  output_size.push_back(1);
+
+  return torch::max_unpool2d(input.unsqueeze(3), indices.unsqueeze(3), output_size).squeeze(3);
+}
+
+inline Tensor max_unpool2d(const Tensor& input, const Tensor& indices, const MaxUnpool2dOption& options) {
+  std::vector<int64_t> output_size = _unpool_output_size(
+    input,
+    options.kernel_size(),
+    options.stride(),
+    options.padding(),
+    options.output_size());
+
+  return torch::max_unpool2d(input, indices, output_size);
+}
+
+inline Tensor max_unpool3d(const Tensor& input, const Tensor& indices, const MaxUnpool3dOption& options) {
+  std::vector<int64_t> output_size = _unpool_output_size(
+    input,
+    options.kernel_size(),
+    options.stride(),
+    options.padding(),
+    options.output_size());
+
+  return torch::max_unpool3d(input, indices, output_size, options.stride(), options.padding());
+}
+
 } // namespace functional
 } // namespace nn
 } // namespace torch

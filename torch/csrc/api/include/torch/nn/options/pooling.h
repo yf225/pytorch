@@ -79,5 +79,35 @@ using MaxPool2dOptions = MaxPoolOptions<2>;
 /// `MaxPoolOptions` specialized for 3-D maxpool.
 using MaxPool3dOptions = MaxPoolOptions<3>;
 
+// ============================================================================
+
+/// Options for a `D`-dimensional MaxUnpool functional and module.
+template <size_t D>
+struct MaxUnpoolOptions {
+  MaxUnpoolOptions(ExpandingArray<D> kernel_size)
+      : kernel_size_(kernel_size), stride_(kernel_size) {}
+
+  /// Size of the max pooling window.
+  TORCH_ARG(ExpandingArray<D>, kernel_size);
+
+  /// Stride of the max pooling window. It is set to `kernel_size` by default.
+  TORCH_ARG(ExpandingArray<D>, stride);
+
+  /// Padding that was added to the input.
+  TORCH_ARG(ExpandingArray<D>, padding) = 0;
+
+  /// The targeted output size.
+  TORCH_ARG(c10::Optional<ExpandingArray<D>>, output_size);
+};
+
+/// `MaxUnpoolOptions` specialized for 1-D MaxUnpool.
+using MaxUnpool1dOptions = MaxUnpoolOptions<1>;
+
+/// `MaxUnpoolOptions` specialized for 2-D MaxUnpool.
+using MaxUnpool2dOptions = MaxUnpoolOptions<2>;
+
+/// `MaxUnpoolOptions` specialized for 3-D MaxUnpool.
+using MaxUnpool3dOptions = MaxUnpoolOptions<3>;
+
 } // namespace nn
 } // namespace torch
