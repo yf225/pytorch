@@ -108,6 +108,20 @@ TEST_F(ModulesTest, MaxPool1d) {
   ASSERT_EQ(y.sizes(), torch::IntArrayRef({1, 1, 2}));
 }
 
+TEST_F(ModulesTest, MaxPool1dReturnIndices) {
+  MaxPool1d model(MaxPool1dOptions(3).stride(2));
+  auto x = torch::ones({1, 1, 5}, torch::requires_grad());
+  torch::Tensor y, indices;
+  std::tie(y, indices) = model(x, /*return_indices=*/true);
+
+  ASSERT_EQ(y.ndimension(), 3);
+  ASSERT_TRUE(torch::allclose(y, torch::ones({1, 1 ,2})));
+  ASSERT_EQ(y.sizes(), torch::IntArrayRef({1, 1, 2}));
+  ASSERT_TRUE(torch::allclose(indices, torch::empty({1}))); // yf225 TODO: fix this
+
+  ASSERT_THROWS_WITH(model(x, /*return_indices=*/false), "yf225 TODO something something");
+}
+
 TEST_F(ModulesTest, MaxPool2dEven) {
   MaxPool2d model(MaxPool2dOptions(3).stride(2));
   auto x = torch::ones({2, 5, 5}, torch::requires_grad());
@@ -134,6 +148,20 @@ TEST_F(ModulesTest, MaxPool2dUneven) {
   ASSERT_EQ(y.sizes(), torch::IntArrayRef({2, 2, 2}));
 }
 
+TEST_F(ModulesTest, MaxPool2dReturnIndices) {
+  MaxPool2d model(MaxPool2dOptions(3).stride(2));
+  auto x = torch::ones({2, 5, 5}, torch::requires_grad());
+  torch::Tensor y, indices;
+  std::tie(y, indices) = model(x, /*return_indices=*/true);
+
+  ASSERT_EQ(y.ndimension(), 3);
+  ASSERT_TRUE(torch::allclose(y, torch::ones({2, 2 ,2})));
+  ASSERT_EQ(y.sizes(), torch::IntArrayRef({2, 2, 2}));
+  ASSERT_TRUE(torch::allclose(indices, torch::empty({1}))); // yf225 TODO: fix this
+
+  ASSERT_THROWS_WITH(model(x, /*return_indices=*/false), "yf225 TODO something something");
+}
+
 TEST_F(ModulesTest, MaxPool3d) {
   MaxPool3d model(MaxPool3dOptions(3).stride(2));
   auto x = torch::ones({2, 5, 5, 5}, torch::requires_grad());
@@ -145,6 +173,20 @@ TEST_F(ModulesTest, MaxPool3d) {
   ASSERT_TRUE(torch::allclose(y, torch::ones({2, 2, 2, 2})));
   ASSERT_EQ(s.ndimension(), 0);
   ASSERT_EQ(y.sizes(), torch::IntArrayRef({2, 2, 2, 2}));
+}
+
+TEST_F(ModulesTest, MaxPool3dReturnIndices) {
+  MaxPool3d model(MaxPool3dOptions(3).stride(2));
+  auto x = torch::ones({2, 5, 5, 5}, torch::requires_grad());
+  torch::Tensor y, indices;
+  std::tie(y, indices) = model(x, /*return_indices=*/true);
+
+  ASSERT_EQ(y.ndimension(), 4);
+  ASSERT_TRUE(torch::allclose(y, torch::ones({2, 2, 2, 2})));
+  ASSERT_EQ(y.sizes(), torch::IntArrayRef({2, 2, 2, 2}));
+  ASSERT_TRUE(torch::allclose(indices, torch::empty({1}))); // yf225 TODO: fix this
+
+  ASSERT_THROWS_WITH(model(x, /*return_indices=*/false), "yf225 TODO something something");
 }
 
 TEST_F(ModulesTest, AvgPool1d) {

@@ -106,6 +106,7 @@ class TORCH_API MaxPool1dImpl : public MaxPoolImpl<1, MaxPool1dImpl> {
  public:
   using MaxPoolImpl<1, MaxPool1dImpl>::MaxPoolImpl;
   Tensor forward(const Tensor& input);
+  std::tuple<Tensor, Tensor> forward(const Tensor& input, bool return_indices);
 };
 
 /// A `ModuleHolder` subclass for `MaxPool1dImpl`.
@@ -123,6 +124,7 @@ class TORCH_API MaxPool2dImpl : public MaxPoolImpl<2, MaxPool2dImpl> {
  public:
   using MaxPoolImpl<2, MaxPool2dImpl>::MaxPoolImpl;
   Tensor forward(const Tensor& input);
+  std::tuple<Tensor, Tensor> forward(const Tensor& input, bool return_indices);
 };
 
 /// A `ModuleHolder` subclass for `MaxPool2dImpl`.
@@ -140,6 +142,7 @@ class TORCH_API MaxPool3dImpl : public MaxPoolImpl<3, MaxPool3dImpl> {
  public:
   using MaxPoolImpl<3, MaxPool3dImpl>::MaxPoolImpl;
   Tensor forward(const Tensor& input);
+  std::tuple<Tensor, Tensor> forward(const Tensor& input, bool return_indices);
 };
 
 /// A `ModuleHolder` subclass for `MaxPool3dImpl`.

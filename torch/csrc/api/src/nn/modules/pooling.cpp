@@ -57,12 +57,27 @@ Tensor MaxPool1dImpl::forward(const Tensor& input) {
   return F::max_pool1d(input, options);
 }
 
+std::tuple<Tensor, Tensor> MaxPool1dImpl::forward(const Tensor& input, bool return_indices) {
+  TORCH_CHECK(return_indices, "yf225 TODO");
+  return F::max_pool1d_with_indices(input, options);
+}
+
 Tensor MaxPool2dImpl::forward(const Tensor& input) {
   return F::max_pool2d(input, options);
 }
 
+std::tuple<Tensor, Tensor> MaxPool2dImpl::forward(const Tensor& input, bool return_indices) {
+  TORCH_CHECK(return_indices, "yf225 TODO");
+  return F::max_pool2d_with_indices(input, options); 
+}
+
 Tensor MaxPool3dImpl::forward(const Tensor& input) {
   return F::max_pool3d(input, options);
+}
+
+std::tuple<Tensor, Tensor> MaxPool3dImpl::forward(const Tensor& input, bool return_indices) {
+  TORCH_CHECK(return_indices, "yf225 TODO");
+  return F::max_pool3d_with_indices(input, options);
 }
 
 template class MaxPoolImpl<1, MaxPool1dImpl>;
