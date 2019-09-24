@@ -220,6 +220,26 @@ TEST(TensorTest, MultidimTensorCtor) {
     ASSERT_FALSE(tensor.requires_grad());
   }
   {
+    auto tensor = at::tensor({{1, 2}, {3, 4}});
+    ASSERT_EQ(tensor.dtype(), at::kInt);
+    ASSERT_EQ(tensor.sizes(), at::IntArrayRef({2, 2}));
+    ASSERT_TRUE(at::allclose(tensor, at::arange(1, 5, at::kInt).view(tensor.sizes())));
+  }
+  {
+    auto tensor = at::tensor({{1, 2}, {3, 4}}, at::dtype(at::kFloat).requires_grad(true));
+    ASSERT_EQ(tensor.dtype(), at::kFloat);
+    ASSERT_EQ(tensor.sizes(), at::IntArrayRef({2, 2}));
+    ASSERT_TRUE(at::allclose(tensor, at::arange(1, 5, at::kFloat).view(tensor.sizes())));
+    ASSERT_TRUE(tensor.requires_grad());
+  }
+  {
+    auto tensor = at::tensor({{{{{{{{1.0, 2.0, 3.0}}}}}, {{{{{4.0, 5.0, 6.0}}}}}, {{{{{7.0, 8.0, 9.0}}}}}}}});
+    ASSERT_EQ(tensor.dtype(), at::kDouble);
+    ASSERT_EQ(tensor.sizes(), at::IntArrayRef({1, 1, 3, 1, 1, 1, 1, 3}));
+    ASSERT_TRUE(at::allclose(tensor, at::arange(1, 10, at::kDouble).view(tensor.sizes())));
+    ASSERT_FALSE(tensor.requires_grad());
+  }
+  {
     ASSERT_THROWS_WITH(torch::tensor({{{2, 3, 4}, {{5, 6}, {7}}}}),
       "Expected all sub-lists to have sizes: 2 (e.g. {5, 6}), but got sub-list {7} with sizes: 1");
   }
@@ -229,6 +249,18 @@ TEST(TensorTest, MultidimTensorCtor) {
   }
   {
     ASSERT_THROWS_WITH(torch::tensor({{{true, 2.0, 3}, {true, 2.0, 3}}}),
+      "Expected all elements of the tensor to have the same scalar type: Bool, but got element of scalar type: Double");
+  }
+  {
+    ASSERT_THROWS_WITH(at::tensor({{{2, 3, 4}, {{5, 6}, {7}}}}),
+      "Expected all sub-lists to have sizes: 2 (e.g. {5, 6}), but got sub-list {7} with sizes: 1");
+  }
+  {
+    ASSERT_THROWS_WITH(at::tensor({{{1, 2.0}, {1, 2.0}}}),
+      "Expected all elements of the tensor to have the same scalar type: Int, but got element of scalar type: Double");
+  }
+  {
+    ASSERT_THROWS_WITH(at::tensor({{{true, 2.0, 3}, {true, 2.0, 3}}}),
       "Expected all elements of the tensor to have the same scalar type: Bool, but got element of scalar type: Double");
   }
 }
@@ -244,6 +276,18 @@ TEST(TensorTest, MultidimTensorCtor_CUDA) {
     ASSERT_TRUE(torch::allclose(
       tensor,
       torch::arange(1, 10, torch::kDouble).view(tensor.sizes()).to(torch::kCUDA)));
+    ASSERT_FALSE(tensor.requires_grad());
+  }
+  {
+    auto tensor = at::tensor(
+      {{{{{{{{1.0, 2.0, 3.0}}}}}, {{{{{4.0, 5.0, 6.0}}}}}, {{{{{7.0, 8.0, 9.0}}}}}}}},
+      at::dtype(at::kDouble).device(at::kCUDA));
+    ASSERT_TRUE(tensor.device().is_cuda());
+    ASSERT_EQ(tensor.dtype(), at::kDouble);
+    ASSERT_EQ(tensor.sizes(), at::IntArrayRef({1, 1, 3, 1, 1, 1, 1, 3}));
+    ASSERT_TRUE(at::allclose(
+      tensor,
+      at::arange(1, 10, at::kDouble).view(tensor.sizes()).to(at::kCUDA)));
     ASSERT_FALSE(tensor.requires_grad());
   }
 }
