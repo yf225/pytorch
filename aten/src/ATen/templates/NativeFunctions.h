@@ -7,6 +7,7 @@
 #include <c10/core/TensorOptions.h>
 #include <ATen/core/Reduction.h>
 #include <ATen/core/EnableNamedTensor.h>
+#include <ATen/core/grad_mode.h>
 
 #include <array>
 #include <functional>
@@ -25,6 +26,31 @@ struct Type;
 
 namespace at {
 namespace native {
+
+// These functions are defined in native/TensorFactories.cpp.
+#define TENSOR(T, S)                                                          \
+  CAFFE2_API Tensor tensor(ArrayRef<T> values, const TensorOptions& options); \
+  inline Tensor tensor(                                                       \
+      std::initializer_list<T> values, const TensorOptions& options) {        \
+    return native::tensor(ArrayRef<T>(values), options);                      \
+  }                                                                           \
+  inline Tensor tensor(T value, const TensorOptions& options) {               \
+    return native::tensor(ArrayRef<T>(value), options);                       \
+  }                                                                           \
+  inline Tensor tensor(ArrayRef<T> values) {                                  \
+    return native::tensor(std::move(values), at::dtype(k##S));                \
+  }                                                                           \
+  inline Tensor tensor(std::initializer_list<T> values) {                     \
+    return native::tensor(ArrayRef<T>(values));                               \
+  }                                                                           \
+  inline Tensor tensor(T value) {                                             \
+    return native::tensor(ArrayRef<T>(value));                                \
+  }
+AT_FORALL_SCALAR_TYPES_AND3(Bool, Half, BFloat16, TENSOR)
+#undef TENSOR
+
+${native_function_declarations}
+
 namespace detail {
   enum class ListInitTensorType { Scalar, InitList };
 
@@ -111,7 +137,7 @@ AT_FORALL_SCALAR_TYPES_AND3(Bool, Half, BFloat16, TENSOR)
       // `N` is the number of the elements in the tensor).
       at::Tensor tensor = ([&]() {
         at::AutoNonVariableTypeMode non_var_type_mode(true);
-        return at::empty(sizes_, at::TensorOptions(options).device(at::kCPU).is_variable(false));
+        return at::native::empty_cpu(sizes_, at::TensorOptions(options).is_variable(false));
       })();
       fill_tensor(tensor);
       return tensor.to(options.device());
@@ -160,28 +186,6 @@ AT_FORALL_SCALAR_TYPES_AND3(Bool, Half, BFloat16, TENSOR)
   }
 } // namespace detail
 
-// These functions are defined in native/TensorFactories.cpp.
-#define TENSOR(T, S)                                                          \
-  CAFFE2_API Tensor tensor(ArrayRef<T> values, const TensorOptions& options); \
-  inline Tensor tensor(                                                       \
-      std::initializer_list<T> values, const TensorOptions& options) {        \
-    return native::tensor(ArrayRef<T>(values), options);                      \
-  }                                                                           \
-  inline Tensor tensor(T value, const TensorOptions& options) {               \
-    return native::tensor(ArrayRef<T>(value), options);                       \
-  }                                                                           \
-  inline Tensor tensor(ArrayRef<T> values) {                                  \
-    return native::tensor(std::move(values), at::dtype(k##S));                \
-  }                                                                           \
-  inline Tensor tensor(std::initializer_list<T> values) {                     \
-    return native::tensor(ArrayRef<T>(values));                               \
-  }                                                                           \
-  inline Tensor tensor(T value) {                                             \
-    return native::tensor(ArrayRef<T>(value));                                \
-  }
-AT_FORALL_SCALAR_TYPES_AND3(Bool, Half, BFloat16, TENSOR)
-#undef TENSOR
-
 inline Tensor tensor(detail::ListInitTensor list_init_tensor, const at::TensorOptions& options) {
   return list_init_tensor.to_tensor(options);
 }
@@ -189,8 +193,6 @@ inline Tensor tensor(detail::ListInitTensor list_init_tensor, const at::TensorOp
 inline Tensor tensor(detail::ListInitTensor list_init_tensor) {
   return native::tensor(list_init_tensor, at::dtype(list_init_tensor.scalar_type()));
 }
-
-${native_function_declarations}
 
 } // namespace native
 } // namespace at
