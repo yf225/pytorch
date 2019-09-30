@@ -23,6 +23,20 @@ using Nonlinearity = c10::variant<
   enumtype::kLeakyReLU
 >;
 
+namespace Nonlinearity {
+  TORCH_API extern const enumtype::kLinear Linear = torch::kLinear;
+  TORCH_API extern const enumtype::kConv1D Conv1D = torch::kConv1D;
+  TORCH_API extern const enumtype::kConv2D Conv2D = torch::kConv2D;
+  TORCH_API extern const enumtype::kConv3D Conv3D = torch::kConv3D;
+  TORCH_API extern const enumtype::kConvTranspose1D ConvTranspose1D = torch::kConvTranspose1D;
+  TORCH_API extern const enumtype::kConvTranspose2D ConvTranspose2D = torch::kConvTranspose2D;
+  TORCH_API extern const enumtype::kConvTranspose3D ConvTranspose3D = torch::kConvTranspose3D;
+  TORCH_API extern const enumtype::kSigmoid Sigmoid = torch::kSigmoid;
+  TORCH_API extern const enumtype::kTanh Tanh = torch::kTanh;
+  TORCH_API extern const enumtype::kReLU ReLU = torch::kReLU;
+  TORCH_API extern const enumtype::kLeakyReLU LeakyReLU = torch::kLeakyReLU;
+}  // namespace Nonlinearity
+
 using FanMode = c10::variant<
   enumtype::kFanIn,
   enumtype::kFanOut
