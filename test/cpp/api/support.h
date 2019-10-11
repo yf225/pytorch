@@ -61,5 +61,11 @@ inline int count_substr_occurrences(const std::string& str, const std::string& s
   return count;
 }
 
+#define TEST_TORCH_NN_MODULE_CLONE(module_name) \
+TEST_F(ModuleTest, Clone##module_name) { \
+  auto module = std::make_shared<module_name>(); \
+  module->clone(); \
+}
+
 } // namespace test
 } // namespace torch
