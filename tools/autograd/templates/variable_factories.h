@@ -31,31 +31,40 @@ namespace detail {
   //
   // At any time, a `InitListTensor` object represents either of the following:
   // 1. A scalar with value `scalar()` and type `scalar_type()`.
-  // 2. A Tensor represented in `std::initializer_list<InitListTensor>` form, with value
-  //    `init_list()`, Tensor scalar type `scalar_type()`, and Tensor sizes `sizes()`.
+  // 2. A Tensor represented in `std::vector<InitListTensor>` form, with value
+  //    `vec()`, Tensor scalar type `scalar_type()`, and Tensor sizes `sizes()`.
   struct InitListTensor {
-#define TENSOR(T, S)                   \
-    InitListTensor(T scalar) :         \
-        scalar_(scalar), init_list_(), \
-        sizes_(),                      \
-        scalar_type_(at::k##S),        \
-        type_(InitListTensorType::Scalar) {}
-AT_FORALL_SCALAR_TYPES_AND3(Bool, Half, BFloat16, TENSOR)
+    InitListTensor() = default;
+#define TENSOR(T, S) \
+    InitListTensor(std::initializer_list<T> init_list) : \
+        scalar_(), vec_(), \
+        sizes_({init_list.size()}), \
+        scalar_type_(at::k##S), \
+        type_(InitListTensorType::InitList) { \
+      for (const auto& elem : init_list) { \
+        InitListTensor scalar_value; \
+        scalar_value.scalar_ = elem; \
+        scalar_value.scalar_type_ = at::k##S; \
+        scalar_value.type_ = InitListTensorType::Scalar; \
+        vec_.push_back(scalar_value); \
+      } \
+    }
+AT_FORALL_SCALAR_TYPES_AND(Bool, TENSOR)
 #undef TENSOR
     InitListTensor(std::initializer_list<InitListTensor> init_list) :
         scalar_(),
-        init_list_(init_list),
+        vec_(init_list),
         sizes_(),
         scalar_type_(),
         type_(InitListTensorType::InitList) {
       TORCH_CHECK(
-        init_list.size() > 0,
+        vec_.size() > 0,
         "Empty init-list is not yet supported. We can create tensors with zero-size dimensions in the following way:\n",
         "1-D: `torch::randn({0})`\n",
         "N-D: `torch::randn({2, 3, 0})`");
-      scalar_type_ = init_list.begin()->scalar_type_;
-      const InitListTensor& first_elem = *(init_list.begin());
-      for (const auto& elem : init_list) {
+      scalar_type_ = vec_.begin()->scalar_type_;
+      const InitListTensor& first_elem = *(vec_.begin());
+      for (const auto& elem : vec_) {
         TORCH_CHECK(elem.scalar_type_ == first_elem.scalar_type_,
           "Expected all elements of the tensor to have the same scalar type: ",
           first_elem.scalar_type_,
@@ -71,7 +80,7 @@ AT_FORALL_SCALAR_TYPES_AND3(Bool, Half, BFloat16, TENSOR)
           elem.sizes_);
       }
       sizes_.reserve(first_elem.sizes_.size() + 1);
-      sizes_.push_back(init_list.size());
+      sizes_.push_back(vec_.size());
       sizes_.insert(sizes_.end(), first_elem.sizes_.begin(), first_elem.sizes_.end());
     }
 
@@ -79,8 +88,8 @@ AT_FORALL_SCALAR_TYPES_AND3(Bool, Half, BFloat16, TENSOR)
       return scalar_;
     }
 
-    const std::initializer_list<InitListTensor>& init_list() const {
-      return init_list_;
+    const std::vector<InitListTensor>& vec() const {
+      return vec_;
     }
 
     const std::vector<int64_t>& sizes() const {
@@ -117,9 +126,9 @@ AT_FORALL_SCALAR_TYPES_AND3(Bool, Half, BFloat16, TENSOR)
         });
       } else if (type_ == InitListTensorType::InitList) {
         stream << "{";
-        for (const InitListTensor* it = init_list_.begin(); it != init_list_.end(); it++) {
+        for (std::vector<InitListTensor>::const_iterator it = vec_.begin() ; it != vec_.end(); it++) {
           it->pretty_print_recursive(stream);
-          if (std::next(it) != init_list_.end()) stream << ", ";
+          if (std::next(it) != vec_.end()) stream << ", ";
         }
         stream << "}";
       }
@@ -128,7 +137,7 @@ AT_FORALL_SCALAR_TYPES_AND3(Bool, Half, BFloat16, TENSOR)
    private:
     void fill_tensor(at::Tensor tensor) const {
       size_t index = 0;
-      for (const auto& elem : init_list_) {
+      for (const auto& elem : vec_) {
         if (elem.type_ == InitListTensorType::Scalar) {
           at::NoGradGuard guard;
           tensor[index].fill_(elem.scalar());
@@ -141,7 +150,7 @@ AT_FORALL_SCALAR_TYPES_AND3(Bool, Half, BFloat16, TENSOR)
       }
     }
     c10::Scalar scalar_;
-    std::initializer_list<InitListTensor> init_list_;
+    std::vector<InitListTensor> vec_;
     std::vector<int64_t> sizes_;
     c10::ScalarType scalar_type_;
     InitListTensorType type_;
