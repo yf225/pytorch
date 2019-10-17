@@ -21,6 +21,7 @@ using at::DimnameList;
 
 namespace torch {
 
+/*
 namespace detail {
   enum class InitListTensorType { Scalar, InitList };
 
@@ -162,67 +163,282 @@ AT_FORALL_SCALAR_TYPES_AND(Bool, TENSOR)
   }
 } // namespace detail
 
-#define TENSOR(T, S)                                                       \
-  inline at::Tensor tensor(                                                \
-      at::ArrayRef<T> values, const at::TensorOptions& options) {          \
-    at::Tensor result = ([&]() {                                           \
-      at::AutoNonVariableTypeMode non_var_type_mode(true);                 \
-      return at::tensor(values, at::TensorOptions(options).is_variable(false)); \
-    })();                                                                  \
-    return autograd::make_variable(result, options.requires_grad());       \
-  }                                                                        \
-  inline at::Tensor tensor(                                                \
-      std::initializer_list<T> values, const at::TensorOptions& options) { \
-    return torch::tensor(at::ArrayRef<T>(values), options);                \
-  }                                                                        \
-  inline at::Tensor tensor(T value, const at::TensorOptions& options) {    \
-    return torch::tensor(at::ArrayRef<T>(value), options);                 \
-  }                                                                        \
-  inline at::Tensor tensor(at::ArrayRef<T> values) {                       \
-    return torch::tensor(std::move(values), at::dtype(at::k##S));          \
-  }                                                                        \
-  inline at::Tensor tensor(std::initializer_list<T> values) {              \
-    return torch::tensor(at::ArrayRef<T>(values));                         \
-  }                                                                        \
-  inline at::Tensor tensor(T value) {                                      \
-    return torch::tensor(at::ArrayRef<T>(value));                          \
+*/
+
+// #define TENSOR(T, S)                                                       \
+//   inline at::Tensor tensor(                                                \
+//       at::ArrayRef<T> values, const at::TensorOptions& options) {          \
+//     at::Tensor result = ([&]() {                                           \
+//       at::AutoNonVariableTypeMode non_var_type_mode(true);                 \
+//       return at::tensor(values, at::TensorOptions(options).is_variable(false)); \
+//     })();                                                                  \
+//     return autograd::make_variable(result, options.requires_grad());       \
+//   }                                                                        \
+//   inline at::Tensor tensor(                                                \
+//       std::initializer_list<T> values, const at::TensorOptions& options) { \
+//     return torch::tensor(at::ArrayRef<T>(values), options);                \
+//   }                                                                        \
+//   inline at::Tensor tensor(T value, const at::TensorOptions& options) {    \
+//     return torch::tensor(at::ArrayRef<T>(value), options);                 \
+//   }                                                                        \
+//   inline at::Tensor tensor(at::ArrayRef<T> values) {                       \
+//     return torch::tensor(std::move(values), at::dtype(at::k##S));          \
+//   }                                                                        \
+//   inline at::Tensor tensor(std::initializer_list<T> values) {              \
+//     return torch::tensor(at::ArrayRef<T>(values));                         \
+//   }                                                                        \
+//   inline at::Tensor tensor(T value) {                                      \
+//     return torch::tensor(at::ArrayRef<T>(value));                          \
+//   }
+// AT_FORALL_SCALAR_TYPES_AND3(Bool, Half, BFloat16, TENSOR)
+// #undef TENSOR
+
+// /// NOTE: `torch::tensor({})` doesn't work at the moment because we would need to solve the
+// /// ambiguous overload problem (see https://github.com/pytorch/pytorch/pull/26210#discussion_r325336686).
+// /// We can create tensors with zero-size dimensions in the following way instead:
+// /// - 1-D tensor: `torch::randn({0})`
+// /// - N-D tensor: `torch::randn({2, 3, 0})`
+// ///
+// /// NOTE: Currently `torch::tensor(...)` doesn't support mixed data types
+// /// (i.e. `torch::tensor({{bool, 2.0}})` doesn't work). We might be able to
+// /// support it in the future by iterating over all sub-lists to find
+// /// the largest data type that can represent all of the elements, or by using
+// /// variadic templates.
+// inline at::Tensor tensor(detail::InitListTensor init_list_tensor, const at::TensorOptions& options) {
+//   return autograd::make_variable(init_list_tensor.to_tensor(options), options.requires_grad());
+// }
+
+// inline at::Tensor tensor(detail::InitListTensor init_list_tensor) {
+//   return torch::tensor(init_list_tensor, at::dtype(init_list_tensor.scalar_type()));
+// }
+
+// /// NOTE: We add `torch::tensor(std::initializer_list<detail::InitListTensor>)` function overload (and its options variant),
+// /// so that `torch::tensor({{1, 2}})` can take this overload instead of `torch::tensor(at::ArrayRef<T>)`.
+// inline at::Tensor tensor(std::initializer_list<detail::InitListTensor> init_list, const at::TensorOptions& options) {
+//   TORCH_INTERNAL_ASSERT(
+//     init_list.begin()->type() != detail::InitListTensorType::Scalar,
+//     "1D tensor construction such as `torch::tensor({1, 2, 3})` should never take the ",
+//     "torch::tensor(std::initializer_list<detail::InitListTensor>) function overload. ",
+//     "Please fix the code to avoid this regression.")
+//   return torch::tensor(detail::InitListTensor(init_list), options);
+// }
+
+// inline at::Tensor tensor(std::initializer_list<detail::InitListTensor> init_list) {
+//   return torch::tensor(init_list, at::dtype(init_list.begin()->scalar_type()));
+// }
+
+// yf225 TODO: let's test this 2D case first
+/*
+struct A
+{
+    A(int i_) : i (i_) {}
+    A(std::initializer_list<int> il) : i (*il.begin() + 10) {}
+    int i;
+};
+
+int main(int, char* []) {
+  A a1 = 5; // a1.i == 5
+  std::cout << a1.i << std::endl;
+
+  A a2 = {5}; // a2.i = 6
+  std::cout << a2.i << std::endl;
+
+  return 0;
+}
+*/
+
+struct ScalarWrapper {
+#define TENSOR(T, S) \
+  ScalarWrapper(T value) : scalar_(value), scalar_type_(at::k##S), is_scalar_(true) {} \
+  ScalarWrapper(std::initializer_list<T> value) : scalar_(*value.begin()), scalar_type_(at::k##S), is_scalar_(false) {}
+AT_FORALL_SCALAR_TYPES_AND3(Bool, Half, BFloat16, TENSOR)
+#undef TENSOR
+
+  c10::Scalar scalar_;
+  c10::ScalarType scalar_type_;
+  bool is_scalar_;
+};
+
+struct ArrayRefWrapper {
+#define TENSOR(T, S) \
+  ArrayRefWrapper(at::ArrayRef<T> values) { \
+    at::AutoNonVariableTypeMode non_var_type_mode(true); \
+    at::Tensor tensor_ = at::tensor(values, at::TensorOptions().device(at::kCPU).is_variable(false)); \
   }
 AT_FORALL_SCALAR_TYPES_AND3(Bool, Half, BFloat16, TENSOR)
 #undef TENSOR
 
-/// NOTE: `torch::tensor({})` doesn't work at the moment because we would need to solve the
-/// ambiguous overload problem (see https://github.com/pytorch/pytorch/pull/26210#discussion_r325336686).
-/// We can create tensors with zero-size dimensions in the following way instead:
-/// - 1-D tensor: `torch::randn({0})`
-/// - N-D tensor: `torch::randn({2, 3, 0})`
-///
-/// NOTE: Currently `torch::tensor(...)` doesn't support mixed data types
-/// (i.e. `torch::tensor({{bool, 2.0}})` doesn't work). We might be able to
-/// support it in the future by iterating over all sub-lists to find
-/// the largest data type that can represent all of the elements, or by using
-/// variadic templates.
-inline at::Tensor tensor(detail::InitListTensor init_list_tensor, const at::TensorOptions& options) {
-  return autograd::make_variable(init_list_tensor.to_tensor(options), options.requires_grad());
+#define TENSOR(T, S) \
+  ArrayRefWrapper(std::vector<T> values) : ArrayRefWrapper(at::ArrayRef<T>(values)) {}
+AT_FORALL_SCALAR_TYPES_AND2(Half, BFloat16, TENSOR)
+#undef TENSOR
+
+  // yf225 TODO: we will handle std::vector<bool> separately
+
+  at::Tensor tensor_;
+};
+
+inline at::Tensor tensor(ScalarWrapper scalar_wrapper, const at::TensorOptions& options = {}) {
+  at::Tensor tensor = ([&]() {
+    at::AutoNonVariableTypeMode non_var_type_mode(true);
+    return at::empty({1}, at::TensorOptions(options).device(at::kCPU).is_variable(false));
+  })();
+
+  tensor.fill_(scalar_wrapper.scalar_);
+
+  tensor = tensor.to(options.device());
+
+  return autograd::make_variable(tensor, options.requires_grad());
 }
 
-inline at::Tensor tensor(detail::InitListTensor init_list_tensor) {
-  return torch::tensor(init_list_tensor, at::dtype(init_list_tensor.scalar_type()));
+inline at::Tensor tensor(ArrayRefWrapper array_ref_wrapper, const at::TensorOptions& options = {}) {
+  auto tensor = array_ref_wrapper.tensor_;
+  tensor = tensor.to(options);
+  return autograd::make_variable(tensor, options.requires_grad());
 }
 
-/// NOTE: We add `torch::tensor(std::initializer_list<detail::InitListTensor>)` function overload (and its options variant),
-/// so that `torch::tensor({{1, 2}})` can take this overload instead of `torch::tensor(at::ArrayRef<T>)`.
-inline at::Tensor tensor(std::initializer_list<detail::InitListTensor> init_list, const at::TensorOptions& options) {
-  TORCH_INTERNAL_ASSERT(
-    init_list.begin()->type() != detail::InitListTensorType::Scalar,
-    "1D tensor construction such as `torch::tensor({1, 2, 3})` should never take the ",
-    "torch::tensor(std::initializer_list<detail::InitListTensor>) function overload. ",
-    "Please fix the code to avoid this regression.")
-  return torch::tensor(detail::InitListTensor(init_list), options);
+// yf225 TODO: can we take advantage of this to support mixed type? Same question for higher dims
+inline at::Tensor tensor(std::initializer_list<ScalarWrapper> init_list, const at::TensorOptions& options = {}) {
+  std::vector<int64_t> tensor_sizes;
+  if (init_list.begin()->is_scalar_) { // yf225 TODO: we need to prevent mixing is_scalar_=true and is_scalar_=false types
+    tensor_sizes = {(int64_t)init_list.size()};
+  } else {
+    tensor_sizes = {(int64_t)init_list.size(), 1};
+  }
+
+  at::Tensor tensor = ([&]() {
+    at::AutoNonVariableTypeMode non_var_type_mode(true);
+    return at::empty(tensor_sizes, at::TensorOptions(options).device(at::kCPU).is_variable(false));
+  })();
+
+  size_t index = 0;
+  for (const auto& elem : init_list) {
+    at::NoGradGuard guard;
+    tensor[index].fill_(elem.scalar_);
+    index++;
+  }
+
+  tensor = tensor.to(options.device());
+
+  return autograd::make_variable(tensor, options.requires_grad());
 }
 
-inline at::Tensor tensor(std::initializer_list<detail::InitListTensor> init_list) {
-  return torch::tensor(init_list, at::dtype(init_list.begin()->scalar_type()));
+inline at::Tensor tensor(std::initializer_list<std::initializer_list<ScalarWrapper>> init_list, const at::TensorOptions& options = {}) {
+  std::vector<int64_t> tensor_sizes;
+  if (init_list.begin()->begin()->is_scalar_) { // yf225 TODO: we need to prevent mixing is_scalar=true and is_scalar=false types
+    tensor_sizes = {(int64_t)init_list.size(), (int64_t)(init_list.begin()->size())};
+  } else {
+    tensor_sizes = {(int64_t)init_list.size(), (int64_t)(init_list.begin()->size()), 1};
+  }
+
+  at::Tensor tensor = ([&]() {
+    at::AutoNonVariableTypeMode non_var_type_mode(true);
+    return at::empty(tensor_sizes, at::TensorOptions(options).device(at::kCPU).is_variable(false));
+  })();
+
+  size_t outer_index = 0;
+  for (const auto& outer_elem : init_list) {
+    size_t inner_index = 0;
+    for (const auto& inner_elem : outer_elem) {
+      at::NoGradGuard guard;
+      tensor[outer_index][inner_index].fill_(inner_elem.scalar_);
+      inner_index++;
+    }
+    outer_index++;
+  }
+
+  tensor = tensor.to(options.device());
+
+  return autograd::make_variable(tensor, options.requires_grad());
 }
+
+
+// yf225 TODO: we need this to make `torch::tensor({{1, 2}})` not ambiguous, because
+// `tensor(std::initializer_list<ScalarWrapper> init_list)` and `tensor(ArrayRefWrapper array_ref_wrapper)
+// are ambiguous for that
+#define TENSOR(T, S) \
+inline at::Tensor tensor(std::initializer_list<std::initializer_list<T>> init_list, const at::TensorOptions& options = {}) { \
+  std::vector<int64_t> tensor_sizes = {(int64_t)init_list.size(), (int64_t)(init_list.begin()->size())}; \
+  at::Tensor tensor = ([&]() { \
+    at::AutoNonVariableTypeMode non_var_type_mode(true); \
+    return at::empty(tensor_sizes, at::TensorOptions(options).dtype(at::k##S).device(at::kCPU).is_variable(false)); \
+  })(); \
+  size_t outer_index = 0; \
+  for (const auto& outer_elem : init_list) { \
+    size_t inner_index = 0; \
+    for (const auto& inner_elem : outer_elem) { \
+      at::NoGradGuard guard; \
+      tensor[outer_index][inner_index].fill_(inner_elem); \
+      inner_index++; \
+    } \
+    outer_index++; \
+  } \
+  tensor = tensor.to(options.device()); \
+  return autograd::make_variable(tensor, options.requires_grad()); \
+}
+AT_FORALL_SCALAR_TYPES_AND3(Bool, Half, BFloat16, TENSOR)
+#undef TENSOR
+
+inline at::Tensor tensor(std::initializer_list<std::initializer_list<std::initializer_list<ScalarWrapper>>> init_list, const at::TensorOptions& options = {}) {
+  std::vector<int64_t> tensor_sizes;
+  if (init_list.begin()->begin()->begin()->is_scalar_) { // yf225 TODO: we need to prevent mixing is_scalar=true and is_scalar=false types
+    tensor_sizes = {(int64_t)init_list.size(), (int64_t)(init_list.begin()->size()), (int64_t)(init_list.begin()->begin()->size())};
+  } else {
+    tensor_sizes = {(int64_t)init_list.size(), (int64_t)(init_list.begin()->size()), (int64_t)(init_list.begin()->begin()->size()), 1};
+  }
+
+  at::Tensor tensor = ([&]() {
+    at::AutoNonVariableTypeMode non_var_type_mode(true);
+    return at::empty(tensor_sizes, at::TensorOptions(options).device(at::kCPU).is_variable(false));
+  })();
+
+  size_t dim0_index = 0;
+  for (const auto& dim0_elem : init_list) {
+    size_t dim1_index = 0;
+    for (const auto& dim1_elem : dim0_elem) {
+      size_t dim2_index = 0;
+      for (const auto& dim2_elem : dim1_elem) {
+        at::NoGradGuard guard;
+        tensor[dim0_index][dim1_index][dim2_index].fill_(dim2_elem.scalar_);
+        dim2_index++;
+      }
+      dim1_index++;
+    }
+    dim0_index++;
+  }
+
+  tensor = tensor.to(options.device());
+
+  return autograd::make_variable(tensor, options.requires_grad());
+}
+
+// inline at::Tensor tensor(std::initializer_list<std::initializer_list<std::initializer_list<std::initializer_list<c10::Scalar>> init_list, const at::TensorOptions& options) {
+  
+// }
+
+// inline at::Tensor tensor(std::initializer_list<std::initializer_list<std::initializer_list<std::initializer_list<std::initializer_list<c10::Scalar>> init_list, const at::TensorOptions& options) {
+  
+// }
+
+// inline at::Tensor tensor(std::initializer_list<std::initializer_list<std::initializer_list<std::initializer_list<std::initializer_list<std::initializer_list<c10::Scalar>> init_list, const at::TensorOptions& options) {
+  
+// }
+
+// inline at::Tensor tensor(std::initializer_list<std::initializer_list<std::initializer_list<std::initializer_list<std::initializer_list<std::initializer_list<std::initializer_list<c10::Scalar>> init_list, const at::TensorOptions& options) {
+  
+// }
+
+// inline at::Tensor tensor(std::initializer_list<std::initializer_list<std::initializer_list<std::initializer_list<std::initializer_list<std::initializer_list<std::initializer_list<std::initializer_list<c10::Scalar>> init_list, const at::TensorOptions& options) {
+  
+// }
+
+// inline at::Tensor tensor(std::initializer_list<std::initializer_list<std::initializer_list<std::initializer_list<std::initializer_list<std::initializer_list<std::initializer_list<std::initializer_list<std::initializer_list<c10::Scalar>> init_list, const at::TensorOptions& options) {
+  
+// }
+
+// inline at::Tensor tensor(std::initializer_list<std::initializer_list<std::initializer_list<std::initializer_list<std::initializer_list<std::initializer_list<std::initializer_list<std::initializer_list<std::initializer_list<std::initializer_list<c10::Scalar>> init_list, const at::TensorOptions& options) {
+
+// }
 
 /// A generic deleter function.
 using Deleter = std::function<void(void*)>;
