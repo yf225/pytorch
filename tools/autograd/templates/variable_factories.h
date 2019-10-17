@@ -22,6 +22,18 @@ using at::DimnameList;
 namespace torch {
 
 namespace detail {
+  struct ScalarWrapper {
+#define TENSOR(T, S) \
+    ScalarWrapper(T value) : scalar_(value), scalar_type_(at::k##S), is_scalar_(true) {} \
+    ScalarWrapper(std::initializer_list<T> value) : scalar_(*value.begin()), scalar_type_(at::k##S), is_scalar_(false) {}
+AT_FORALL_SCALAR_TYPES_AND3(Bool, Half, BFloat16, TENSOR)
+#undef TENSOR
+
+    c10::Scalar scalar_;
+    c10::ScalarType scalar_type_;
+    bool is_scalar_;
+  };
+
   enum class InitListTensorType { Scalar, InitList };
 
   // We use `InitListTensor` to support converting an arbitrarily nested braced-init-list
@@ -34,14 +46,11 @@ namespace detail {
   // 2. A Tensor represented in `std::initializer_list<InitListTensor>` form, with value
   //    `init_list()`, Tensor scalar type `scalar_type()`, and Tensor sizes `sizes()`.
   struct InitListTensor {
-#define TENSOR(T, S)                   \
-    InitListTensor(T scalar) :         \
-        scalar_(scalar), init_list_(), \
-        sizes_(),                      \
-        scalar_type_(at::k##S),        \
+    InitListTensor(ScalarWrapper scalar_wrapper) :
+        scalar_(scalar_wrapper.scalar_), init_list_(),
+        sizes_((scalar_wrapper.is_scalar_ ? std::vector<int64_t>({}) : std::vector<int64_t>({1}))),
+        scalar_type_(scalar_wrapper.scalar_type_),
         type_(InitListTensorType::Scalar) {}
-AT_FORALL_SCALAR_TYPES_AND3(Bool, Half, BFloat16, TENSOR)
-#undef TENSOR
     InitListTensor(std::initializer_list<InitListTensor> init_list) :
         scalar_(),
         init_list_(init_list),
