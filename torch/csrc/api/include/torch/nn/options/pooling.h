@@ -3,16 +3,20 @@
 #include <torch/arg.h>
 #include <torch/csrc/WindowsTorchApiMacro.h>
 #include <torch/expanding_array.h>
+#include <torch/serializable_options.h>
 #include <torch/types.h>
 
 namespace torch {
 namespace nn {
 
+// yf225 TODO: experiment on this module
 /// Options for a `D`-dimensional avgpool functional and module.
 template <size_t D>
-struct AvgPoolOptions {
-  AvgPoolOptions(ExpandingArray<D> kernel_size)
-      : kernel_size_(kernel_size), stride_(kernel_size) {}
+struct AvgPoolOptions : public SerializableOptions {
+  AvgPoolOptions(ExpandingArray<D> kernel_size_) {
+    kernel_size(kernel_size_);
+    stride(kernel_size_);
+  }
 
   /// the size of the window to take an average over
   TORCH_ARG(ExpandingArray<D>, kernel_size);
@@ -24,13 +28,13 @@ struct AvgPoolOptions {
   TORCH_ARG(ExpandingArray<D>, padding) = 0;
 
   /// when True, will use `ceil` instead of `floor` to compute the output shape
-  TORCH_ARG(bool, ceil_mode) = false;
+  TORCH_OPTIONS_ARG(bool, ceil_mode) = false;
 
   /// when True, will include the zero-padding in the averaging calculation
-  TORCH_ARG(bool, count_include_pad) = true;
+  TORCH_OPTIONS_ARG(bool, count_include_pad) = true;
 
   /// if specified, it will be used as divisor, otherwise `kernel_size` will be used
-  TORCH_ARG(c10::optional<int64_t>, divisor_override) = c10::nullopt;
+  TORCH_OPTIONS_ARG(c10::optional<int64_t>, divisor_override) = c10::nullopt;
 };
 
 /// `AvgPoolOptions` specialized for 1-D avgpool.

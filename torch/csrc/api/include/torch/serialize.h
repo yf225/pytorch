@@ -8,6 +8,8 @@
 
 namespace torch {
 
+// yf225 TODO: how should the new serialization scheme work while maintaining BC?
+
 /// Serializes the given `value`.
 /// There must be an overload of `operator<<` between `serialize::OutputArchive`
 /// and `Value` for this method to be well-formed. Currently, such an overload
@@ -36,6 +38,7 @@ namespace torch {
 ///   auto tensor = torch::ones({3, 4});
 ///   torch::save(tensor, "my_tensor.pt");
 /// \endrst
+// yf225 TODO: we will keep this for BC
 template <typename Value, typename... SaveToArgs>
 void save(const Value& value, SaveToArgs&&... args) {
   serialize::OutputArchive archive(
@@ -62,6 +65,7 @@ void save(const Value& value, SaveToArgs&&... args) {
 ///   // invocations, otherwise the header will be corrupted.
 ///   torch::save(tensor_vec, stream);
 /// \endrst
+// yf225 TODO: we will keep this for BC
 template <typename... SaveToArgs>
 void save(const std::vector<torch::Tensor>& tensor_vec, SaveToArgs&&... args) {
   serialize::OutputArchive archive(
@@ -101,6 +105,7 @@ TORCH_API std::vector<char> pickle_save(const torch::IValue& ivalue);
 ///   auto tensor = torch::ones({3, 4});
 ///   torch::load(tensor, "my_tensor.pt");
 /// \endrst
+// yf225 TODO: we will keep this for BC
 template <typename Value, typename... LoadFromArgs>
 void load(Value& value, LoadFromArgs&&... args) {
   serialize::InputArchive archive;
@@ -124,6 +129,7 @@ void load(Value& value, LoadFromArgs&&... args) {
 ///   std::istringstream stream("...");
 ///   torch::load(tensor_vec, stream);
 /// \endrst
+// yf225 TODO: we will keep this for BC
 template <typename... LoadFromArgs>
 void load(std::vector<torch::Tensor>& tensor_vec, LoadFromArgs&&... args) {
   serialize::InputArchive archive;
