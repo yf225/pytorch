@@ -3269,7 +3269,7 @@
 
 - func: native_batch_norm(Tensor input, Tensor? weight, Tensor? bias, Tensor? running_mean, Tensor? running_var, bool training, float momentum, float eps) -> (Tensor, Tensor, Tensor)
   dispatch:
-    CPU: batch_norm_cpu
+    CPU, Meta: batch_norm_cpu
     CUDA: batch_norm_cuda
     MkldnnCPU: mkldnn_batch_norm
 
@@ -3300,7 +3300,7 @@
 
 - func: native_batch_norm_backward(Tensor grad_out, Tensor input, Tensor? weight, Tensor? running_mean, Tensor? running_var, Tensor? save_mean, Tensor? save_invstd, bool train, float eps, bool[3] output_mask) -> (Tensor, Tensor, Tensor)
   dispatch:
-    CPU: batch_norm_backward_cpu
+    CPU, Meta: batch_norm_backward_cpu
     CUDA: batch_norm_backward_cuda
     MkldnnCPU: mkldnn_batch_norm_backward
 
@@ -4692,7 +4692,7 @@
   device_check: NoCheck
   device_guard: False
   dispatch:
-    CPU, CUDA: unsqueeze
+    CPU, CUDA, Meta: unsqueeze
     SparseCPU, SparseCUDA: unsqueeze_sparse
     QuantizedCPU, QuantizedCUDA: unsqueeze_quantized
 
@@ -7871,13 +7871,13 @@
 
 - func: _cat(Tensor[] tensors, int dim=0) -> Tensor
   dispatch:
-    CPU: _cat_cpu
+    CPU, Meta: _cat_cpu
     CUDA: cat_cuda
     QuantizedCPU: cat_quantized_cpu
 
 - func: _cat.out(Tensor[] tensors, int dim=0, *, Tensor(a!) out) -> Tensor(a!)
   dispatch:
-    CPU: _cat_out_cpu
+    CPU, Meta: _cat_out_cpu
     CUDA: cat_out_cuda
     QuantizedCPU: cat_out_quantized_cpu
 

@@ -98,8 +98,10 @@ std::tuple<Tensor,Tensor,Tensor> batch_norm_cpu_transform_input_template(
   // inference contiguous path
   if (all_contiguous) {
     Tensor output = at::empty_like(input, suggest_memory_format_contig(input));
-    batch_norm_cpu_stub(kCPU, output, input, weight, bias,
-        save_mean, save_invstd, running_mean, running_var, train, eps);
+    if (input.device() != kMeta) {
+      batch_norm_cpu_stub(kCPU, output, input, weight, bias,
+          save_mean, save_invstd, running_mean, running_var, train, eps);
+    }
     return std::make_tuple(output, save_mean, save_invstd);
   }
 
@@ -128,6 +130,11 @@ std::tuple<Tensor,Tensor,Tensor> batch_norm_cpu_transform_input_template(
       at::detail::scalar_tensor_static(0, input.scalar_type(), kCPU);
 
   Tensor output = at::empty_like(input, input.suggest_memory_format());
+
+  if (input.device() == kMeta) {
+    return std::make_tuple(output, save_mean, save_invstd);
+  }
+
   auto iter = TensorIteratorConfig()
     .add_output(output)
     .add_input(input)
@@ -163,6 +170,11 @@ std::tuple<Tensor,Tensor> batch_norm_cpu_update_stats_template(
 
   Tensor save_mean = at::mean(input, /*dims=*/reduce_dims);
   Tensor save_var_transform = at::empty({n_input}, input.options());
+
+  if (input.device() == kMeta) {
+    return std::make_tuple(save_mean, save_var_transform);
+  }
+
   auto save_mean_a = save_mean.accessor<scalar_t, 1>();
   auto save_var_transform_a = save_var_transform.accessor<scalar_t, 1>();
 
@@ -249,6 +261,10 @@ std::tuple<Tensor, Tensor, Tensor> batch_norm_backward_cpu_template(
   }
   if (grad_input_mask[2]) {
     grad_bias = at::empty({input.size(1)}, input.options());
+  }
+
+  if (input.device() == kMeta) {
+    return std::make_tuple(grad_input, grad_weight, grad_bias);
   }
 
   // since we are directly manipulating pointers in contiguous path,
@@ -641,7 +657,9 @@ std::tuple<Tensor, Tensor, Tensor> batch_norm_cpu(const Tensor& self, const c10:
   const Tensor& running_mean = c10::value_or_else(running_mean_opt, [] {return Tensor();});
   const Tensor& running_var = c10::value_or_else(running_var_opt, [] {return Tensor();});
 
-  checkBackend("batch_norm_cpu", {self, weight, bias, running_mean, running_var}, Backend::CPU);
+  if (self.device() != kMeta) {
+    checkBackend("batch_norm_cpu", {self, weight, bias, running_mean, running_var}, Backend::CPU);
+  }
 
   return AT_DISPATCH_FLOATING_TYPES(self.scalar_type(), "batch_norm", [&] {
       if (!train) {
