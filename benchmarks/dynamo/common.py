@@ -2313,6 +2313,9 @@ def run(runner, args, original_dir=None):
 
     if args.inductor or args.backend == "inductor":
         inductor_config.triton.cudagraphs = not args.disable_cudagraphs
+        if inductor_config.triton.cudagraphs:
+            inductor_config.triton.cudagraph_trees = True
+            inductor_config.triton.slow_path_cudagraph_asserts = True
         inductor_config.triton.persistent_reductions = (
             not args.disable_persistent_reductions
         )
