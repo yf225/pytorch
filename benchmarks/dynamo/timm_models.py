@@ -203,6 +203,8 @@ class TimmRunnner(BenchmarkRunner):
                     # drop_path_rate=kwargs.pop('drop_path', None),
                     # drop_block_rate=kwargs.pop('drop_block', None),
                 )
+                model_s = torch.jit.script(model)
+                torch.jit.save(model_s, f"{model_name}.pt")
                 success = True
             except Exception as e:
                 tries += 1
