@@ -15,6 +15,7 @@ import functools
 import pytest
 import sys
 
+
 # a lot of this file is copied from _pytest.junitxml and modified to get rerun info
 
 xml_key = StashKey["LogXMLReruns"]()
