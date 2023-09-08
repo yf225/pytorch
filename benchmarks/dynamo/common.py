@@ -3355,6 +3355,8 @@ def run(runner, args, original_dir=None):
         else:
             args.profiler_trace_name = args.profiler_trace_name
         if not args.disable_cudagraphs:
+            # Without this, running profiler on a cudagraph-enabled model
+            # will result in IMA error or hanging.
             torch.profiler._utils._init_for_cuda_graphs()
 
     if args.no_translation_validation:
