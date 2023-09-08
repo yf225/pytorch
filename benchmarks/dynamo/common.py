@@ -732,7 +732,7 @@ def speedup_experiment(args, model_iter_fn, model, example_inputs, **kwargs):
                     expected_output, actual_output, tol=tolerance
                 )
 
-    if args.export_profiler_trace:
+    if args.export_profiler_trace and torch.distributed.get_rank() == 0:
         name = args.profiler_trace_name + "_" + model.name + ".json"
         name = os.path.join(torch._dynamo.config.base_dir, name)
         p.export_chrome_trace(name)
@@ -1916,7 +1916,7 @@ class BenchmarkRunner:
         )
         return start, end
 
-    def deepcopy_and_maybe_ddp(self, model):
+    def deepcopy_and_maybe_ddp(self, model, bucket_cap_mb=25):
         model = self.deepcopy_model(model)
         if self.args.ddp:
             assert (
@@ -1924,7 +1924,7 @@ class BenchmarkRunner:
             ), "Can't use DDP without a distributed enabled build"
             from torch.nn.parallel import DistributedDataParallel as DDP
 
-            model = DDP(model, find_unused_parameters=True)
+            model = DDP(model, find_unused_parameters=True, bucket_cap_mb=bucket_cap_mb)
         elif self.args.fsdp:
             assert (
                 torch.distributed.is_available()
@@ -2105,7 +2105,8 @@ class BenchmarkRunner:
             reset_rng_state()
             torch._dynamo.reset()
             try:
-                model_copy = self.deepcopy_and_maybe_ddp(model)
+                # Compile mode, use max DDP bucket_cap_mb to delay allreduce and avoid DDPOptimizer graph slicing
+                model_copy = self.deepcopy_and_maybe_ddp(model, bucket_cap_mb=2147483647)
                 self.init_optimizer(name, current_device, model_copy.parameters())
                 if self.args.export:
                     # TB and TIMM use list example_inputs
@@ -2302,19 +2303,21 @@ class BenchmarkRunner:
         # Cast the model to float16/float32 as necessary
         model, example_inputs = self.maybe_cast(model, example_inputs)
 
-        # Use distributed wrapping as necessary
-        model = self.deepcopy_and_maybe_ddp(model)
-
         self.init_optimizer(name, current_device, model.parameters())
+
         with self.pick_grad(name, self.args.training):
             ok, total = Stats.reset_counters()
             experiment_kwargs = {}
             if tag is not None:
                 experiment_kwargs["tag"] = tag
             results = []
+            # Eager mode, use default DDP bucket_cap_mb
+            model = self.deepcopy_and_maybe_ddp(model)
             eager_latency, eager_peak_mem, _ = warmup(
                 self.model_iter_fn, model, example_inputs, "eager"
             )
+            # Compile mode, use max DDP bucket_cap_mb to delay allreduce and avoid DDPOptimizer graph slicing
+            model = self.deepcopy_and_maybe_ddp(model, bucket_cap_mb=2147483647)
             optimized_model_iter_fn = optimize_ctx(self.model_iter_fn)
             dynamo_latency, dynamo_peak_mem, dynamo_stats = warmup(
                 optimized_model_iter_fn, model, example_inputs, "dynamo"
@@ -3077,9 +3080,9 @@ def run(runner, args, original_dir=None):
         # TODO: we could also hook DDP bench up to --speedup bench, _not_ for mgpu e2e perf,
         # but just to measure impact on singlenode of performing graph-breaks.
         # Left it as a follow up to keep this PR isolated.
-        assert (
-            args.accuracy
-        ), "DDP benchmark is currently only hooked up to --accuracy bench"
+        # assert (
+        #     args.accuracy
+        # ), "DDP benchmark is currently only hooked up to --accuracy bench"
         assert args.training, "DDP benchmark requires --training mode"
         if args.no_optimize_ddp:
             torch._dynamo.config.optimize_ddp = False
@@ -3351,6 +3354,8 @@ def run(runner, args, original_dir=None):
                 args.profiler_trace_name = "profile"
         else:
             args.profiler_trace_name = args.profiler_trace_name
+        if not args.disable_cudagraphs:
+            torch.profiler._utils._init_for_cuda_graphs()
 
     if args.no_translation_validation:
         # Overwrite 'translation_validation' config, if specified.
