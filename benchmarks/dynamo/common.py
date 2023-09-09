@@ -2303,8 +2303,6 @@ class BenchmarkRunner:
         # Cast the model to float16/float32 as necessary
         model, example_inputs = self.maybe_cast(model, example_inputs)
 
-        self.init_optimizer(name, current_device, model.parameters())
-
         with self.pick_grad(name, self.args.training):
             ok, total = Stats.reset_counters()
             experiment_kwargs = {}
@@ -2312,12 +2310,13 @@ class BenchmarkRunner:
                 experiment_kwargs["tag"] = tag
             results = []
             # Eager mode, use default DDP bucket_cap_mb
-            model = self.deepcopy_and_maybe_ddp(model)
+            model_copy = self.deepcopy_and_maybe_ddp(model)
+            self.init_optimizer(name, current_device, model_copy.parameters())
             eager_latency, eager_peak_mem, _ = warmup(
                 self.model_iter_fn, model, example_inputs, "eager"
             )
             # Compile mode, use max DDP bucket_cap_mb to delay allreduce and avoid DDPOptimizer graph slicing
-            model = self.deepcopy_and_maybe_ddp(model, bucket_cap_mb=2147483647)
+            model_copy = self.deepcopy_and_maybe_ddp(model, bucket_cap_mb=2147483647)
             optimized_model_iter_fn = optimize_ctx(self.model_iter_fn)
             dynamo_latency, dynamo_peak_mem, dynamo_stats = warmup(
                 optimized_model_iter_fn, model, example_inputs, "dynamo"
