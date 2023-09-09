@@ -211,10 +211,10 @@ SKIP_ACCURACY_CHECK_MODELS = {
     # even for 40 GB machine. We have tested accuracy for smaller version of
     # these models
     "hf_GPT2_large",
-    "hf_T5_large",
+    # "hf_T5_large",
     "timm_vision_transformer_large",
     "maml",  # accuracy https://github.com/pytorch/pytorch/issues/93847
-    "llama_v2_7b_16h",
+    # "llama_v2_7b_16h",
     "Background_Matting",
 }
 
