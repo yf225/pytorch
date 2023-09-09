@@ -734,7 +734,7 @@ def speedup_experiment(args, model_iter_fn, model, example_inputs, **kwargs):
 
     if args.export_profiler_trace and torch.distributed.get_rank() == 0:
         name = args.profiler_trace_name + "_" + model.name + ".json"
-        name = os.path.join(torch._dynamo.config.base_dir, name)
+        # name = os.path.join(torch._dynamo.config.base_dir, name)
         p.export_chrome_trace(name)
     median = np.median(timings, axis=0)
     speedup = median[0] / median[1]
