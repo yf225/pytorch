@@ -3420,13 +3420,13 @@ def run(runner, args, original_dir=None):
                                 # Always load model on cpu for fsdp
                                 # When initializing FSDP, we will use the cuda device if args.cuda is set
                                 (
-                                    _,
+                                    device,
                                     name,
                                     model,
                                     example_inputs,
                                     batch_size,
                                 ) = runner.load_model(
-                                    "cpu", model_name, batch_size=batch_size
+                                    device, model_name, batch_size=batch_size
                                 )
                             else:
                                 (
