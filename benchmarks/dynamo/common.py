@@ -1955,8 +1955,6 @@ class BenchmarkRunner:
                 size_based_auto_wrap_policy, recurse=True, min_num_params=int(1e5)
             )
 
-            print(f"self.args.devices[-1]: {self.args.devices[-1]}")
-
             model = FSDP(
                 model,
                 use_orig_params=True,
