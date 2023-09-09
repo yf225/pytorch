@@ -2317,17 +2317,17 @@ class BenchmarkRunner:
                 experiment_kwargs["tag"] = tag
             results = []
             # Eager mode, use default DDP bucket_cap_mb
-            model_copy = self.deepcopy_and_maybe_ddp(model)
-            self.init_optimizer(name, current_device, model_copy.parameters())
+            model_copy_eager = self.deepcopy_and_maybe_ddp(model)
+            self.init_optimizer(name, current_device, model_copy_eager.parameters())
             eager_latency, eager_peak_mem, _ = warmup(
-                self.model_iter_fn, model_copy, example_inputs, "eager"
+                self.model_iter_fn, model_copy_eager, example_inputs, "eager"
             )
             # Compile mode, use max DDP bucket_cap_mb to delay allreduce and avoid DDPOptimizer graph slicing
-            model_copy = self.deepcopy_and_maybe_ddp(model, bucket_cap_mb=2147483647)
-            self.init_optimizer(name, current_device, model_copy.parameters())
+            model_copy_optimized = self.deepcopy_and_maybe_ddp(model, bucket_cap_mb=2147483647)
+            self.init_optimizer(name, current_device, model_copy_optimized.parameters())
             optimized_model_iter_fn = optimize_ctx(self.model_iter_fn)
             dynamo_latency, dynamo_peak_mem, dynamo_stats = warmup(
-                optimized_model_iter_fn, model_copy, example_inputs, "dynamo"
+                optimized_model_iter_fn, model_copy_optimized, example_inputs, "dynamo"
             )
 
             compilation_time = dynamo_latency - eager_latency
@@ -2353,10 +2353,10 @@ class BenchmarkRunner:
                 results = []
                 # run with torch._dynamo few times to populate the cache
                 for _ in range(3):
-                    optimized_model_iter_fn(model, example_inputs)
+                    optimized_model_iter_fn(model_copy_optimized, example_inputs)
                 _, frames_second_pass = Stats.reset_counters()  # should be 0
                 if frames_second_pass > 0:
-                    optimized_model_iter_fn(model, example_inputs)
+                    optimized_model_iter_fn(model_copy_optimized, example_inputs)
                     _, frames_third_pass = Stats.reset_counters()  # should be 0
                 else:
                     frames_third_pass = 0
@@ -2365,9 +2365,9 @@ class BenchmarkRunner:
                     f"{ok:3}/{total:3} +{frames_third_pass} frames {compilation_time:3.0f}s"
                 )
 
-            if not hasattr(model, name):
-                model.name = name
-            results.append(experiment(model, example_inputs, **experiment_kwargs))
+            if not hasattr(model_copy_optimized, name):
+                model_copy_optimized.name = name
+            results.append(experiment(model_copy_optimized, example_inputs, **experiment_kwargs))
             return " ".join(map(str, results))
 
     def minify_model(
