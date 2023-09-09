@@ -1,5 +1,5 @@
 """
-cd /fsx/users/willfeng2/pytorch/benchmarks/dynamo
+cd /fsx/users/willfeng2/pytorch_yf225/benchmarks/dynamo
 PYTHONPATH=/fsx/users/willfeng2/benchmark:$PYTHONPATH HUGGING_FACE_HUB_TOKEN=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 python torchbench_mp_debug.py --performance --training --only llama_v2_7b_16h
 
 PYTHONPATH=/fsx/users/willfeng2/benchmark:$PYTHONPATH HUGGING_FACE_HUB_TOKEN=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 python torchbench_mp_debug.py --performance --training --only stable_diffusion
@@ -218,29 +218,29 @@ def run_one_rank(
         torch._inductor.config.triton.cudagraphs = not args.disable_cudagraphs
         torch.profiler._utils._init_for_cuda_graphs()
 
-    model_compiled = DDP(
-        torch.compile(model),
-        device_ids=[my_rank],
-        output_device=my_rank,
-        bucket_cap_mb=args.ddp_bucket_cap_mb_for_compiled
-    )
+    # model_compiled = DDP(
+    #     torch.compile(model),
+    #     device_ids=[my_rank],
+    #     output_device=my_rank,
+    #     bucket_cap_mb=args.ddp_bucket_cap_mb_for_compiled
+    # )
 
     runner.init_optimizer(name, device, model.parameters())
     runner.model_iter_fn = runner.forward_and_backward_pass
 
-    bench2(
-        lambda: runner.model_iter_fn(model_eager, example_inputs),
-        lambda: runner.model_iter_fn(model_compiled, example_inputs),
-        profile=False,
-        device=device,
-        model_name=f"{args.only}",
-    )
-    # bench1(
+    # bench2(
     #     lambda: runner.model_iter_fn(model_eager, example_inputs),
-    #     profile=True,
+    #     lambda: runner.model_iter_fn(model_compiled, example_inputs),
+    #     profile=False,
     #     device=device,
-    #     model_name=f"{args.only}_eager"
+    #     model_name=f"{args.only}",
     # )
+    bench1(
+        lambda: runner.model_iter_fn(model_eager, example_inputs),
+        profile=True,
+        device=device,
+        model_name=f"{args.only}_eager"
+    )
     # bench1(
     #     lambda: runner.model_iter_fn(model_compiled, example_inputs),
     #     profile=True,
