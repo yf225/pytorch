@@ -1924,7 +1924,14 @@ class BenchmarkRunner:
             ), "Can't use DDP without a distributed enabled build"
             from torch.nn.parallel import DistributedDataParallel as DDP
 
-            model = DDP(model, find_unused_parameters=True, bucket_cap_mb=bucket_cap_mb)
+            model = DDP(
+                model,
+                find_unused_parameters=True,
+                bucket_cap_mb=bucket_cap_mb,
+                device_ids=[args.rank],
+                output_device=args.rank,
+            )
+
         elif self.args.fsdp:
             assert (
                 torch.distributed.is_available()
