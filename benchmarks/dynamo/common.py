@@ -1962,7 +1962,8 @@ class BenchmarkRunner:
             )
 
             my_auto_wrap_policy = functools.partial(
-                size_based_auto_wrap_policy, recurse=True, min_num_params=int(1e5)
+                size_based_auto_wrap_policy, recurse=True,
+                # min_num_params=int(1e5)
             )
 
             model = FSDP(
