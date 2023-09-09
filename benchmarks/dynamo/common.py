@@ -2320,13 +2320,14 @@ class BenchmarkRunner:
             model_copy = self.deepcopy_and_maybe_ddp(model)
             self.init_optimizer(name, current_device, model_copy.parameters())
             eager_latency, eager_peak_mem, _ = warmup(
-                self.model_iter_fn, model, example_inputs, "eager"
+                self.model_iter_fn, model_copy, example_inputs, "eager"
             )
             # Compile mode, use max DDP bucket_cap_mb to delay allreduce and avoid DDPOptimizer graph slicing
             model_copy = self.deepcopy_and_maybe_ddp(model, bucket_cap_mb=2147483647)
+            self.init_optimizer(name, current_device, model_copy.parameters())
             optimized_model_iter_fn = optimize_ctx(self.model_iter_fn)
             dynamo_latency, dynamo_peak_mem, dynamo_stats = warmup(
-                optimized_model_iter_fn, model, example_inputs, "dynamo"
+                optimized_model_iter_fn, model_copy, example_inputs, "dynamo"
             )
 
             compilation_time = dynamo_latency - eager_latency
