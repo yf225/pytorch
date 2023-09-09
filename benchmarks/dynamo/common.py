@@ -652,7 +652,7 @@ def maybe_mark_step(args):
         xm.mark_step()
 
 
-def speedup_experiment(args, model_iter_fn, model, example_inputs, **kwargs):
+def speedup_experiment(args, model_iter_fn, model, example_inputs, optimized_model=None, **kwargs):
     """
     Measure speedups over eager.
 
@@ -660,6 +660,9 @@ def speedup_experiment(args, model_iter_fn, model, example_inputs, **kwargs):
     """
     # if args.dynamic_shapes:
     #     return speedup_experiment_ds(args, model_iter_fn, model, example_inputs)
+
+    if optimized_model is None:
+        optimized_model = model
 
     timings = np.zeros((args.repeat, 2), np.float64)
     # if we randomize the input, we should also check the result is correct
@@ -719,7 +722,7 @@ def speedup_experiment(args, model_iter_fn, model, example_inputs, **kwargs):
 
             with maybe_mark_profile(p=p, mark="actual"):
                 timings[rep, 1], actual_output = timed(
-                    model,
+                    optimized_model,
                     frozen_model_iter_fn,
                     inputs,
                     return_result=True,
@@ -2342,6 +2345,7 @@ class BenchmarkRunner:
                 )
 
             if experiment.func is speedup_experiment:
+                experiment_kwargs["optimized_model"] = model_copy_optimized
                 experiment_kwargs["compilation_latency"] = compilation_time
                 experiment_kwargs["compression_ratio"] = compression_ratio
                 experiment_kwargs["eager_peak_mem"] = eager_peak_mem
@@ -2365,9 +2369,9 @@ class BenchmarkRunner:
                     f"{ok:3}/{total:3} +{frames_third_pass} frames {compilation_time:3.0f}s"
                 )
 
-            if not hasattr(model_copy_optimized, name):
-                model_copy_optimized.name = name
-            results.append(experiment(model_copy_optimized, example_inputs, **experiment_kwargs))
+            if not hasattr(model_copy_eager, name):
+                model_copy_eager.name = name
+            results.append(experiment(model_copy_eager, example_inputs, **experiment_kwargs))
             return " ".join(map(str, results))
 
     def minify_model(
