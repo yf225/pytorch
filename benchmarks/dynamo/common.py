@@ -3456,6 +3456,8 @@ def run(runner, args, original_dir=None):
             current_batch_size = batch_size
             set_model_name(name)
 
+            print(f"{name} batch size: {batch_size}")
+
             # Look for stuff that looks like batch size, and mark it dynamic.
             # Better integration would integrate directly with benchmark suite
             # but cannot conveniently do this
