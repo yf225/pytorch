@@ -1928,8 +1928,8 @@ class BenchmarkRunner:
                 model,
                 find_unused_parameters=True,
                 bucket_cap_mb=bucket_cap_mb,
-                device_ids=[args.rank],
-                output_device=args.rank,
+                device_ids=[self.args.rank],
+                output_device=self.args.rank,
             )
 
         elif self.args.fsdp:
