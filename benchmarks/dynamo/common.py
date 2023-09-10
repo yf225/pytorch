@@ -2579,7 +2579,7 @@ def parse_args(args=None):
     parser.add_argument(
         "--ddp-bucket-cap-mb-for-compiled",
         type=int,
-        defualt=2147483647,  # max bucket size
+        default=2147483647,  # max bucket size
         help="DDP bucket cap mb for compiled",
     )
     parser.add_argument(

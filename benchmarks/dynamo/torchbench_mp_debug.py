@@ -2,6 +2,8 @@
 cd /fsx/users/willfeng2/pytorch_yf225/benchmarks/dynamo
 PYTHONPATH=/fsx/users/willfeng2/benchmark:$PYTHONPATH HUGGING_FACE_HUB_TOKEN=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 python torchbench_mp_debug.py --performance --training --only llama_v2_7b_16h
 
+PYTHONPATH=/fsx/users/willfeng2/benchmark:$PYTHONPATH HUGGING_FACE_HUB_TOKEN=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 python torchbench_mp_debug.py --performance --training --only llama_v2_7b_16h --ddp-bucket-cap-mb-for-compiled 100
+
 PYTHONPATH=/fsx/users/willfeng2/benchmark:$PYTHONPATH HUGGING_FACE_HUB_TOKEN=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 python torchbench_mp_debug.py --performance --training --only stable_diffusion
 
 """
