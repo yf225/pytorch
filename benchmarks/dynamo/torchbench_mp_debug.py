@@ -23,7 +23,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 import torchbenchmark
 
 from torchbench import TorchBenchmarkRunner
-from common import parse_args, patch_torch_manual_seed
+from common import parse_args, patch_torch_manual_seed, cast_to_fp16
 
 def bench1(
     iter_func,
@@ -180,6 +180,8 @@ def run_one_rank(
         example_inputs,
         batch_size,
     ) = runner.load_model("cuda", args.only, batch_size=args.batch_size)
+
+    model, example_inputs = cast_to_fp16(model, example_inputs)
 
     if args.accuracy:
         torch._inductor.config.fallback_random = True
