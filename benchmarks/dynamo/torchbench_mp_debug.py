@@ -216,8 +216,8 @@ def run_one_rank(
 
     # # NOTE: throws `daemonic processes are not allowed to have children` error at `AsyncCompile.warm_pool() -> pool._adjust_process_count()` if we don't set this to 1.
     inductor_config.compile_threads = 1
+    torch._inductor.config.triton.cudagraphs = not args.disable_cudagraphs
     if not args.disable_cudagraphs:
-        torch._inductor.config.triton.cudagraphs = not args.disable_cudagraphs
         torch.profiler._utils._init_for_cuda_graphs()
 
     model_compiled = DDP(
@@ -233,19 +233,19 @@ def run_one_rank(
     # bench2(
     #     lambda: runner.model_iter_fn(model_eager, example_inputs),
     #     lambda: runner.model_iter_fn(model_compiled, example_inputs),
-    #     profile=False,
+    #     profile=args.export_profiler_trace,
     #     device=device,
     #     model_name=f"{args.only}",
     # )
     bench1(
         lambda: runner.model_iter_fn(model_eager, example_inputs, collect_outputs=False),
-        profile=True,
+        profile=args.export_profiler_trace,
         device=device,
         model_name=f"{args.only}_eager"
     )
     bench1(
         lambda: runner.model_iter_fn(model_compiled, example_inputs),
-        profile=True,
+        profile=args.export_profiler_trace,
         device=device,
         model_name=f"{args.only}_compiled"
     )
