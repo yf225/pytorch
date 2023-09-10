@@ -230,25 +230,25 @@ def run_one_rank(
     runner.init_optimizer(name, device, model.parameters())
     runner.model_iter_fn = runner.forward_and_backward_pass
 
-    bench2(
-        lambda: runner.model_iter_fn(model_eager, example_inputs),
-        lambda: runner.model_iter_fn(model_compiled, example_inputs),
-        profile=False,
-        device=device,
-        model_name=f"{args.only}",
-    )
-    # bench1(
-    #     lambda: runner.model_iter_fn(model_eager, example_inputs, collect_outputs=False),
-    #     profile=True,
-    #     device=device,
-    #     model_name=f"{args.only}_eager"
-    # )
-    # bench1(
+    # bench2(
+    #     lambda: runner.model_iter_fn(model_eager, example_inputs),
     #     lambda: runner.model_iter_fn(model_compiled, example_inputs),
-    #     profile=True,
+    #     profile=False,
     #     device=device,
-    #     model_name=f"{args.only}_eager"
+    #     model_name=f"{args.only}",
     # )
+    bench1(
+        lambda: runner.model_iter_fn(model_eager, example_inputs, collect_outputs=False),
+        profile=True,
+        device=device,
+        model_name=f"{args.only}_eager"
+    )
+    bench1(
+        lambda: runner.model_iter_fn(model_compiled, example_inputs),
+        profile=True,
+        device=device,
+        model_name=f"{args.only}_eager"
+    )
     torch.cuda.synchronize()
     torch._dynamo.reset()
     print("done!")
