@@ -236,7 +236,7 @@ def run_one_rank(
     #     model_name=f"{args.only}",
     # )
     bench1(
-        lambda: runner.model_iter_fn(model_eager, example_inputs),
+        lambda: runner.model_iter_fn(model_eager, example_inputs, collect_outputs=False),
         profile=True,
         device=device,
         model_name=f"{args.only}_eager"
