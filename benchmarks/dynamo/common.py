@@ -2577,6 +2577,12 @@ def parse_args(args=None):
         help="use channels last format",
     )
     parser.add_argument(
+        "--ddp-bucket-cap-mb-for-compiled",
+        type=int,
+        defualt=2147483647,  # max bucket size
+        help="DDP bucket cap mb for compiled",
+    )
+    parser.add_argument(
         "--batch-size", "--batch_size", type=int, help="batch size for benchmarking"
     )
     parser.add_argument(

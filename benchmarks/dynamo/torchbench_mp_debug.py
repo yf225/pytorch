@@ -211,7 +211,7 @@ def run_one_rank(
         model,
         device_ids=[my_rank],
         output_device=my_rank,
-        bucket_cap_mb=args.ddp_bucket_cap_mb_for_eager
+        bucket_cap_mb=25,  # DDP default value
     )
 
     # # NOTE: throws `daemonic processes are not allowed to have children` error at `AsyncCompile.warm_pool() -> pool._adjust_process_count()` if we don't set this to 1.
@@ -259,8 +259,6 @@ def main():
     # parser.add_argument("--world-size", type=int, default=8)
     args = parse_args()
     args.world_size = 8
-    args.ddp_bucket_cap_mb_for_eager = 25
-    args.ddp_bucket_cap_mb_for_compiled = 25
 
     runner = TorchBenchmarkRunner()
     runner.args = args
