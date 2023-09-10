@@ -260,7 +260,7 @@ def main():
     args = parse_args()
     args.world_size = 8
     args.ddp_bucket_cap_mb_for_eager = 25
-    args.ddp_bucket_cap_mb_for_compiled = 2147483647
+    args.ddp_bucket_cap_mb_for_compiled = 25
 
     runner = TorchBenchmarkRunner()
     runner.args = args
