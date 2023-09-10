@@ -247,7 +247,7 @@ def run_one_rank(
         lambda: runner.model_iter_fn(model_compiled, example_inputs),
         profile=True,
         device=device,
-        model_name=f"{args.only}_eager"
+        model_name=f"{args.only}_compiled"
     )
     torch.cuda.synchronize()
     torch._dynamo.reset()
