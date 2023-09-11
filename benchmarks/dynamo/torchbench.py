@@ -477,6 +477,7 @@ class TorchBenchmarkRunner(BenchmarkRunner):
         with self.autocast():
             pred = mod(*cloned_inputs)
             print(f"pred: {pred}")
+            breakpoint()
             loss = self.compute_loss(pred)
         self.grad_scaler.scale(loss).backward()
         self.optimizer_step()
