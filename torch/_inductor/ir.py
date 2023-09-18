@@ -3759,7 +3759,7 @@ class DynamicScalar(ExternKernelAlloc):
     # 2. Redirecting __hash__ and __eq__ to the underlying SymPy symbol object.
     # 3. If an attribute is not found on the DynamicScalar object itself, then we forward it to the underlying SymPy symbol object.
     """
-    __sympy__ = True
+    # __sympy__ = True
 
     def __init__(
         self,
@@ -3770,14 +3770,14 @@ class DynamicScalar(ExternKernelAlloc):
     ):
         super().__init__(layout, inputs, constant_args)
         self.symbol = symbol
-        # ensure that SymPy thinks this object is equivalent to its underlying SymPy symbol
-        assert id(self) == id(sympy.sympify(self))
+        # # ensure that SymPy thinks this object is equivalent to its underlying SymPy symbol
+        # assert id(self) == id(sympy.sympify(self))
 
-    def __hash__(self):
-        return hash(self.symbol)
+    # def __hash__(self):
+    #     return hash(self.symbol)
 
-    def __eq__(self, other):
-        return self.symbol.__eq__(other)
+    # def __eq__(self, other):
+    #     return self.symbol.__eq__(other)
 
     def codegen(self, wrapper):
         wrapper.writeline(f"{self.get_name()} = {self.inputs[0].codegen_reference()}.item()")

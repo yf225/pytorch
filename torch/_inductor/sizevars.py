@@ -375,8 +375,9 @@ class SizeVarAllocator:
     def size_hint(self, expr: Expr) -> int:
         out = self.symbolic_hint(expr)
         # if `config.capture_scalar_outputs`` is true, allow unbacked symint in size hint
-        if torch._dynamo.config.capture_scalar_outputs and isinstance(out, sympy.Expr):
-            return out
+        # if torch._dynamo.config.capture_scalar_outputs and isinstance(out, sympy.Expr):
+        #     return out
+        print(f"out: {out}")
         try:
             return int(out)
         except Exception:

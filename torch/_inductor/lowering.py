@@ -43,6 +43,7 @@ from .ir import (
     TensorBox,
     validate_ir,
     View,
+    DynamicScalar,
 )
 from .utils import ceildiv, decode_device, pad_listlike, sympy_product
 from .virtualized import ops, V
@@ -4751,7 +4752,10 @@ register_inplace(aten.__ixor__, aten.__xor__)
 def sym_constrain_range(a, min, max):
     tracing_context = torch._guards.TracingContext.get()
     assert tracing_context is not None
-    assert a in tracing_context.fake_mode.shape_env.var_to_range
+    if isinstance(a, DynamicScalar):
+        assert a.symbol in tracing_context.fake_mode.shape_env.var_to_range
+    else:
+        assert a in tracing_context.fake_mode.shape_env.var_to_range
     return a
 
 
