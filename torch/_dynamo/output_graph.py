@@ -776,9 +776,6 @@ class OutputGraph(Checkpointable[OutputGraphState]):
         Generate a subgraph to continue execution on user code.
         Automatically restore live variables.
         """
-        print(f"self.local_scope.keys(): {self.local_scope.keys()}")
-        print(f"self.global_scope.keys(): {self.global_scope.keys()}")
-
         assert reason is not None
 
         from .decorators import disable
@@ -924,13 +921,9 @@ class OutputGraph(Checkpointable[OutputGraphState]):
             # NOTE: `pass2.get_instructions()` has the local input variable names for the next eager function
             pass2_insts = pass2.get_instructions()
 
-            print("pass2_insts: ")
-            for inst in pass2_insts:
-                print(f"inst: {inst}")
-
             # Step 1: extract the next eager function's fqn (`self.XYZ`)
             # NOTE: only supports calling `self.XYZ` eager functions
-            # TODO(yf225): add support for calling global eager function, and nested module functions
+            # TODO(yf225): add support for calling global eager function, and calling submodule's functions
             index_self = None
             for i, inst in enumerate(pass2_insts):
                 # Assume the first `self.XYZ` is always used for referencing the module method
@@ -967,7 +960,6 @@ class OutputGraph(Checkpointable[OutputGraphState]):
             self.add_output_instructions(output + pass2_insts)
 
         # TODO(yf225): mega question: is using name as reference a safe thing to do?
-        print(f"Appending to func_read_writes for func_name: {func_name}")
         f_locals_keys = set(self.local_scope.keys())
         if len(func_read_writes) > 0 and func_read_writes[-1].fx_graph is None:
             # NOTE: If previous function is eager, we update its .writes to include the actual names of its output variables.
@@ -1027,9 +1019,8 @@ class OutputGraph(Checkpointable[OutputGraphState]):
 
 
         # restore all the live local vars
-        lst = [PyCodegen(tx).create_store(var) for var in reversed(restore_vars)]
         self.add_output_instructions(
-            lst
+            [PyCodegen(tx).create_store(var) for var in reversed(restore_vars)]
         )
 
     def cleanup_graph(self):

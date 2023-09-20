@@ -505,7 +505,6 @@ def break_graph_if_unsupported(*, push):
             )
 
             name = unique_id("__eager_fn")
-            print(f"Appending to func_read_writes for func_name: {name}")
             eager_fn_frw = func_read_writes[-1]
             assert eager_fn_frw.eager_fn_fqn is not None and eager_fn_frw.eager_fn_fqn.split(".")[1] in str(eager_fn), f"{eager_fn_frw.eager_fn_fqn.split('.')[1]} is not in {str(eager_fn)}"
             eager_fn_frw.func_name = name
@@ -2074,13 +2073,6 @@ class InstructionTranslator(InstructionTranslatorBase):
             vars.extend(cells_and_freevars)
             cells_and_freevars_set = set(cells_and_freevars)
 
-            print(f"vars: {vars}")
-            print(f"f_code: {f_code}")
-            print(f"f_locals: {f_locals}")
-            print(f"f_locals.keys(): {f_locals.keys()}")
-            print(f"f_globals: {f_globals}")
-            # print(f"f_builtins: {f_builtins}")
-
             self.symbolic_locals = collections.OrderedDict(
                 (
                     k,
@@ -2312,7 +2304,6 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
             #     f"inline in skipfiles: {func.fn.__qualname__}  | {func.get_name()} {func.get_filename()}"
             # )
             # TODO(yf225): incredibly hacky way to propagate up the .reads and .writes information, but gets the job done
-            # breakpoint()
             exc = Unsupported(f"inline in skipfiles: {func.fn.__qualname__}  | {func.get_name()} {func.get_filename()}")
             _torchdynamo_param_reads = inspect.getattr_static(func.get_function(), "_torchdynamo_param_reads", [])
             _torchdynamo_writes = inspect.getattr_static(func.get_function(), "_torchdynamo_writes", [])
