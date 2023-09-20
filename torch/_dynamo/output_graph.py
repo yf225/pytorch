@@ -864,9 +864,9 @@ class OutputGraph(Checkpointable[OutputGraphState]):
             )
             self.add_output_instructions(random_calls_instructions)
 
-        func_writes = set()
+        compiled_fn_arg_writes = set()
         eager_fn_fqn = None
-        eager_fn_args = []
+        eager_fn_args_actual = []
         if (
             stack_values
             and all(
@@ -917,7 +917,7 @@ class OutputGraph(Checkpointable[OutputGraphState]):
                     # TODO(yf225): does this work with multi-output?
                     global_id = unique_id(graph_output_var)
                     self.local_var_to_global_id[graph_output_var] = global_id
-                    func_writes.add(global_id)
+                    compiled_fn_arg_writes.add(global_id)
                 else:
                     output.append(create_instruction("POP_TOP"))
             append_prefix_insts()
@@ -949,7 +949,7 @@ class OutputGraph(Checkpointable[OutputGraphState]):
                         assert pass2_insts[index+1].opname == "LOAD_ATTR"
                         # NOTE: only supports using `self.XYZ` weights
                         # TODO(yf225): add support for accessing nested module weights
-                        eager_fn_args.append(f"self.{pass2_insts[index+1].argval}")
+                        eager_fn_args_actual.append(f"self.{pass2_insts[index+1].argval}")
                         index += 2
                     else:
                         arg_name = None
@@ -957,7 +957,7 @@ class OutputGraph(Checkpointable[OutputGraphState]):
                             arg_name = self.local_var_to_global_id[pass2_insts[index].argval]
                         else:
                             arg_name = pass2_insts[index].argval
-                        eager_fn_args.append(arg_name)
+                        eager_fn_args_actual.append(arg_name)
                         index += 1
                 else:
                     # we are done with extracting input args
@@ -977,16 +977,37 @@ class OutputGraph(Checkpointable[OutputGraphState]):
                 # any new name in local scope is created by the eager function
                 f_locals_keys - func_read_writes[-1].f_locals_keys
             )
+
+        # NOTE: walk through the graph to record reads and writes to module params `self.XYZ` and `self.abc.XYZ`
+        param_reads = set()
+        param_writes = set()
+        # NOTE: we have to use `l__self___weight` / `l__self___submod_sub_weight` format,
+        # because at this point we already lost the submodule information and hence can't use `self.submod.sub_weight` format.
+        for node in self.graph.nodes:
+            name = node.name
+            op = node.op
+            target = node.target
+            args = node.args
+            if "l__self__" in name:
+                # if reading from a param
+                param_reads.add(name)
+            if op == "call_method" and target.endswith("_"):
+                # if in-place op and writing to a param
+                breakpoint()
+                for arg in args:
+                    if arg.name in param_reads:
+                        param_writes.add(arg.name)
+
         func_read_writes.append(
             FuncReadWrite(
                 func_name=func_name,
                 fx_graph=gm,
                 eager_fn=None,
                 eager_fn_fqn=None,
-                eager_fn_args=[],
+                eager_fn_args_actual=[],
                 f_locals_keys=f_locals_keys,
-                reads=set(arg.source.local_name for arg in tx.output.graphargs),  # TODO(yf225) NOW: walk through the graph to record writes to module params `self.XYZ`
-                writes=func_writes,
+                reads=set(arg.source.local_name for arg in tx.output.graphargs).union(param_reads),
+                writes=compiled_fn_arg_writes.union(param_writes),
             )
         )
         # NOTE: add the stub for the next eager function, to be populated later
@@ -997,9 +1018,9 @@ class OutputGraph(Checkpointable[OutputGraphState]):
                     fx_graph=None,
                     eager_fn=None,
                     eager_fn_fqn=eager_fn_fqn,
-                    eager_fn_args=eager_fn_args,
+                    eager_fn_args_actual=eager_fn_args_actual,
                     f_locals_keys=None,
-                    reads=set(eager_fn_args),
+                    reads=set(eager_fn_args_actual),
                     writes=set(),
                 )
             )

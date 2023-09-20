@@ -74,7 +74,7 @@ class FuncReadWrite:
     fx_graph: Optional[fx.GraphModule]
     eager_fn: Optional[types.FunctionType]
     eager_fn_fqn: Optional[str]
-    eager_fn_args: List[str]
+    eager_fn_args_actual: List[str]
     # f_locals.keys() at beginning of this function
     f_locals_keys: Set[str]
     # TODO(yf225): maybe add `f_code` here for better debugging

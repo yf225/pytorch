@@ -512,16 +512,25 @@ def break_graph_if_unsupported(*, push):
             eager_fn_frw.fx_graph = None
             eager_fn_frw.eager_fn = eager_fn
             eager_fn_frw.f_locals_keys = set(self.f_locals.keys())
+
+            def convert_param_fqn(dot_fqn):
+                return dot_fqn.replace("self.", "l__self__").replace(".", "_")
+
+            # NOTE: we had to use `l__self___submod_sub_weight` format, see output_graph.py compile_subgraph() for more info.
+            param_reads = [convert_param_fqn(dot_fqn) for dot_fqn in param_reads]
             eager_fn_frw.reads = eager_fn_frw.reads.union(set(param_reads))
 
             # Replace nominal writes (var names within the eager function) to actual writes (var names outside of the eager function)
             nominal_arg_to_local_var = {
-                k: v for k, v in zip(list(inspect.signature(eager_fn).parameters.keys()), eager_fn_frw.eager_fn_args)
+                k: v for k, v in zip(
+                    list(inspect.signature(eager_fn).parameters.keys()),
+                    eager_fn_frw.eager_fn_args_actual,
+                )
             }
             actual_writes = set()
             for write in nominal_writes:
                 if write.startswith("self."):
-                    actual_writes.add(write)
+                    actual_writes.add(convert_param_fqn(write))
                 else:
                     actual_writes.add(nominal_arg_to_local_var[write])
             eager_fn_frw.writes = set(actual_writes)
@@ -2298,9 +2307,6 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
             ):
                 # Known sound
                 return
-
-            import traceback
-            traceback.print_stack()
 
             # unimplemented(
             #     f"inline in skipfiles: {func.fn.__qualname__}  | {func.get_name()} {func.get_filename()}"
