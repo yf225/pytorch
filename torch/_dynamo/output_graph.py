@@ -879,7 +879,7 @@ class OutputGraph(Checkpointable[OutputGraphState]):
         ):
             append_prefix_insts()
             # optimization to generate better code in a common case
-            # TODO(yf225): this happens when the program exits, maybe we don't need to implement it
+            # TODO(yf225): this branch happens when the program exits, maybe we don't need to implement it
             insts, func_name, gm = self.compile_and_call_fx_graph(tx, list(reversed(stack_values)), root)
             self.add_output_instructions(
                 insts
@@ -912,9 +912,9 @@ class OutputGraph(Checkpointable[OutputGraphState]):
 
                 if len(pass2.graph_outputs) != 0:
                     output.append(pass2.create_store(graph_output_var))
-                    # TODO(yf225): here we finally know the local name of the output from compiled function, so we append it to the function's .writes list
-                    # TODO(yf225): does this work with multi-output?
+                    # NOTE: here we finally know the local name of the output from compiled function (i.e. actual writes), so we append it to the function's .writes list
                     # NOTE: unfortunately `self.new_var("graph_out")` is not unique across graphs, and we need a unique id
+                    # TODO(yf225): does this work with multi-output?
                     global_id = unique_id(graph_output_var)
                     self.local_var_to_global_id[graph_output_var] = global_id
                     func_writes.add(global_id)
@@ -941,12 +941,14 @@ class OutputGraph(Checkpointable[OutputGraphState]):
             assert pass2_insts[index_attr].opname == "LOAD_ATTR"
             eager_fn_fqn = f"self.{pass2_insts[index_attr].argval}"
 
-            # Step 2: extract all input args' local names *outside of* the next eager function
+            # Step 2: extract the next eager function's input args' actual names (instead of nominal names within the function)
             index = index_attr + 1
             while index < len(pass2_insts):
                 if pass2_insts[index].opname == "LOAD_FAST":
                     if pass2_insts[index].argval == "self":
                         assert pass2_insts[index+1].opname == "LOAD_ATTR"
+                        # NOTE: only supports using `self.XYZ` weights
+                        # TODO(yf225): add support for accessing nested module weights
                         eager_fn_args.append(f"self.{pass2_insts[index+1].argval}")
                         index += 2
                     else:
@@ -959,7 +961,7 @@ class OutputGraph(Checkpointable[OutputGraphState]):
                         index += 1
                 else:
                     # we are done with extracting input args
-                    # TODO(yf225): we probably need to handle `self.method(self.weight, 1, x)` case as well
+                    # TODO(yf225): we probably need to handle the `1` in `self.method(self.weight, 1, x)` case as well
                     break
 
             self.add_output_instructions(output + pass2_insts)
@@ -968,9 +970,8 @@ class OutputGraph(Checkpointable[OutputGraphState]):
         print(f"Appending to func_read_writes for func_name: {func_name}")
         f_locals_keys = set(self.local_scope.keys())
         if len(func_read_writes) > 0 and func_read_writes[-1].fx_graph is None:
-            # NOTE: If previous function is eager, we update its .writes to include its local output variables.
-            # We do this here because we are only able to get the previous function's local output variable names
-            # when we are processing the next function.
+            # NOTE: If previous function is eager, we update its .writes to include the actual names of its output variables.
+            # We do this here because we are only able to get the actual names when we are processing the next function.
             # TODO(yf225): is there a better way to do this?
             func_read_writes[-1].writes = func_read_writes[-1].writes.union(
                 # any new name in local scope is created by the eager function
@@ -984,7 +985,7 @@ class OutputGraph(Checkpointable[OutputGraphState]):
                 eager_fn_fqn=None,
                 eager_fn_args=[],
                 f_locals_keys=f_locals_keys,
-                reads=set(arg.source.local_name for arg in tx.output.graphargs),  # TODO(yf225): walk through the graph to record writes to module params `self.XYZ`
+                reads=set(arg.source.local_name for arg in tx.output.graphargs),  # TODO(yf225) NOW: walk through the graph to record writes to module params `self.XYZ`
                 writes=func_writes,
             )
         )

@@ -453,13 +453,10 @@ def break_graph_if_unsupported(*, push):
                 excp.remove_from_stats()
                 excp.add_to_stats("graph_break")
                 reason = GraphCompileReason(excp.msg, user_stack)
-                print(f"self.f_locals: {self.f_locals}")
+                # NOTE: get param_reads and writes from user-code annotations
                 eager_fn = getattr(excp, "_torchdynamo_fn", None)
                 param_reads = getattr(excp, "_torchdynamo_param_reads", [])
                 nominal_writes = getattr(excp, "_torchdynamo_writes", [])
-                print(f"eager_fn: {eager_fn}")
-                print(f"param_reads: {param_reads}")
-                print(f"writes: {nominal_writes}")
             self.restore_graphstate(state)
 
             self.output.compile_subgraph(self, reason=reason)
@@ -509,8 +506,6 @@ def break_graph_if_unsupported(*, push):
 
             name = unique_id("__eager_fn")
             print(f"Appending to func_read_writes for func_name: {name}")
-            # TODO(yf225): populate reads and writes by:
-            # 1. walking through all input/output annotations on the eager function
             eager_fn_frw = func_read_writes[-1]
             assert eager_fn_frw.eager_fn_fqn is not None and eager_fn_frw.eager_fn_fqn.split(".")[1] in str(eager_fn), f"{eager_fn_frw.eager_fn_fqn.split('.')[1]} is not in {str(eager_fn)}"
             eager_fn_frw.func_name = name
