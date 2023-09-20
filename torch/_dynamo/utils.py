@@ -71,15 +71,36 @@ from torch.utils._pytree import tree_map
 class FuncReadWrite:
     # can be either __compiled_fn_X or __eager_fn_X
     func_name: str
-    fx_graph: Optional[fx.GraphModule]
-    eager_fn: Optional[types.FunctionType]
-    eager_fn_fqn: Optional[str]
-    eager_fn_args_actual: List[str]
+    fx_graph: Optional[fx.GraphModule] = None
+    eager_fn: Optional[types.FunctionType] = None
+    eager_fn_fqn: Optional[str] = None
+    eager_fn_args_actual: Optional[List[str]] = None
+    nominal_arg_to_actual_var: Optional[Dict[str, str]] = None
     # f_locals.keys() at beginning of this function
-    f_locals_keys: Set[str]
+    f_locals_keys: Optional[Set[str]] = None
     # TODO(yf225): maybe add `f_code` here for better debugging
-    reads: Set[str]
-    writes: Set[str]
+    _reads: Optional[Set[str]] = None
+    _writes: Optional[Set[str]] = None
+
+    @property
+    def reads(self) -> Optional[Set[str]]:
+        return self._reads
+
+    @reads.setter
+    def reads(self, v: Optional[Set[str]]) -> None:
+        self._reads = v
+
+    @property
+    def writes(self) -> Optional[Set[str]]:
+        return self._writes
+
+    @writes.setter
+    def writes(self, v: Optional[Set[str]]) -> None:
+        self._writes = v
+        # We never write to the tensor without reading it first
+        # TODO(yf225): `.copy_()` is probably an exception to this, TBD if we need it
+        if self._reads is not None and self._writes is not None:
+            self._reads = self._reads.union(self._writes)
 
 
 counters = collections.defaultdict(collections.Counter)
@@ -273,8 +294,9 @@ def dump_compile_times():
 
 @atexit.register
 def dump_func_read_writes():
+    import pprint
     for frw in func_read_writes:
-        log.info(frw)
+        pprint.pprint(frw)
 
 
 tensortype_to_dtype = {

@@ -82,10 +82,9 @@ with (
     ),
 ):
     m = TestModule()
-    m = m.to("cuda")
     compiled_m = torch.compile(m, fullgraph=False, dynamic=False)
-    x = torch.randn(4, 4, device="cuda")
-    y = torch.randn(4, 4, device="cuda")
+    x = torch.randn(4, 4)
+    y = torch.randn(4, 4)
     ref = m(x, y)
     actual = compiled_m(x, y)
     assert torch.allclose(ref, actual)

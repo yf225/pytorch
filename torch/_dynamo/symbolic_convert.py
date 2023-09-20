@@ -506,9 +506,10 @@ def break_graph_if_unsupported(*, push):
 
             name = unique_id("__eager_fn")
             eager_fn_frw = func_read_writes[-1]
-            assert eager_fn_frw.eager_fn_fqn is not None and eager_fn_frw.eager_fn_fqn.split(".")[1] in str(eager_fn), f"{eager_fn_frw.eager_fn_fqn.split('.')[1]} is not in {str(eager_fn)}"
+            # a lightweight check to make sure we are modifying the correct eager function FRW
+            assert eager_fn_frw.eager_fn_fqn is not None and eager_fn_frw.eager_fn_fqn.split(".")[1] in str(eager_fn), \
+                f"{eager_fn_frw.eager_fn_fqn.split('.')[1]} is not in {str(eager_fn)}"
             eager_fn_frw.func_name = name
-            eager_fn_frw.fx_graph = None
             eager_fn_frw.eager_fn = eager_fn
             eager_fn_frw.f_locals_keys = set(self.f_locals.keys())
 
@@ -520,9 +521,9 @@ def break_graph_if_unsupported(*, push):
             eager_fn_frw.reads = eager_fn_frw.reads.union(set(param_reads))
 
             # Replace nominal writes (var names within the eager function) to actual writes (var names outside of the eager function)
-            nominal_arg_to_local_var = {
+            nominal_arg_to_actual_var = {
                 k: v for k, v in zip(
-                    list(inspect.signature(eager_fn).parameters.keys()),
+                    list(inspect.signature(eager_fn).parameters.keys())[1:],
                     eager_fn_frw.eager_fn_args_actual,
                 )
             }
@@ -531,7 +532,8 @@ def break_graph_if_unsupported(*, push):
                 if write.startswith("self."):
                     actual_writes.add(convert_param_fqn(write))
                 else:
-                    actual_writes.add(nominal_arg_to_local_var[write])
+                    actual_writes.add(nominal_arg_to_actual_var[write])
+            eager_fn_frw.nominal_arg_to_actual_var = nominal_arg_to_actual_var
             eager_fn_frw.writes = set(actual_writes)
 
         return wrapper

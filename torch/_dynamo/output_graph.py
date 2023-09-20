@@ -21,6 +21,7 @@ from typing import (
     Set,
     Union,
 )
+import inspect
 
 import sympy
 
@@ -989,31 +990,34 @@ class OutputGraph(Checkpointable[OutputGraphState]):
                     if arg.name in param_reads:
                         param_writes.add(arg.name)
 
-        func_read_writes.append(
-            FuncReadWrite(
-                func_name=func_name,
-                fx_graph=gm,
-                eager_fn=None,
-                eager_fn_fqn=None,
-                eager_fn_args_actual=[],
-                f_locals_keys=f_locals_keys,
-                reads=set(arg.source.local_name for arg in tx.output.graphargs).union(param_reads),
-                writes=compiled_fn_arg_writes.union(param_writes),
-            )
+        compiled_fn_frw = FuncReadWrite(
+            func_name=func_name,
+            fx_graph=gm,
+            nominal_arg_to_actual_var={
+                k: v for k, v in zip(
+                    list(inspect.signature(gm.forward).parameters.keys()),
+                    [arg.source.local_name for arg in tx.output.graphargs],
+                )
+            },
+            f_locals_keys=f_locals_keys,
         )
+        compiled_fn_frw.reads = set(arg.source.local_name for arg in tx.output.graphargs).union(param_reads)
+        compiled_fn_frw.writes = compiled_fn_arg_writes.union(param_writes)
+        func_read_writes.append(
+            compiled_fn_frw
+        )
+
         # NOTE: add the stub for the next eager function, to be populated later
         if eager_fn_fqn is not None:
+            eager_fn_frw = FuncReadWrite(
+                func_name="",
+                eager_fn_fqn=eager_fn_fqn,
+                eager_fn_args_actual=eager_fn_args_actual,
+            )
+            eager_fn_frw.reads = set(eager_fn_args_actual)
+            eager_fn_frw.writes = set()
             func_read_writes.append(
-                FuncReadWrite(
-                    func_name="",
-                    fx_graph=None,
-                    eager_fn=None,
-                    eager_fn_fqn=eager_fn_fqn,
-                    eager_fn_args_actual=eager_fn_args_actual,
-                    f_locals_keys=None,
-                    reads=set(eager_fn_args_actual),
-                    writes=set(),
-                )
+                eager_fn_frw
             )
 
 
