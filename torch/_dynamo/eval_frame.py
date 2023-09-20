@@ -353,6 +353,8 @@ class _TorchDynamoContext:
         # hooks to properly handle inlining
         if isinstance(self, DisableContext):
             _fn._torchdynamo_disable = True  # type: ignore[attr-defined]
+            _fn._torchdynamo_param_reads = self.param_reads
+            _fn._torchdynamo_writes = self.writes
         else:
             _fn._torchdynamo_inline = fn  # type: ignore[attr-defined]
 
@@ -458,8 +460,10 @@ class RunOnlyContext(_TorchDynamoContext):
 
 
 class DisableContext(_TorchDynamoContext):
-    def __init__(self):
+    def __init__(self, param_reads=[], writes=[]):
         super().__init__(callback=None)
+        self.param_reads = param_reads
+        self.writes = writes
 
 
 def first_real_inst_idx(code):

@@ -71,6 +71,8 @@ from .utils import (
     istype,
     LazyString,
     proxy_args_kwargs,
+    func_read_writes,
+    FuncReadWrite,
 )
 from .variables.base import is_side_effect_safe, MutableLocal, typestr, VariableTracker
 from .variables.builder import VariableBuilder, wrap_fx_proxy
@@ -396,6 +398,8 @@ def break_graph_if_unsupported(*, push):
         def wrapper(self: "InstructionTranslatorBase", inst: Instruction):
             state = self.copy_graphstate()
             reason = None
+            param_reads = []
+            nominal_writes = []
             try:
                 TracingContext.set_current_loc(
                     self.f_code.co_filename, self.lineno, self.f_code.co_name
@@ -426,6 +430,7 @@ def break_graph_if_unsupported(*, push):
                 if not self.should_compile_partial_graph():
                     raise
 
+                # TODO(yf225): this is where graph break happens and compilation is triggered
                 log.debug("break_graph_if_unsupported triggered compile", exc_info=True)
 
                 user_stack = excp.real_stack
@@ -448,6 +453,13 @@ def break_graph_if_unsupported(*, push):
                 excp.remove_from_stats()
                 excp.add_to_stats("graph_break")
                 reason = GraphCompileReason(excp.msg, user_stack)
+                print(f"self.f_locals: {self.f_locals}")
+                eager_fn = getattr(excp, "_torchdynamo_fn", None)
+                param_reads = getattr(excp, "_torchdynamo_param_reads", [])
+                nominal_writes = getattr(excp, "_torchdynamo_writes", [])
+                print(f"eager_fn: {eager_fn}")
+                print(f"param_reads: {param_reads}")
+                print(f"writes: {nominal_writes}")
             self.restore_graphstate(state)
 
             self.output.compile_subgraph(self, reason=reason)
@@ -494,6 +506,30 @@ def break_graph_if_unsupported(*, push):
             self.output.add_output_instructions(
                 self.create_call_resume_at(self.next_instruction)
             )
+
+            name = unique_id("__eager_fn")
+            print(f"Appending to func_read_writes for func_name: {name}")
+            # TODO(yf225): populate reads and writes by:
+            # 1. walking through all input/output annotations on the eager function
+            eager_fn_frw = func_read_writes[-1]
+            assert eager_fn_frw.eager_fn_fqn is not None and eager_fn_frw.eager_fn_fqn.split(".")[1] in str(eager_fn), f"{eager_fn_frw.eager_fn_fqn.split('.')[1]} is not in {str(eager_fn)}"
+            eager_fn_frw.func_name = name
+            eager_fn_frw.fx_graph = None
+            eager_fn_frw.eager_fn = eager_fn
+            eager_fn_frw.f_locals_keys = set(self.f_locals.keys())
+            eager_fn_frw.reads = eager_fn_frw.reads.union(set(param_reads))
+
+            # Replace nominal writes (var names within the eager function) to actual writes (var names outside of the eager function)
+            nominal_arg_to_local_var = {
+                k: v for k, v in zip(list(inspect.signature(eager_fn).parameters.keys()), eager_fn_frw.eager_fn_args)
+            }
+            actual_writes = set()
+            for write in nominal_writes:
+                if write.startswith("self."):
+                    actual_writes.add(write)
+                else:
+                    actual_writes.add(nominal_arg_to_local_var[write])
+            eager_fn_frw.writes = set(actual_writes)
 
         return wrapper
 
@@ -2028,10 +2064,18 @@ class InstructionTranslator(InstructionTranslatorBase):
                     self.one_graph
                 ), "Export without one graph - something has gone wrong."
 
+            # TODO(yf225): interesting - this is where "passing eager output to compiled region" happens
             vars = list(code_options["co_varnames"])
             cells_and_freevars = [x for x in self.cell_and_freevars() if x not in vars]
             vars.extend(cells_and_freevars)
             cells_and_freevars_set = set(cells_and_freevars)
+
+            print(f"vars: {vars}")
+            print(f"f_code: {f_code}")
+            print(f"f_locals: {f_locals}")
+            print(f"f_locals.keys(): {f_locals.keys()}")
+            print(f"f_globals: {f_globals}")
+            # print(f"f_builtins: {f_builtins}")
 
             self.symbolic_locals = collections.OrderedDict(
                 (
@@ -2103,6 +2147,7 @@ class InstructionTranslator(InstructionTranslatorBase):
         return all(b.can_restore() for b in self.block_stack) and not self.one_graph
 
     def create_call_resume_at(self, inst):
+        # TODO(yf225): the logic in this function is potentially interesting
         self.instruction_pointer = None
 
         if inst.opname == "RETURN_VALUE":
@@ -2259,9 +2304,21 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
                 # Known sound
                 return
 
-            unimplemented(
-                f"inline in skipfiles: {func.fn.__qualname__}  | {func.get_name()} {func.get_filename()}"
-            )
+            import traceback
+            traceback.print_stack()
+
+            # unimplemented(
+            #     f"inline in skipfiles: {func.fn.__qualname__}  | {func.get_name()} {func.get_filename()}"
+            # )
+            # TODO(yf225): incredibly hacky way to propagate up the .reads and .writes information, but gets the job done
+            # breakpoint()
+            exc = Unsupported(f"inline in skipfiles: {func.fn.__qualname__}  | {func.get_name()} {func.get_filename()}")
+            _torchdynamo_param_reads = inspect.getattr_static(func.get_function(), "_torchdynamo_param_reads", [])
+            _torchdynamo_writes = inspect.getattr_static(func.get_function(), "_torchdynamo_writes", [])
+            exc._torchdynamo_param_reads = _torchdynamo_param_reads
+            exc._torchdynamo_writes = _torchdynamo_writes
+            exc._torchdynamo_fn = func.fn
+            raise exc
 
         if isinstance(func, UserFunctionVariable) and inspect.getattr_static(
             func.get_function(), "_torchdynamo_disable", False

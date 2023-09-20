@@ -25,7 +25,7 @@ import typing
 import weakref
 from contextlib import contextmanager
 from functools import lru_cache, wraps
-from typing import Any, Dict, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 try:
     import numpy as np
@@ -67,7 +67,23 @@ from torch.nn.modules.lazy import LazyModuleMixin
 from torch.utils._pytree import tree_map
 
 
+@dataclasses.dataclass
+class FuncReadWrite:
+    # can be either __compiled_fn_X or __eager_fn_X
+    func_name: str
+    fx_graph: Optional[fx.GraphModule]
+    eager_fn: Optional[types.FunctionType]
+    eager_fn_fqn: Optional[str]
+    eager_fn_args: List[str]
+    # f_locals.keys() at beginning of this function
+    f_locals_keys: Set[str]
+    # TODO(yf225): maybe add `f_code` here for better debugging
+    reads: Set[str]
+    writes: Set[str]
+
+
 counters = collections.defaultdict(collections.Counter)
+func_read_writes: List[FuncReadWrite] = []
 troubleshooting_url = "https://pytorch.org/docs/master/compile/troubleshooting.html"
 nnmodule_doc_url = "https://pytorch.org/docs/master/compile/nn-module.html"
 nnmodule_doc_url_msg = f"See {nnmodule_doc_url} for more information and limitations."
@@ -253,6 +269,12 @@ def compile_times(repr="str", aggregate=False):
 @atexit.register
 def dump_compile_times():
     log.info(compile_times(repr="str", aggregate=True))
+
+
+@atexit.register
+def dump_func_read_writes():
+    for frw in func_read_writes:
+        log.info(frw)
 
 
 tensortype_to_dtype = {

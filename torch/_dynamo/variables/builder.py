@@ -365,6 +365,7 @@ class VariableBuilder:
         return result
 
     def _wrap(self, value):
+        # breakpoint()
         make_guards = self.make_guards
 
         # Handle exact type() match
