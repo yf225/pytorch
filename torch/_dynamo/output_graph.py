@@ -985,7 +985,6 @@ class OutputGraph(Checkpointable[OutputGraphState]):
                 param_reads.add(name)
             if op == "call_method" and target.endswith("_"):
                 # if in-place op and writing to a param
-                breakpoint()
                 for arg in args:
                     if arg.name in param_reads:
                         param_writes.add(arg.name)

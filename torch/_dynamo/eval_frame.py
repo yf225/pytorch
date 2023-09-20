@@ -462,6 +462,10 @@ class RunOnlyContext(_TorchDynamoContext):
 class DisableContext(_TorchDynamoContext):
     def __init__(self, param_reads=[], writes=[]):
         super().__init__(callback=None)
+        assert (
+            all(read.startswith("self.") for read in param_reads),
+            "Only need to specify reads to module paramaters. Reads to regular function args are automatically inferred."
+        )
         self.param_reads = param_reads
         self.writes = writes
 
