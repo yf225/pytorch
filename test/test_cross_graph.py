@@ -18,6 +18,11 @@ class TestSubmodule(torch.nn.Module):
         return torch.add(self.sub_weight, inp)
 
 
+@torch._dynamo.disable()
+def g3(i, j):
+    return i + j
+
+
 class TestModule(torch.nn.Module):
     def __init__(self):
         super().__init__()
@@ -49,7 +54,8 @@ class TestModule(torch.nn.Module):
         z = torch.sigmoid(y)
         return self.g1(x, z) \
             + self.g2(self.weight, torch.sigmoid(y + 1)) \
-            + torch.relu(x) \
+            + g3(x, y) \
+            + torch.relu(x) * x.sum().item() \
             + torch.tanh(self.weight) \
             + torch.selu(self.submod.sub_weight) \
             + self.buf \
