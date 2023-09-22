@@ -25,6 +25,7 @@ class TestModule(torch.nn.Module):
         self.register_buffer('buf', torch.randn(4, 4))
         self.submod = TestSubmodule()
 
+    # Eager region #1
     def g1(self, d, e):
         # TODO(yf225): since we own the Python interpreter (aka. Dynamo),
         # can we populate this automatically by walking through all branches?
@@ -33,6 +34,7 @@ class TestModule(torch.nn.Module):
             return self.weight + self.buf + d + e
         # return d
 
+    # Eager region #2
     def g2(self, a, b):
         with _disable(mod=self, func=self.g2, reads=[a, b], mutations=[self.buf]):
             self.buf.relu_()
