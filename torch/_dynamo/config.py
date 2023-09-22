@@ -234,7 +234,7 @@ skip_fsdp_guards = True
 skip_nnmodule_hook_guards = True
 
 # If True, raises exception if TorchDynamo is called with a context manager
-raise_on_ctx_manager_usage = True
+raise_on_ctx_manager_usage = False
 
 # If True, raise when aot autograd is unsafe to use
 raise_on_unsafe_aot_autograd = False

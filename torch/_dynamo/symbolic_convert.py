@@ -396,6 +396,8 @@ def break_graph_if_unsupported(*, push):
         def wrapper(self: "InstructionTranslatorBase", inst: Instruction):
             state = self.copy_graphstate()
             reason = None
+            actual_reads = []
+            actual_writes = []
             try:
                 TracingContext.set_current_loc(
                     self.f_code.co_filename, self.lineno, self.f_code.co_name
@@ -426,6 +428,7 @@ def break_graph_if_unsupported(*, push):
                 if not self.should_compile_partial_graph():
                     raise
 
+                # TODO(yf225): this is where graph break happens and compilation is triggered
                 log.debug("break_graph_if_unsupported triggered compile", exc_info=True)
 
                 user_stack = excp.real_stack
@@ -1990,6 +1993,8 @@ class InstructionTranslator(InstructionTranslatorBase):
         mutated_closure_cell_contents: Set[str],
         frame_state,
     ):
+        import traceback
+        traceback.print_stack()
         _step_logger()(
             logging.INFO,
             f"torchdynamo start tracing {f_code.co_name} {code_options['co_filename']}:{code_options['co_firstlineno']}",
@@ -2030,6 +2035,7 @@ class InstructionTranslator(InstructionTranslatorBase):
                     self.one_graph
                 ), "Export without one graph - something has gone wrong."
 
+            # TODO(yf225): interesting - this is where "passing eager output to compiled region" happens
             vars = list(code_options["co_varnames"])
             cells_and_freevars = [x for x in self.cell_and_freevars() if x not in vars]
             vars.extend(cells_and_freevars)
@@ -2105,6 +2111,7 @@ class InstructionTranslator(InstructionTranslatorBase):
         return all(b.can_restore() for b in self.block_stack) and not self.one_graph
 
     def create_call_resume_at(self, inst):
+        # TODO(yf225): the logic in this function is potentially interesting
         self.instruction_pointer = None
 
         if inst.opname == "RETURN_VALUE":
@@ -2255,7 +2262,6 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
             unimplemented(
                 f"inline in skipfiles: {func.fn.__qualname__}  | {func.get_name()} {func.get_filename()}"
             )
-
         if isinstance(func, UserFunctionVariable) and inspect.getattr_static(
             func.get_function(), "_torchdynamo_disable", False
         ):

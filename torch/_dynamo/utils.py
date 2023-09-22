@@ -26,7 +26,7 @@ import typing
 import weakref
 from contextlib import contextmanager
 from functools import lru_cache, wraps
-from typing import Any, Dict, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 try:
     import numpy as np
@@ -67,7 +67,61 @@ from torch.nn.modules.lazy import LazyModuleMixin
 from torch.utils._pytree import tree_map
 
 
+@dataclasses.dataclass
+class FuncReadWrite:
+    # can be either __compiled_fn_X or __eager_fn_X
+    func_name: str
+    fx_graph: Optional[fx.GraphModule] = None
+    eager_fn: Optional[types.FunctionType] = None
+    eager_fn_fqn: Optional[str] = None
+    eager_fn_args_actual: Optional[List[str]] = None
+    eager_mod: torch.nn.Module = None
+    nominal_arg_to_actual_var: Optional[Dict[str, str]] = None
+    # f_locals.keys() at beginning of this function
+    f_locals_keys: Optional[Set[str]] = None
+    # TODO(yf225): maybe add `f_code` here for better debugging
+    _reads: Optional[Set[str]] = None
+    _mutations: Optional[Set[str]] = None
+    _outputs: Optional[Set[str]] = None
+
+    @property
+    def reads(self) -> Optional[Set[str]]:
+        return self._reads
+
+    @reads.setter
+    def reads(self, v: Optional[Set[str]]) -> None:
+        self._reads = v
+
+    @property
+    def mutations(self) -> Optional[Set[str]]:
+        return self._mutations
+
+    @mutations.setter
+    def mutations(self, v: Optional[Set[str]]) -> None:
+        self._mutations = v
+        # assume 1 mutation causes 1 additional read
+        # TODO(yf225): `.copy_()` is probably an exception to this, TBD if we need it
+        if self._reads is not None and self._mutations is not None:
+            self._reads = self._reads.union(self._mutations)
+
+    @property
+    def outputs(self) -> Optional[Set[str]]:
+        return self._outputs
+
+    @outputs.setter
+    def outputs(self, v: Optional[Set[str]]) -> None:
+        self._outputs = v
+
+    def is_compiled_func(self) -> bool:
+        return self.fx_graph is not None
+
+    def is_eager_func(self) -> bool:
+        return self.fx_graph is None
+
+
 counters = collections.defaultdict(collections.Counter)
+func_read_writes: List[FuncReadWrite] = []
+known_stack_vars: Set[str] = set()
 troubleshooting_url = "https://pytorch.org/docs/master/compile/troubleshooting.html"
 nnmodule_doc_url = "https://pytorch.org/docs/master/compile/nn-module.html"
 nnmodule_doc_url_msg = f"See {nnmodule_doc_url} for more information and limitations."
@@ -246,6 +300,13 @@ def compile_times(repr="str", aggregate=False):
 @atexit.register
 def dump_compile_times():
     log.info(compile_times(repr="str", aggregate=True))
+
+
+@atexit.register
+def dump_func_read_writes():
+    import pprint
+    for frw in func_read_writes:
+        pprint.pprint(frw)
 
 
 tensortype_to_dtype = {

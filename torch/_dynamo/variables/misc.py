@@ -9,10 +9,10 @@ from typing import Dict, List
 import torch._C
 import torch._numpy as tnp
 from .. import config, variables
-from ..bytecode_transformation import create_call_function, create_instruction
+from ..bytecode_transformation import create_call_function, create_instruction, unique_id
 from ..exc import unimplemented
 from ..source import AttrSource, ODictGetItemSource
-from ..utils import check_constant_args, identity, proxy_args_kwargs
+from ..utils import check_constant_args, identity, proxy_args_kwargs, func_read_writes, FuncReadWrite
 from .base import MutableLocal, VariableTracker
 from .dicts import DefaultDictVariable
 from .functions import (
@@ -824,6 +824,44 @@ class SkipFilesVariable(VariableTracker):
             return variables.functions.FunctoolsPartialVariable(
                 fn, args=rest_args, keywords=kwargs, **options
             )
+        elif self.value is torch._dynamo.decorators._disable:
+            if len(tx.f_locals.keys()) > 0:  # TODO(yf225): it's very weird that we enter this branch twice, and only one that has non-empty f_locals has the right information
+                reads = [item.proxy.node.name for item in kwargs['reads'].items] if "reads" in kwargs else []
+                mutations = [item.proxy.node.name for item in kwargs['mutations'].items] if "mutations" in kwargs else []
+                eager_fn = kwargs['func'].fn if "func" in kwargs else []
+                eager_mod = kwargs['mod'].module_type  if "mod" in kwargs else [] # TODO(yf225): maybe sth else in this NNModuleVariable can be useful?
+                if reads or mutations:
+                    eager_fn_frw = func_read_writes[-1]
+                    # a lightweight check to make sure we are modifying the correct eager function FRW
+                    assert eager_fn_frw.eager_fn_fqn is not None and eager_fn_frw.eager_fn_fqn.split(".")[1] in str(eager_fn), \
+                        f"{eager_fn_frw.eager_fn_fqn.split('.')[1]} is not in {str(eager_fn)}"
+                    nominal_arg_to_actual_var = {
+                        k: v for k, v in zip(
+                            list(inspect.signature(eager_fn).parameters.keys())[1:],
+                            eager_fn_frw.eager_fn_args_actual,
+                        )
+                    }
+                    def convert__l_x__to__x(name):
+                        return name.strip("l").strip("_")
+                    assert eager_fn_frw.fx_graph is None, "Last FRW is not eager function!"
+                    eager_fn_frw.eager_fn = eager_fn
+                    eager_fn_frw.eager_mod = eager_mod
+                    eager_fn_frw.nominal_arg_to_actual_var = nominal_arg_to_actual_var
+                    actual_reads = []
+                    for read in reads:
+                        if "l__self__" not in read:
+                            actual_reads.append(nominal_arg_to_actual_var[convert__l_x__to__x(read)])
+                        else:
+                            actual_reads.append(read)
+                    actual_mutations = []
+                    for mutation in mutations:
+                        if "l__self__" not in mutation:
+                            actual_mutations.append(nominal_arg_to_actual_var[convert__l_x__to__x(mutation)])
+                        else:
+                            actual_mutations.append(mutation)
+                    eager_fn_frw.reads = set(actual_reads)
+                    eager_fn_frw.mutations = set(actual_mutations)
+            unimplemented("_disable is called")
         else:
             try:
                 path = inspect.getfile(self.value)
