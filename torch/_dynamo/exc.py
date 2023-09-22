@@ -173,6 +173,8 @@ def unimplemented_with_warning(e, code, msg):
 
 def unimplemented(msg: str):
     assert msg != os.environ.get("BREAK", False)
+    import traceback
+    traceback.print_stack()
     raise Unsupported(msg)
 
 

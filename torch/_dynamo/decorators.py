@@ -50,6 +50,25 @@ def disable(fn=None, recursive=True):
         return skip(fn)
 
 
+# TODO(yf225): dedup with torch._dynamo.disable
+def _disable(mod=None, func=None, reads=[], mutations=[], recursive=True):
+    """
+    Decorator and context manager to disable TorchDynamo
+
+    If recursive=True, Dynamo is completely skipped on the decorated function
+    frame as well as the recursively invoked functions.
+
+    If recursive=False, Dynamo skips frames associated with the function code,
+    but still process recursively invoked frames.
+    """
+    if recursive:
+        # assume 1 mutation causes 1 additional read
+        # TODO(yf225): `.copy_()` is probably an exception to this, TBD if we need it
+        return DisableContext(mod=mod, func=func, reads=reads+mutations, mutations=mutations)
+    else:
+        return skip(fn)
+
+
 def skip(fn=None):
     """
     Skip frames associated with the function code, but still process recursively

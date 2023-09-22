@@ -3,31 +3,10 @@ import torch._dynamo.config
 from torch._inductor.utils import run_and_get_triton_code
 from torch.testing import FileCheck
 from torch._dynamo.eval_frame import DisableContext, innermost_fn
+from torch._dynamo.decorators import _disable
+from torch._dynamo.utils import func_read_writes as frws
 
 # TORCH_LOGS="+dynamo,aot,inductor" TORCH_COMPILE_DEBUG=1 python test/test_cross_graph.py
-
-
-# TODO(yf225): dedup with torch._dynamo.disable
-def disable(param_reads=[], writes=[]):
-    def _disable(fn=None, recursive=True):
-        """
-        Decorator and context manager to disable TorchDynamo
-
-        If recursive=True, Dynamo is completely skipped on the decorated function
-        frame as well as the recursively invoked functions.
-
-        If recursive=False, Dynamo skips frames associated with the function code,
-        but still process recursively invoked frames.
-        """
-        if recursive:
-            if fn is not None:
-                fn = innermost_fn(fn)
-                assert callable(fn)
-                return DisableContext(param_reads=param_reads, writes=writes)(fn)
-            return DisableContext(param_reads=param_reads, writes=writes)
-        else:
-            return skip(fn)
-    return _disable
 
 
 class TestSubmodule(torch.nn.Module):
@@ -46,17 +25,18 @@ class TestModule(torch.nn.Module):
         self.register_buffer('buf', torch.randn(4, 4))
         self.submod = TestSubmodule()
 
-    # NOTE: input args in `writes=[...]` must be in original order
-    @disable(param_reads=["self.weight", "self.buf"], writes=["d"])
     def g1(self, d, e):
-        d.relu_()
-        return self.weight + self.buf + d + e
+        # TODO(yf225): since we own the Python interpreter (aka. Dynamo),
+        # can we populate this automatically by walking through all branches?
+        with _disable(mod=self, func=self.g1, reads=[d, e, self.weight, self.buf], mutations=[d]):
+            d.relu_()
+            return self.weight + self.buf + d + e
         # return d
 
-    @disable(writes=["self.buf"])
     def g2(self, a, b):
-        self.buf.relu_()
-        return torch.cat(torch.chunk(a, 2))
+        with _disable(mod=self, func=self.g2, reads=[a, b], mutations=[self.buf]):
+            self.buf.relu_()
+            return torch.cat(torch.chunk(a + b, 2))
 
     def f(self, c):
         return c * c
@@ -88,3 +68,40 @@ with (
     ref = m(x, y)
     actual = compiled_m(x, y)
     assert torch.allclose(ref, actual)
+
+    assert frws[0].is_compiled_func()
+    assert frws[0].reads == set(['y', 'x', 'l__self___buf'])
+    assert frws[0].mutations == set(['x', 'l__self___buf'])
+    assert frws[0].outputs == set(['graph_out_0_1'])
+
+    assert frws[1].is_eager_func()
+    assert frws[1].reads == set([
+        'x',
+        'graph_out_0_1',
+        'l__self___weight',
+        'l__self___buf',
+    ])
+    assert frws[1].mutations == set(['x'])
+    assert frws[1].outputs == set(['___stack0'])
+
+    assert frws[2].is_compiled_func()
+    assert frws[2].reads == set(['y'])
+    assert frws[2].mutations == set()
+    assert frws[2].outputs == set(['graph_out_0_6'])
+
+    assert frws[3].is_eager_func()
+    assert frws[3].reads == set(['l__self__weight', 'graph_out_0_6', 'l__self___buf'])
+    assert frws[3].mutations == set(['l__self___buf'])
+    assert frws[3].outputs == set(['___stack1'])
+
+    assert frws[4].is_compiled_func()
+    assert frws[4].reads == set([
+        '___stack0',
+        '___stack1',
+        'l__self___buf',
+        'l__self___submod_sub_weight',
+        'l__self___weight',
+        'x'
+    ])
+    assert frws[4].mutations == set()
+    assert frws[4].outputs == set()

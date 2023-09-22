@@ -266,16 +266,20 @@ class _TorchDynamoContext:
         self.backend_ctx.__enter__()
         self.dynamic_ctx = enable_dynamic(self.dynamic, self.export)
         self.dynamic_ctx.__enter__()
+        self.tracking_mode.__enter__()
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         assert self.prior is not unset
         set_eval_frame(self.prior)
         self.prior = unset
         # TODO: This is totally not the right way to chain contexts manually
+        self.tracking_mode.__exit__(exc_type, exc_val, exc_tb)
         self.dynamic_ctx.__exit__(exc_type, exc_val, exc_tb)
         self.backend_ctx.__exit__(exc_type, exc_val, exc_tb)
 
     def __call__(self, fn):
+        # import traceback
+        # traceback.print_stack()
         # public api for compiler config/options
         def get_compiler_config():
             return self.compiler_config
@@ -325,6 +329,7 @@ class _TorchDynamoContext:
 
         @functools.wraps(fn)
         def _fn(*args, **kwargs):
+            # breakpoint()
             if (
                 not isinstance(self, DisableContext)
                 and torch.fx._symbolic_trace.is_fx_tracing()
@@ -353,8 +358,6 @@ class _TorchDynamoContext:
         # hooks to properly handle inlining
         if isinstance(self, DisableContext):
             _fn._torchdynamo_disable = True  # type: ignore[attr-defined]
-            _fn._torchdynamo_param_reads = self.param_reads
-            _fn._torchdynamo_writes = self.writes
         else:
             _fn._torchdynamo_inline = fn  # type: ignore[attr-defined]
 
@@ -459,15 +462,125 @@ class RunOnlyContext(_TorchDynamoContext):
         super().__init__(callback=False, on_enter=on_enter)
 
 
-class DisableContext(_TorchDynamoContext):
-    def __init__(self, param_reads=[], writes=[]):
-        super().__init__(callback=None)
+from torch.utils._python_dispatch import TorchDispatchMode
+import torch.fx.traceback as fx_traceback
+from collections import defaultdict
+
+
+def get_all_aliases_of_data_ptr(aliases: Dict[int, Set[int]], data_ptr: int) -> Set[int]:
+    if data_ptr not in aliases:
+        return set()
+    else:
+        ret = set()
+        for alias_set in aliases[data_ptr]:
+            for alias_data_ptr in alias_set:
+                ret.add(get_all_aliases_of_data_ptr(aliases, alias_data_ptr))
+        return ret
+
+
+# TODO(yf225): need to also track state of global variables,
+# to make sure they are not accessed without annotation.
+class TrackingMode(TorchDispatchMode):
+    def __init__(self, reads, mutations, mod):
+        self.expected_reads: Set[int] = set([read.data_ptr() for read in reads])
+        self.expected_mutations: Set[int] = set([mutation.data_ptr() for mutation in mutations])
+        assert self.expected_mutations.issubset(self.expected_reads), "assume we already count the mutation-caused reads"
+        self.mod: torch.nn.Module = mod
+        self.expected_no_reads: Set[int] = set([param.data_ptr() for param in list(mod.parameters()) + list(mod.buffers())]) - self.expected_reads
+        self.expected_no_mutations: Set[int] = set([param.data_ptr() for param in list(mod.parameters()) + list(mod.buffers())]) - self.expected_mutations
+        self.aliases: Dict[int, Set[int]] = defaultdict(set)
+        self.actual_reads: Set[int] = set()
+        self.actual_mutations: Set[int] = set()
+
+    def _add_out_into_aliases(self, arg, out):
+        if isinstance(out, torch.Tensor):
+            self.aliases[arg.data_ptr()].add(out.data_ptr())
+        else:
+            for out_arg in out:
+                self.aliases[arg.data_ptr()].add(out_arg.data_ptr())
+
+    def __torch_dispatch__(self, func, types, args=(), kwargs=None):
+        out = func(*args, **kwargs)
+        if func in [
+            torch.ops.aten.view.default,
+            torch.ops.aten.split.default,
+            torch.ops.aten.split.Tensor,
+            torch.ops.aten.chunk.default,
+            torch.ops.aten.slice,
+            torch.ops.aten.cat.default,
+        ]:
+            # NOTE: for alias ops, tracking only the first arg
+            arg_maybe_plural = args[0]
+            if isinstance(arg_maybe_plural, torch.Tensor):
+                arg = arg_maybe_plural
+                self.actual_reads.add(arg.data_ptr())
+                self._add_out_into_aliases(arg, out)
+            else:
+                for arg in arg_maybe_plural:
+                    if isinstance(arg, torch.Tensor):
+                        self.actual_reads.add(arg.data_ptr())
+                        self._add_out_into_aliases(arg, out)
+        elif func._schema.is_mutable:  # inplace ops
+            # NOTE: for mutation ops, tracking only the first arg
+            arg = args[0]
+            if isinstance(arg, torch.Tensor):
+                # assume 1 mutation causes 1 additional read
+                # TODO(yf225): `.copy_()` is probably an exception to this, TBD if we need it
+                self.actual_reads.add(arg.data_ptr())
+                self.actual_mutations.add(arg.data_ptr())
+        else:
+            for arg in args:
+                if isinstance(arg, torch.Tensor):
+                    self.actual_reads.add(arg.data_ptr())
+        return func(*args, **kwargs)
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
         assert (
-            all(read.startswith("self.") for read in param_reads),
-            "Only need to specify reads to module paramaters. Reads to regular function args are automatically inferred."
+            self.expected_reads.issubset(self.actual_reads),
+            f"expected reads {self.expected_reads-self.actual_reads} are not found in actual_reads"
         )
-        self.param_reads = param_reads
-        self.writes = writes
+        assert (
+            not (self.expected_no_reads & self.actual_reads),
+            f"unexpected read: {self.expected_no_reads & self.actual_reads}",
+        )
+        assert (
+            self.expected_mutations.issubset(self.actual_mutations),
+            f"found {self.expected_mutations-self.actual_mutations} in expected_mutations that are not part of actual_mutations",
+        )
+        for exp_mutation in self.expected_mutations:
+            aliases = get_all_aliases_of_data_ptr(self.aliases, exp_mutation)
+            for alias in aliases:
+                assert (
+                    alias in self.actual_mutations,
+                    f"expected mutations {self.expected_mutations-self.actual_mutations} are not found in actual_mutations",
+                )
+        for exp_no_mutation in self.expected_no_mutations:
+            aliases = get_all_aliases_of_data_ptr(self.aliases, exp_no_mutation)
+            for alias in aliases:
+                assert (
+                    alias not in self.actual_mutations,
+                    f"unexpected mutation: {alias} which is alias of {exp_no_mutation}",
+                )
+        super().__exit__(exc_type, exc_val, exc_tb)
+
+
+class DisableContext(_TorchDynamoContext):
+    def __init__(self, mod=None, func=None, reads=[], mutations=[]):
+        super().__init__(callback=None)
+        self.mod = mod
+        self.func = func
+        self.reads = reads
+        self.mutations = mutations
+        if reads or mutations:
+            self.tracking_mode = TrackingMode(reads=reads, mutations=mutations, mod=mod)
+
+    def __enter__(self):
+        super().__enter__()
+        self.tracking_mode.__enter__()
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.tracking_mode.__exit__(exc_type, exc_val, exc_tb)
+        super().__exit__(exc_type, exc_val, exc_tb)
 
 
 def first_real_inst_idx(code):
