@@ -278,8 +278,6 @@ class _TorchDynamoContext:
         self.backend_ctx.__exit__(exc_type, exc_val, exc_tb)
 
     def __call__(self, fn):
-        # import traceback
-        # traceback.print_stack()
         # public api for compiler config/options
         def get_compiler_config():
             return self.compiler_config
@@ -329,7 +327,6 @@ class _TorchDynamoContext:
 
         @functools.wraps(fn)
         def _fn(*args, **kwargs):
-            # breakpoint()
             if (
                 not isinstance(self, DisableContext)
                 and torch.fx._symbolic_trace.is_fx_tracing()
@@ -535,6 +532,7 @@ class TrackingMode(TorchDispatchMode):
         return func(*args, **kwargs)
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        # NOTE: track that all read/mutation assumptions are met
         assert (
             self.expected_reads.issubset(self.actual_reads),
             f"expected reads {self.expected_reads-self.actual_reads} are not found in actual_reads"

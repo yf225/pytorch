@@ -2267,16 +2267,6 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
             unimplemented(
                 f"inline in skipfiles: {func.fn.__qualname__}  | {func.get_name()} {func.get_filename()}"
             )
-
-            # # TODO(yf225): incredibly hacky way to propagate up the .reads and .writes information, but gets the job done
-            # exc = Unsupported(f"inline in skipfiles: {func.fn.__qualname__}  | {func.get_name()} {func.get_filename()}")
-            # _torchdynamo_param_reads = inspect.getattr_static(func.get_function(), "_torchdynamo_param_reads", [])
-            # _torchdynamo_writes = inspect.getattr_static(func.get_function(), "_torchdynamo_writes", [])
-            # exc._torchdynamo_param_reads = _torchdynamo_param_reads
-            # exc._torchdynamo_writes = _torchdynamo_writes
-            # exc._torchdynamo_fn = func.fn
-            # raise exc
-
         if isinstance(func, UserFunctionVariable) and inspect.getattr_static(
             func.get_function(), "_torchdynamo_disable", False
         ):
@@ -2364,9 +2354,6 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
             raise Unsupported(msg) from e
         except Exception as e:
             log.debug("FAILED INLINING %s", code)
-            # TODO(yf225): unfortunately we get two graph breaks (one on g1, one on the _disable within g1) and we only want to have one
-            # so we use this very hacky way to tell downstream code to only record FRW for the graph break on g1
-            # e._torchdynamo_should_record_frw = False
             raise
         assert tracer.symbolic_result is not None
         func.export_freevars(parent, tracer)
