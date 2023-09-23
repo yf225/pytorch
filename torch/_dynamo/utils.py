@@ -72,24 +72,11 @@ data_ptr_to_global_var_name: Dict[int, str] = {}
 @dataclasses.dataclass
 class FuncReadWrite:
     # can be either __compiled_fn_X or __eager_fn_X
-    func_name: str
-    type: str
-    fx_graph: Optional[fx.GraphModule] = None
+    fn_name: str
+    # can be "compiled" or "eager"
+    fn_type: str
     compiled_fn: Optional[types.FunctionType] = None
     eager_fn: Optional[types.FunctionType] = None
-    eager_fn_local_name: Optional[str] = None
-    eager_fn_args_actual: Optional[List[str]] = None
-    eager_mod: torch.nn.Module = None
-    nominal_arg_to_actual_var: Optional[Dict[str, str]] = None
-    # f_locals.keys() at beginning of this function
-    f_locals_keys: Optional[Set[str]] = None
-    f_globals_keys: Optional[Set[str]] = None
-    stack_before_return: List[Any] = None
-    stack_after_return: List[Any] = None
-    f_locals_before_return: List[str] = None
-    input_ids: Set[int] = None
-    output_ids: Set[int] = None
-    next_compiled_fn_stack_var_to_global_id: Dict[str, str] = None
     input_index_to_global_var_name: Dict[int, str] = None
     output_index_to_global_var_name: Dict[int, str] = None
     tracking_mode: "TrackingMode" = None
