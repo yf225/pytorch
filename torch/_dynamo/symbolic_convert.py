@@ -117,7 +117,6 @@ from .variables.user_defined import (
     UserDefinedObjectVariable,
     UserDefinedVariable,
 )
-from .eval_frame import apply_tracking_mode
 
 log = logging.getLogger(__name__)
 graph_break_log = torch._logging.getArtifactLogger(__name__, "graph_breaks")
@@ -397,8 +396,6 @@ def break_graph_if_unsupported(*, push):
         def wrapper(self: "InstructionTranslatorBase", inst: Instruction):
             state = self.copy_graphstate()
             reason = None
-            param_reads = []
-            nominal_writes = []
             try:
                 TracingContext.set_current_loc(
                     self.f_code.co_filename, self.lineno, self.f_code.co_name
@@ -429,7 +426,6 @@ def break_graph_if_unsupported(*, push):
                 if not self.should_compile_partial_graph():
                     raise
 
-                # TODO(yf225): this is where graph break happens and compilation is triggered
                 log.debug("break_graph_if_unsupported triggered compile", exc_info=True)
 
                 user_stack = excp.real_stack
@@ -452,7 +448,6 @@ def break_graph_if_unsupported(*, push):
                 excp.remove_from_stats()
                 excp.add_to_stats("graph_break")
                 reason = GraphCompileReason(excp.msg, user_stack)
-
             self.restore_graphstate(state)
 
             self.output.compile_subgraph(self, reason=reason)
@@ -2033,7 +2028,6 @@ class InstructionTranslator(InstructionTranslatorBase):
                     self.one_graph
                 ), "Export without one graph - something has gone wrong."
 
-            # TODO(yf225): interesting - this is where "passing eager output to compiled region" happens
             vars = list(code_options["co_varnames"])
             cells_and_freevars = [x for x in self.cell_and_freevars() if x not in vars]
             vars.extend(cells_and_freevars)
@@ -2109,7 +2103,6 @@ class InstructionTranslator(InstructionTranslatorBase):
         return all(b.can_restore() for b in self.block_stack) and not self.one_graph
 
     def create_call_resume_at(self, inst):
-        # TODO(yf225): the logic in this function is potentially interesting
         self.instruction_pointer = None
 
         if inst.opname == "RETURN_VALUE":
@@ -2146,10 +2139,6 @@ class InstructionTranslator(InstructionTranslatorBase):
 
         # we popped all nulls from the stack at runtime,
         # so we should not count NullVariables
-        print(f"self.stack: {self.stack}")
-        for var in self.stack:
-            if isinstance(var, TensorVariable):
-                print(f"self.stack: var.as_proxy(): {var.as_proxy()}")
         stack_len = len(self.stack) - len(null_idxes)
         nargs = stack_len + len(argnames)
 

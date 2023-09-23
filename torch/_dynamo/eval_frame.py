@@ -107,11 +107,6 @@ class TrackingMode(TorchDispatchMode):
             frw.mutations.add(var_name_global)
         return func(*args, **kwargs)
 
-def apply_tracking_mode(fn, is_eager_func, frw):
-    def _fn(*args, **kwargs):
-        with TrackingMode(orig_fn=fn, is_eager_func=is_eager_func, frw=frw):
-            return fn(*args, **kwargs)
-    return _fn
 
 log = logging.getLogger(__name__)
 

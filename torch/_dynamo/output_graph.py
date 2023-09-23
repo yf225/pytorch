@@ -21,7 +21,6 @@ from typing import (
     Set,
     Union,
 )
-import inspect
 
 import sympy
 
@@ -259,7 +258,6 @@ class OutputGraph(Checkpointable[OutputGraphState]):
         self.export_constraints = export_constraints
         self.frame_state = frame_state
         self.tensor_weakref_to_sizes_strides: WeakIdKeyDictionary = {}
-        self.local_var_to_global_id = {}
 
         # Used to maintain an alias between real values variable tracker for tensors we have seen.
         # This map ensures that the only tensors in graph inputs, and the only tensors in guards are unique.
@@ -876,11 +874,8 @@ class OutputGraph(Checkpointable[OutputGraphState]):
         ):
             append_prefix_insts()
             # optimization to generate better code in a common case
-            insts, compiled_fn_name, gm = self.compile_and_call_fx_graph(tx, list(reversed(stack_values)), root)
-            for inst in insts:
-                print(f"here1: inst: {inst}")
             self.add_output_instructions(
-                insts
+                self.compile_and_call_fx_graph(tx, list(reversed(stack_values)), root)
                 + [create_instruction("UNPACK_SEQUENCE", arg=len(stack_values))]
             )
         else:
@@ -903,9 +898,8 @@ class OutputGraph(Checkpointable[OutputGraphState]):
 
             output = []
             if count_calls(self.graph) != 0 or len(pass2.graph_outputs) != 0:
-                insts, compiled_fn_name, gm = self.compile_and_call_fx_graph(tx, pass2.graph_output_vars(), root)
                 output.extend(
-                    insts
+                    self.compile_and_call_fx_graph(tx, pass2.graph_output_vars(), root)
                 )
 
                 if len(pass2.graph_outputs) != 0:
@@ -913,10 +907,7 @@ class OutputGraph(Checkpointable[OutputGraphState]):
                 else:
                     output.append(create_instruction("POP_TOP"))
             append_prefix_insts()
-            # NOTE: `pass2.get_instructions()` has the local input variable names for the next eager function
-            pass2_insts = pass2.get_instructions()
-
-            self.add_output_instructions(output + pass2_insts)
+            self.add_output_instructions(output + pass2.get_instructions())
 
         # restore all the live local vars
         self.add_output_instructions(
@@ -998,7 +989,6 @@ class OutputGraph(Checkpointable[OutputGraphState]):
         # free a bit of memory
         self.real_value_cache.clear()
 
-        # TODO(yf225): this is where we get a new compiled graph
         gm = fx.GraphModule(root, self.graph)
         for register_finalizer in self.register_finalizer_fns:
             register_finalizer(gm)
@@ -1058,7 +1048,7 @@ class OutputGraph(Checkpointable[OutputGraphState]):
 
         cg = PyCodegen(tx)
         cg.make_call_generated_code(name)
-        return cg.get_instructions(), name, gm
+        return cg.get_instructions()
 
     @property
     def placeholders(self) -> List[fx.Node]:
