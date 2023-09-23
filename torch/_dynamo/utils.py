@@ -68,7 +68,6 @@ from torch.utils._pytree import tree_map
 
 
 data_ptr_to_global_var_name: Dict[int, str] = {}
-name_to_frw = {}
 
 @dataclasses.dataclass
 class FuncReadWrite:
@@ -146,7 +145,6 @@ class FuncReadWrite:
 
 counters = collections.defaultdict(collections.Counter)
 func_read_writes: List[FuncReadWrite] = []
-known_stack_vars: Set[str] = set()
 troubleshooting_url = "https://pytorch.org/docs/master/compile/troubleshooting.html"
 nnmodule_doc_url = "https://pytorch.org/docs/master/compile/nn-module.html"
 nnmodule_doc_url_msg = f"See {nnmodule_doc_url} for more information and limitations."

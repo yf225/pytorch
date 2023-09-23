@@ -71,8 +71,6 @@ from .utils import (
     istype,
     LazyString,
     proxy_args_kwargs,
-    func_read_writes,
-    FuncReadWrite,
 )
 from .variables.base import is_side_effect_safe, MutableLocal, typestr, VariableTracker
 from .variables.builder import VariableBuilder, wrap_fx_proxy
@@ -502,16 +500,6 @@ def break_graph_if_unsupported(*, push):
                 self.create_call_resume_at(self.next_instruction)
             )
 
-            # eager_fn_frw = func_read_writes[-1]
-            # assert eager_fn_frw.is_eager_func()
-            # # lightweight check to make sure we are modifying the correct eager function FRW
-            # # assert eager_fn_frw.is_eager_func() and eager_fn_frw.eager_fn_local_name is not None and eager_fn_frw.eager_fn_local_name in str(eager_fn), \
-            # #     f"{eager_fn_frw.eager_fn_local_name} and {str(eager_fn)} seem to be two different functions!"
-            # eager_fn_frw.eager_fn = eager_fn
-            # eager_fn_frw.f_locals_keys = set(self.f_locals.keys())
-            # eager_fn_frw.f_globals_keys = set(self.f_globals.keys())
-            # print(f"self.f_globals: {self.f_globals}")
-
         return wrapper
 
     return decorator
@@ -776,21 +764,7 @@ class InstructionTranslatorBase(Checkpointable[InstructionTranslatorGraphState])
         assert val is None or isinstance(
             val, VariableTracker
         ), f"push expects VariableTracker, got {typestr(val)}"
-        # if isinstance(val, UnknownVariable):
-        #     assert func_read_writes[-1].is_eager_func()
-        #     func_read_writes[-1].stack_before_return = copy.copy(self.stack)
-        #     func_read_writes[-1].f_locals_before_return = list(self.f_locals.keys())
         self.stack.append(val)
-        # # TODO(yf225): current heuristic: the first variable after Unknown is popped is the one from eager function
-        # print(f"push: id(self): {id(self)}, self.stack: {self.stack}")
-        # for v in self.stack:
-        #     if isinstance(v, TensorVariable):
-        #         print(f"v.as_proxy(): {v.as_proxy()}")
-        # print(f"push: self.f_locals.keys(): {self.f_locals.keys()}")
-        # for key, value in self.f_locals.items():
-        #     if isinstance(value, torch.Tensor):
-        #         print(f"push: self.f_locals: {key}: {value.data_ptr()}")
-        # print(f"push: self.f_locals: {self.f_locals}")
 
     def push_many(self, vals: List[VariableTracker]):
         for val in vals:
@@ -2047,24 +2021,6 @@ class InstructionTranslator(InstructionTranslatorBase):
             export=export,
             inline_depth=0,
         )
-        # print(f"__init__: self.f_locals.keys(): {self.f_locals.keys()}")
-        # for key, value in self.f_locals.items():
-        #     if isinstance(value, torch.Tensor):
-        #         print(f"__init__: self.f_locals: {key}: {value.data_ptr()}")
-        # print(f"__init__: self.f_locals: {self.f_locals}")
-        # if len(func_read_writes) > 0:
-        #     assert func_read_writes[-1].is_eager_func()
-        #     eager_fn_frw = func_read_writes[-1]
-        #     print(f"eager_fn_frw.output_ids: {eager_fn_frw.output_ids}")
-        #     for key, value in self.f_locals.items():
-        #         if isinstance(value, torch.Tensor) and value.data_ptr() in func_read_writes[-1].output_ids:
-        #             out_name_global = unique_id("eager_out_")
-        #             if eager_fn_frw.next_compiled_fn_stack_var_to_global_id is None:
-        #                 eager_fn_frw.next_compiled_fn_stack_var_to_global_id = {}
-        #             eager_fn_frw.next_compiled_fn_stack_var_to_global_id[key] = out_name_global
-        #             if eager_fn_frw.outputs is None:
-        #                 eager_fn_frw.outputs = set()
-        #             eager_fn_frw.outputs.add(out_name_global)
 
         # as soon as we create the tracing context we should keep it active, so any calls
         # into dynamo apis can rely on finding it

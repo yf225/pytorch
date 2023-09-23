@@ -74,8 +74,6 @@ class BackendCompilerFailed(TorchDynamoException):
 
 class Unsupported(TorchDynamoException):
     def __init__(self, msg):
-        import traceback
-        traceback.print_stack()
         super().__init__(msg)
         self.real_stack = torch._guards.TracingContext.extract_stack()
         self.msg = msg

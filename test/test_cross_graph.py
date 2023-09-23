@@ -2,32 +2,9 @@ import torch
 import torch._dynamo.config
 from torch._inductor.utils import run_and_get_triton_code
 from torch.testing import FileCheck
-from torch._dynamo.eval_frame import DisableContext, innermost_fn
+from torch._dynamo import disable
 
 # TORCH_LOGS="+dynamo,aot,inductor" TORCH_COMPILE_DEBUG=1 python test/test_cross_graph.py
-
-
-# TODO(yf225): dedup with torch._dynamo.disable
-def disable(param_reads=[], writes=[]):
-    def _disable(fn=None, recursive=True):
-        """
-        Decorator and context manager to disable TorchDynamo
-
-        If recursive=True, Dynamo is completely skipped on the decorated function
-        frame as well as the recursively invoked functions.
-
-        If recursive=False, Dynamo skips frames associated with the function code,
-        but still process recursively invoked frames.
-        """
-        if recursive:
-            if fn is not None:
-                fn = innermost_fn(fn)
-                assert callable(fn)
-                return DisableContext(param_reads=param_reads, writes=writes)(fn)
-            return DisableContext(param_reads=param_reads, writes=writes)
-        else:
-            return skip(fn)
-    return _disable
 
 
 class TestSubmodule(torch.nn.Module):
@@ -63,8 +40,8 @@ def g2(a, b):
 # 1. eager function returning a tensor [DONE]
 # 2. eager function returning a tuple [DONE]
 # 3. eager function returning a scalar [TBD]
-# 4. compiled function has mutation
-# 5. compiled function reads module param via `self.`
+# 4. compiled function has mutation [DONE]
+# 5. compiled function reads module param via `self.` [DONE]
 
 
 class TestModule(torch.nn.Module):

@@ -66,7 +66,7 @@ from .types import DynamoCallback
 from .utils import compile_times
 
 from torch.utils._python_dispatch import TorchDispatchMode
-from torch._dynamo.utils import func_read_writes, FuncReadWrite, name_to_frw, data_ptr_to_global_var_name
+from torch._dynamo.utils import func_read_writes, FuncReadWrite, data_ptr_to_global_var_name
 from .bytecode_transformation import unique_id
 from torch._utils import is_compiling
 import weakref
@@ -405,7 +405,6 @@ class _TorchDynamoContext:
                         )
                         eager_frw.tracking_mode = TrackingMode(orig_fn=fn, is_eager_func=True, frw=eager_frw)
                         func_read_writes.append(eager_frw)
-                        name_to_frw[eager_frw_func_name] = eager_frw
 
                 if is_eager_func:
                     for i, arg in enumerate(list(args)):
@@ -450,8 +449,6 @@ class _TorchDynamoContext:
         # hooks to properly handle inlining
         if isinstance(self, DisableContext):
             _fn._torchdynamo_disable = True  # type: ignore[attr-defined]
-            _fn._torchdynamo_param_reads = self.param_reads
-            _fn._torchdynamo_writes = self.writes
         else:
             _fn._torchdynamo_inline = fn  # type: ignore[attr-defined]
 
@@ -557,14 +554,8 @@ class RunOnlyContext(_TorchDynamoContext):
 
 
 class DisableContext(_TorchDynamoContext):
-    def __init__(self, param_reads=[], writes=[]):
+    def __init__(self):
         super().__init__(callback=None)
-        assert (
-            all(read.startswith("self.") for read in param_reads),
-            "Only need to specify reads to module paramaters. Reads to regular function args are automatically inferred."
-        )
-        self.param_reads = param_reads
-        self.writes = writes
 
 
 def first_real_inst_idx(code):
