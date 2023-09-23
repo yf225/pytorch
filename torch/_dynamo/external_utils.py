@@ -1,6 +1,7 @@
 # This module contains functions that *will be allowed* by dynamo
 
 import functools
+from .utils import FuncReadWrite, func_read_writes, data_ptr_to_global_var_name
 
 
 def is_compiling() -> bool:

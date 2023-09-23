@@ -67,20 +67,47 @@ from torch.nn.modules.lazy import LazyModuleMixin
 from torch.utils._pytree import tree_map
 
 
+data_ptr_to_global_var_name: Dict[int, str] = {}
+name_to_frw = {}
+
 @dataclasses.dataclass
 class FuncReadWrite:
     # can be either __compiled_fn_X or __eager_fn_X
     func_name: str
+    type: str
     fx_graph: Optional[fx.GraphModule] = None
+    compiled_fn: Optional[types.FunctionType] = None
     eager_fn: Optional[types.FunctionType] = None
-    eager_fn_fqn: Optional[str] = None
+    eager_fn_local_name: Optional[str] = None
     eager_fn_args_actual: Optional[List[str]] = None
+    eager_mod: torch.nn.Module = None
     nominal_arg_to_actual_var: Optional[Dict[str, str]] = None
     # f_locals.keys() at beginning of this function
     f_locals_keys: Optional[Set[str]] = None
-    # TODO(yf225): maybe add `f_code` here for better debugging
+    f_globals_keys: Optional[Set[str]] = None
+    stack_before_return: List[Any] = None
+    stack_after_return: List[Any] = None
+    f_locals_before_return: List[str] = None
+    input_ids: Set[int] = None
+    output_ids: Set[int] = None
+    next_compiled_fn_stack_var_to_global_id: Dict[str, str] = None
+    input_index_to_global_var_name: Dict[int, str] = None
+    output_index_to_global_var_name: Dict[int, str] = None
+    tracking_mode: "TrackingMode" = None
+    # includes reading input tensors, as well as reading intermediate tensors within the function
     _reads: Optional[Set[str]] = None
-    _writes: Optional[Set[str]] = None
+    # includes mutating input tensors, as well as mutating intermediate tensors within the function
+    _mutations: Optional[Set[str]] = None
+    # includes tensors returned from the function
+    _outputs: Optional[Set[str]] = None
+
+    @property
+    def param_reads(self) -> Optional[Set[str]]:
+        return self._param_reads
+
+    @param_reads.setter
+    def param_reads(self, v: Optional[Set[str]]) -> None:
+        self._param_reads = v
 
     @property
     def reads(self) -> Optional[Set[str]]:
@@ -91,20 +118,35 @@ class FuncReadWrite:
         self._reads = v
 
     @property
-    def writes(self) -> Optional[Set[str]]:
-        return self._writes
+    def mutations(self) -> Optional[Set[str]]:
+        return self._mutations
 
-    @writes.setter
-    def writes(self, v: Optional[Set[str]]) -> None:
-        self._writes = v
-        # We never write to the tensor without reading it first
+    @mutations.setter
+    def mutations(self, v: Optional[Set[str]]) -> None:
+        self._mutations = v
+        # assume 1 mutation causes 1 additional read
         # TODO(yf225): `.copy_()` is probably an exception to this, TBD if we need it
-        if self._reads is not None and self._writes is not None:
-            self._reads = self._reads.union(self._writes)
+        if self._reads is not None and self._mutations is not None:
+            self._reads = self._reads.union(self._mutations)
+
+    @property
+    def outputs(self) -> Optional[Set[str]]:
+        return self._outputs
+
+    @outputs.setter
+    def outputs(self, v: Optional[Set[str]]) -> None:
+        self._outputs = v
+
+    def is_compiled_func(self) -> bool:
+        return self.type == "compiled"
+
+    def is_eager_func(self) -> bool:
+        return self.type == "eager"
 
 
 counters = collections.defaultdict(collections.Counter)
 func_read_writes: List[FuncReadWrite] = []
+known_stack_vars: Set[str] = set()
 troubleshooting_url = "https://pytorch.org/docs/master/compile/troubleshooting.html"
 nnmodule_doc_url = "https://pytorch.org/docs/master/compile/nn-module.html"
 nnmodule_doc_url_msg = f"See {nnmodule_doc_url} for more information and limitations."

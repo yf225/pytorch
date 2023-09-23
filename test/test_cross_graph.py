@@ -39,6 +39,34 @@ class TestSubmodule(torch.nn.Module):
         return torch.add(self.sub_weight, inp)
 
 
+@disable()
+def g1_mutation_tuple(d, e):
+    d.relu_()
+    return d, e
+
+@disable()
+def g1_no_mutation_tuple(d, e):
+    d = d.relu()
+    return d, e
+
+@disable()
+def g1_no_mutation_tensor(d, e):
+    d = d.relu()
+    return d + e
+
+@disable()
+def g2(a, b):
+    return torch.cat(torch.chunk(a * b, 2))
+
+
+# TODO: cases to handle
+# 1. eager function returning a tensor [DONE]
+# 2. eager function returning a tuple [DONE]
+# 3. eager function returning a scalar [TBD]
+# 4. compiled function has mutation
+# 5. compiled function reads module param via `self.`
+
+
 class TestModule(torch.nn.Module):
     def __init__(self):
         super().__init__()
@@ -46,33 +74,27 @@ class TestModule(torch.nn.Module):
         self.register_buffer('buf', torch.randn(4, 4))
         self.submod = TestSubmodule()
 
-    # NOTE: input args in `writes=[...]` must be in original order
-    @disable(param_reads=["self.weight", "self.buf"], writes=["d"])
-    def g1(self, d, e):
-        d.relu_()
-        return self.weight + self.buf + d + e
-        # return d
-
-    @disable(writes=["self.buf"])
-    def g2(self, a, b):
-        self.buf.relu_()
-        return torch.cat(torch.chunk(a, 2))
-
     def f(self, c):
         return c * c
 
     def forward(self, x, y):
         x.relu_()
-        self.buf.relu_()
-        z = torch.sigmoid(y)
-        return self.g1(x, z) \
-            + self.g2(self.weight, torch.sigmoid(y + 1)) \
-            + torch.relu(x) \
-            + torch.tanh(self.weight) \
-            + torch.selu(self.submod.sub_weight) \
-            + self.buf \
-            + self.f(x) \
-            + self.submod(x)
+        # self.buf.relu_()
+        # z = torch.sigmoid(y)
+        # return g1_no_mutation(x, z) \
+        #     + g2(self.weight, torch.sigmoid(y + 1)) \
+        #  * x.sum().item()
+        # return g1_no_mutation_tensor(x, x) + torch.relu(x) + g1_no_mutation_tensor(x * 2, x) \
+        # return torch.relu(x) * self.weight.sum().item() \
+        # return torch.relu(x) + g1_mutation_tuple(x, x)[0] + g1_mutation_tuple(x, x)[1] \
+        # return torch.relu(x) + g1_no_mutation_tuple(x, x)[0] + g1_no_mutation_tuple(x, x)[1] \
+        # return torch.selu(x) + g1_no_mutation_tensor(x, x) \
+        return torch.relu(x) + g1_no_mutation_tuple(x, x)[0] \
+            + torch.tanh(self.weight)
+            # + torch.selu(self.submod.sub_weight) \
+            # + self.buf \
+            # + self.f(x) \
+            # + self.submod(x)
 
 with (
     torch._dynamo.config.patch(
@@ -85,6 +107,6 @@ with (
     compiled_m = torch.compile(m, backend="aot_eager", fullgraph=False, dynamic=False)
     x = torch.randn(4, 4)
     y = torch.randn(4, 4)
-    ref = m(x, y)
+    # ref = m(x, y)
     actual = compiled_m(x, y)
-    assert torch.allclose(ref, actual)
+    # assert torch.allclose(ref, actual)

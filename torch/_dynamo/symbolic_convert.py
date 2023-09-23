@@ -119,6 +119,7 @@ from .variables.user_defined import (
     UserDefinedObjectVariable,
     UserDefinedVariable,
 )
+from .eval_frame import apply_tracking_mode
 
 log = logging.getLogger(__name__)
 graph_break_log = torch._logging.getArtifactLogger(__name__, "graph_breaks")
@@ -453,10 +454,7 @@ def break_graph_if_unsupported(*, push):
                 excp.remove_from_stats()
                 excp.add_to_stats("graph_break")
                 reason = GraphCompileReason(excp.msg, user_stack)
-                # NOTE: get param_reads and writes from user-code annotations
-                eager_fn = getattr(excp, "_torchdynamo_fn", None)
-                param_reads = getattr(excp, "_torchdynamo_param_reads", [])
-                nominal_writes = getattr(excp, "_torchdynamo_writes", [])
+
             self.restore_graphstate(state)
 
             self.output.compile_subgraph(self, reason=reason)
@@ -504,37 +502,15 @@ def break_graph_if_unsupported(*, push):
                 self.create_call_resume_at(self.next_instruction)
             )
 
-            name = unique_id("__eager_fn")
-            eager_fn_frw = func_read_writes[-1]
-            # a lightweight check to make sure we are modifying the correct eager function FRW
-            assert eager_fn_frw.eager_fn_fqn is not None and eager_fn_frw.eager_fn_fqn.split(".")[1] in str(eager_fn), \
-                f"{eager_fn_frw.eager_fn_fqn.split('.')[1]} is not in {str(eager_fn)}"
-            eager_fn_frw.func_name = name
-            eager_fn_frw.eager_fn = eager_fn
-            eager_fn_frw.f_locals_keys = set(self.f_locals.keys())
-
-            def convert_param_fqn(dot_fqn):
-                return dot_fqn.replace("self.", "l__self__").replace(".", "_")
-
-            # NOTE: we had to use `l__self___submod_sub_weight` format, see output_graph.py compile_subgraph() for more info.
-            param_reads = [convert_param_fqn(dot_fqn) for dot_fqn in param_reads]
-            eager_fn_frw.reads = eager_fn_frw.reads.union(set(param_reads))
-
-            # Replace nominal writes (var names within the eager function) to actual writes (var names outside of the eager function)
-            nominal_arg_to_actual_var = {
-                k: v for k, v in zip(
-                    list(inspect.signature(eager_fn).parameters.keys())[1:],
-                    eager_fn_frw.eager_fn_args_actual,
-                )
-            }
-            actual_writes = set()
-            for write in nominal_writes:
-                if write.startswith("self."):
-                    actual_writes.add(convert_param_fqn(write))
-                else:
-                    actual_writes.add(nominal_arg_to_actual_var[write])
-            eager_fn_frw.nominal_arg_to_actual_var = nominal_arg_to_actual_var
-            eager_fn_frw.writes = set(actual_writes)
+            # eager_fn_frw = func_read_writes[-1]
+            # assert eager_fn_frw.is_eager_func()
+            # # lightweight check to make sure we are modifying the correct eager function FRW
+            # # assert eager_fn_frw.is_eager_func() and eager_fn_frw.eager_fn_local_name is not None and eager_fn_frw.eager_fn_local_name in str(eager_fn), \
+            # #     f"{eager_fn_frw.eager_fn_local_name} and {str(eager_fn)} seem to be two different functions!"
+            # eager_fn_frw.eager_fn = eager_fn
+            # eager_fn_frw.f_locals_keys = set(self.f_locals.keys())
+            # eager_fn_frw.f_globals_keys = set(self.f_globals.keys())
+            # print(f"self.f_globals: {self.f_globals}")
 
         return wrapper
 
@@ -800,7 +776,21 @@ class InstructionTranslatorBase(Checkpointable[InstructionTranslatorGraphState])
         assert val is None or isinstance(
             val, VariableTracker
         ), f"push expects VariableTracker, got {typestr(val)}"
+        # if isinstance(val, UnknownVariable):
+        #     assert func_read_writes[-1].is_eager_func()
+        #     func_read_writes[-1].stack_before_return = copy.copy(self.stack)
+        #     func_read_writes[-1].f_locals_before_return = list(self.f_locals.keys())
         self.stack.append(val)
+        # # TODO(yf225): current heuristic: the first variable after Unknown is popped is the one from eager function
+        # print(f"push: id(self): {id(self)}, self.stack: {self.stack}")
+        # for v in self.stack:
+        #     if isinstance(v, TensorVariable):
+        #         print(f"v.as_proxy(): {v.as_proxy()}")
+        # print(f"push: self.f_locals.keys(): {self.f_locals.keys()}")
+        # for key, value in self.f_locals.items():
+        #     if isinstance(value, torch.Tensor):
+        #         print(f"push: self.f_locals: {key}: {value.data_ptr()}")
+        # print(f"push: self.f_locals: {self.f_locals}")
 
     def push_many(self, vals: List[VariableTracker]):
         for val in vals:
@@ -2057,6 +2047,24 @@ class InstructionTranslator(InstructionTranslatorBase):
             export=export,
             inline_depth=0,
         )
+        # print(f"__init__: self.f_locals.keys(): {self.f_locals.keys()}")
+        # for key, value in self.f_locals.items():
+        #     if isinstance(value, torch.Tensor):
+        #         print(f"__init__: self.f_locals: {key}: {value.data_ptr()}")
+        # print(f"__init__: self.f_locals: {self.f_locals}")
+        # if len(func_read_writes) > 0:
+        #     assert func_read_writes[-1].is_eager_func()
+        #     eager_fn_frw = func_read_writes[-1]
+        #     print(f"eager_fn_frw.output_ids: {eager_fn_frw.output_ids}")
+        #     for key, value in self.f_locals.items():
+        #         if isinstance(value, torch.Tensor) and value.data_ptr() in func_read_writes[-1].output_ids:
+        #             out_name_global = unique_id("eager_out_")
+        #             if eager_fn_frw.next_compiled_fn_stack_var_to_global_id is None:
+        #                 eager_fn_frw.next_compiled_fn_stack_var_to_global_id = {}
+        #             eager_fn_frw.next_compiled_fn_stack_var_to_global_id[key] = out_name_global
+        #             if eager_fn_frw.outputs is None:
+        #                 eager_fn_frw.outputs = set()
+        #             eager_fn_frw.outputs.add(out_name_global)
 
         # as soon as we create the tracing context we should keep it active, so any calls
         # into dynamo apis can rely on finding it
@@ -2182,6 +2190,10 @@ class InstructionTranslator(InstructionTranslatorBase):
 
         # we popped all nulls from the stack at runtime,
         # so we should not count NullVariables
+        print(f"self.stack: {self.stack}")
+        for var in self.stack:
+            if isinstance(var, TensorVariable):
+                print(f"self.stack: var.as_proxy(): {var.as_proxy()}")
         stack_len = len(self.stack) - len(null_idxes)
         nargs = stack_len + len(argnames)
 
@@ -2302,17 +2314,9 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
                 # Known sound
                 return
 
-            # unimplemented(
-            #     f"inline in skipfiles: {func.fn.__qualname__}  | {func.get_name()} {func.get_filename()}"
-            # )
-            # TODO(yf225): incredibly hacky way to propagate up the .reads and .writes information, but gets the job done
-            exc = Unsupported(f"inline in skipfiles: {func.fn.__qualname__}  | {func.get_name()} {func.get_filename()}")
-            _torchdynamo_param_reads = inspect.getattr_static(func.get_function(), "_torchdynamo_param_reads", [])
-            _torchdynamo_writes = inspect.getattr_static(func.get_function(), "_torchdynamo_writes", [])
-            exc._torchdynamo_param_reads = _torchdynamo_param_reads
-            exc._torchdynamo_writes = _torchdynamo_writes
-            exc._torchdynamo_fn = func.fn
-            raise exc
+            unimplemented(
+                f"inline in skipfiles: {func.fn.__qualname__}  | {func.get_name()} {func.get_filename()}"
+            )
 
         if isinstance(func, UserFunctionVariable) and inspect.getattr_static(
             func.get_function(), "_torchdynamo_disable", False

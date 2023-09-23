@@ -82,6 +82,9 @@ from .utils import (
     counters,
     func_read_writes,
     FuncReadWrite,
+    name_to_frw,
+    data_ptr_to_global_var_name,
+    known_stack_vars,
     dynamo_timed,
     get_instruction_source_311,
     get_static_address_type,
@@ -103,6 +106,7 @@ from .variables.tensor import (
     TensorVariable,
     UnspecializedPythonVariable,
 )
+from .eval_frame import TrackingMode
 
 log = logging.getLogger(__name__)
 graph_tabular_log = torch._logging.getArtifactLogger(__name__, "graph")
@@ -862,9 +866,10 @@ class OutputGraph(Checkpointable[OutputGraphState]):
             )
             self.add_output_instructions(random_calls_instructions)
 
-        compiled_fn_arg_writes = set()
-        eager_fn_fqn = None
+        compiled_fn_outputs = []
+        eager_fn_local_name = None
         eager_fn_args_actual = []
+        compiled_fn_name = None
         if (
             stack_values
             and all(
@@ -878,7 +883,9 @@ class OutputGraph(Checkpointable[OutputGraphState]):
             append_prefix_insts()
             # optimization to generate better code in a common case
             # TODO(yf225): this branch happens when the program exits, maybe we don't need to implement it
-            insts, func_name, gm = self.compile_and_call_fx_graph(tx, list(reversed(stack_values)), root)
+            insts, compiled_fn_name, gm = self.compile_and_call_fx_graph(tx, list(reversed(stack_values)), root)
+            for inst in insts:
+                print(f"here1: inst: {inst}")
             self.add_output_instructions(
                 insts
                 + [create_instruction("UNPACK_SEQUENCE", arg=len(stack_values))]
@@ -903,123 +910,195 @@ class OutputGraph(Checkpointable[OutputGraphState]):
 
             output = []
             if count_calls(self.graph) != 0 or len(pass2.graph_outputs) != 0:
-                insts, func_name, gm = self.compile_and_call_fx_graph(tx, pass2.graph_output_vars(), root)
+                insts, compiled_fn_name, gm = self.compile_and_call_fx_graph(tx, pass2.graph_output_vars(), root)
                 output.extend(
                     insts
                 )
 
                 if len(pass2.graph_outputs) != 0:
                     output.append(pass2.create_store(graph_output_var))
-                    # NOTE: here we finally know the local name of the output from compiled function (i.e. actual writes), so we append it to the function's .writes list
-                    # NOTE: unfortunately `self.new_var("graph_out")` is not unique across graphs, and we need a unique id
-                    # TODO(yf225): does this work with multi-output?
-                    global_id = unique_id(graph_output_var)
-                    self.local_var_to_global_id[graph_output_var] = global_id
-                    compiled_fn_arg_writes.add(global_id)
                 else:
                     output.append(create_instruction("POP_TOP"))
             append_prefix_insts()
             # NOTE: `pass2.get_instructions()` has the local input variable names for the next eager function
             pass2_insts = pass2.get_instructions()
-
-            # Step 1: extract the next eager function's fqn (`self.XYZ`)
-            # NOTE: only supports calling `self.XYZ` eager functions
-            # TODO(yf225): add support for calling global eager function, and calling submodule's functions
-            index_self = None
             for i, inst in enumerate(pass2_insts):
-                # Assume the first `self.XYZ` is always used for referencing the module method
-                if inst.opname == "LOAD_FAST" and inst.argval == "self":
-                    index_self = i
-                    break
-            index_attr = index_self + 1
-            assert pass2_insts[index_attr].opname == "LOAD_ATTR"
-            eager_fn_fqn = f"self.{pass2_insts[index_attr].argval}"
+                print(f"here2: inst: {inst}")
 
-            # Step 2: extract the next eager function's input args' actual names (instead of nominal names within the function)
-            index = index_attr + 1
-            while index < len(pass2_insts):
-                if pass2_insts[index].opname == "LOAD_FAST":
-                    if pass2_insts[index].argval == "self":
-                        assert pass2_insts[index+1].opname == "LOAD_ATTR"
-                        # NOTE: only supports using `self.XYZ` weights
-                        # TODO(yf225): add support for accessing nested module weights
-                        eager_fn_args_actual.append(f"self.{pass2_insts[index+1].argval}")
-                        index += 2
-                    else:
-                        arg_name = None
-                        if pass2_insts[index].argval.startswith("graph_out_"):
-                            arg_name = self.local_var_to_global_id[pass2_insts[index].argval]
-                        else:
-                            arg_name = pass2_insts[index].argval
-                        eager_fn_args_actual.append(arg_name)
-                        index += 1
-                else:
-                    # we are done with extracting input args
-                    # TODO(yf225): we probably need to handle the `1` in `self.method(self.weight, 1, x)` case as well
-                    break
+            # # NOTE: here we finally know the local name of the output from compiled function (i.e. actual outputs), so we append it to the function's .outputs list
+            # # NOTE: unfortunately `self.new_var("graph_out")` is not unique across graphs, and we need a unique id
+            # for i in range(len(pass2_insts)-2):
+            #     # works for both single tensor output and multiple tensor output cases
+            #     if (pass2_insts[i].opname == "LOAD_FAST" and pass2_insts[i].argval == graph_output_var) \
+            #         and pass2_insts[i+1].opname == "LOAD_CONST":
+            #         sub_index = pass2_insts[i+1].argval
+            #         global_id = f"{unique_id(graph_output_var)}__{sub_index}"
+            #         self.local_var_to_global_id[graph_output_var] = global_id
+            #         compiled_fn_outputs.append(global_id)
+
+            # # Step 1: extract the next eager function's name
+            # # NOTE: only supports calling `func(x)` or `x.func()` eager functions
+            # # TODO(yf225): support `x.func()`
+            # index_push_null = None
+            # for i, inst in enumerate(pass2_insts):
+            #     if inst.opname == "PUSH_NULL":
+            #         index_push_null = i
+            #         break
+            # # Try to find `func(x)`
+            # index_func_name = None
+            # for i, inst in enumerate(pass2_insts):
+            #     if i <= index_push_null:
+            #         continue
+            #     if inst.opname == "LOAD_GLOBAL":
+            #         index_func_name = i
+            #         break
+            # # Try to find `x.func()`
+            # index_method_name = None
+            # for i in range(len(pass2_insts)-3):
+            #     if i <= index_push_null:
+            #         continue
+            #     if pass2_insts[i].opname == "LOAD_FAST" \
+            #         and pass2_insts[i+1].opname == "LOAD_CONST" \
+            #         and pass2_insts[i+2].opname == "BINARY_SUBSCR" \
+            #         and pass2_insts[i+3].opname == "LOAD_ATTR":
+            #         index_method_name = i+3
+            #         break
+
+            # assert index_func_name or index_method_name
+
+            # if index_func_name:
+            #     eager_fn_local_name = str(pass2_insts[index_func_name].argval)
+            # elif index_method_name:
+            #     eager_fn_local_name = str(pass2_insts[index_method_name].argval)
+
+            # def convert_param_fqn(dot_fqn):
+            #     return dot_fqn.replace("self.", "l__self__").replace(".", "_")
+
+            # # Step 2-1: for `func(x)` case in the next eager function, extract input args' actual names (instead of nominal names within the function)
+            # if index_func_name:
+            #     index = index_func_name + 1
+            #     while index < len(pass2_insts):
+            #         if pass2_insts[index].opname == "LOAD_FAST":
+            #             if pass2_insts[index].argval == "self":
+            #                 assert pass2_insts[index+1].opname == "LOAD_ATTR"
+            #                 # NOTE: only supports using `self.XYZ` weights
+            #                 # TODO(yf225): add support for accessing nested module weights
+            #                 eager_fn_args_actual.append(convert_param_fqn(f"self.{pass2_insts[index+1].argval}"))
+            #                 index += 2
+            #             else:
+            #                 arg_name = None
+            #                 if pass2_insts[index].argval.startswith("graph_out_"):
+            #                     arg_name = self.local_var_to_global_id[pass2_insts[index].argval]
+            #                 else:
+            #                     arg_name = pass2_insts[index].argval
+            #                 eager_fn_args_actual.append(arg_name)
+            #                 index += 1
+            #         else:
+            #             # we are done with extracting input args
+            #             # TODO(yf225): we probably need to handle the `1` in `self.method(self.weight, 1, x)` case as well
+            #             break
+
+            # # Step 2-2: for `x.func()` case in the next eager function, extract `x`'s actual name (instead of nominal name within the function)
+            # # TODO(yf225): we need to handle `self.zero_dim_tensor.item()` case too (in which case `x` is not output from a graph, and might need different pattern matching)
+            # if index_method_name:
+            #     arg_name = None
+            #     arg_index = index_method_name - 3
+            #     if pass2_insts[arg_index].argval.startswith("graph_out_"):
+            #         arg_name = self.local_var_to_global_id[pass2_insts[arg_index].argval]
+            #     else:
+            #         arg_name = pass2_insts[arg_index].argval
+            #     eager_fn_args_actual.append(arg_name)
 
             self.add_output_instructions(output + pass2_insts)
 
-        # TODO(yf225): mega question: is using name as reference a safe thing to do?
-        f_locals_keys = set(self.local_scope.keys())
-        if len(func_read_writes) > 0 and func_read_writes[-1].fx_graph is None:
-            # NOTE: If previous function is eager, we update its .writes to include the actual names of its output variables.
-            # We do this here because we are only able to get the actual names when we are processing the next function.
-            # TODO(yf225): is there a better way to do this?
-            func_read_writes[-1].writes = func_read_writes[-1].writes.union(
-                # any new name in local scope is created by the eager function
-                f_locals_keys - func_read_writes[-1].f_locals_keys
-            )
+        # prev_eager_fn_frw = None
 
-        # NOTE: walk through the graph to record reads and writes to module params `self.XYZ` and `self.abc.XYZ`
-        param_reads = set()
-        param_writes = set()
-        # NOTE: we have to use `l__self___weight` / `l__self___submod_sub_weight` format,
-        # because at this point we already lost the submodule information and hence can't use `self.submod.sub_weight` format.
-        for node in self.graph.nodes:
-            name = node.name
-            op = node.op
-            target = node.target
-            args = node.args
-            if "l__self__" in name:
-                # if reading from a param
-                param_reads.add(name)
-            if op == "call_method" and target.endswith("_"):
-                # if in-place op and writing to a param
-                for arg in args:
-                    if arg.name in param_reads:
-                        param_writes.add(arg.name)
+        # if len(func_read_writes) > 0 and func_read_writes[-1].is_eager_func():
+        #     prev_eager_fn_frw = func_read_writes[-1]
 
-        compiled_fn_frw = FuncReadWrite(
-            func_name=func_name,
-            fx_graph=gm,
-            nominal_arg_to_actual_var={
-                k: v for k, v in zip(
-                    list(inspect.signature(gm.forward).parameters.keys()),
-                    [arg.source.local_name for arg in tx.output.graphargs],
-                )
-            },
-            f_locals_keys=f_locals_keys,
-        )
-        compiled_fn_frw.reads = set(arg.source.local_name for arg in tx.output.graphargs).union(param_reads)
-        compiled_fn_frw.writes = compiled_fn_arg_writes.union(param_writes)
-        func_read_writes.append(
-            compiled_fn_frw
-        )
+        # if we actually have a new compiled graph
+        # if compiled_fn_name is not None:
+        #     # nominal_arg_to_actual_var = {}
+        #     # for k, v in zip(
+        #     #     list(inspect.signature(gm.forward).parameters.keys()),
+        #     #     [arg.source.local_name for arg in tx.output.graphargs],
+        #     # ):
+        #     #     # if prev_eager_fn_frw is not None and v in prev_eager_fn_frw.next_compiled_fn_stack_var_to_global_id:
+        #     #     #     v_g = prev_eager_fn_frw.next_compiled_fn_stack_var_to_global_id[v]
+        #     #     # else:
+        #     #     v_g = v
+        #     #     nominal_arg_to_actual_var[k] = v_g
 
-        # NOTE: add the stub for the next eager function, to be populated later
-        if eager_fn_fqn is not None:
-            eager_fn_frw = FuncReadWrite(
-                func_name="",
-                eager_fn_fqn=eager_fn_fqn,
-                eager_fn_args_actual=eager_fn_args_actual,
-            )
-            eager_fn_frw.reads = set(eager_fn_args_actual)
-            eager_fn_frw.writes = set()
-            func_read_writes.append(
-                eager_fn_frw
-            )
+        #     print(f"nominal_arg_to_actual_var: {nominal_arg_to_actual_var}")
 
+        #     # NOTE: walk through the compiled graph to record reads and writes to module params `self.XYZ` and `self.abc.XYZ`
+        #     param_reads = set()
+        #     param_mutations = set()
+        #     input_mutations = set()
+        #     # NOTE: we have to use `l__self___weight` / `l__self___submod_sub_weight` format,
+        #     # because at this point we already lost the submodule information in GraphModule and hence can't use `self.submod.sub_weight` format.
+        #     for node in self.graph.nodes:
+        #         name = node.name
+        #         op = node.op
+        #         target = node.target
+        #         args = node.args
+        #         if "l__self__" in name:
+        #             # if reading from a param
+        #             param_reads.add(name)
+        #         if op == "call_method" and target.endswith("_"):  # if mutation op
+        #             for arg in args:
+        #                 if arg.name.startswith("l_"):
+        #                     # if mutating a param
+        #                     if arg.name in param_reads:
+        #                         param_mutations.add(arg.name)
+        #                     else:
+        #                         # if mutating an input arg
+        #                         input_arg_name = f"L_{arg.name[2:]}"
+        #                         if input_arg_name in nominal_arg_to_actual_var:
+        #                             input_mutations.add(nominal_arg_to_actual_var[input_arg_name])
+
+            # # TODO(yf225): there is definitely a nicer way to do this
+            # def convert_local_name_to_global_id_for_stack_var(local_name):
+            #     if "___stack" in local_name:
+            #         key = local_name.replace("___", "L_") + "_"
+            #         if key in nominal_arg_to_actual_var:
+            #             return nominal_arg_to_actual_var[key]
+            #     return local_name
+
+            # if len(func_read_writes) > 0:
+            #     print(f"here5: func_read_writes[-1]: {func_read_writes[-1]}")
+            # compiled_fn_frw = FuncReadWrite(
+            #     func_name=compiled_fn_name,
+            #     fx_graph=gm,
+            #     nominal_arg_to_actual_var=nominal_arg_to_actual_var,
+            # )
+            # compiled_fn_frw.reads = set(convert_local_name_to_global_id_for_stack_var(arg.source.local_name) for arg in tx.output.graphargs).union(param_reads)
+            # compiled_fn_frw.mutations = set(input_mutations).union(param_mutations)
+            # compiled_fn_frw.outputs = set(compiled_fn_outputs)
+            # compiled_fn_frw.f_locals_keys = set(self.local_scope.keys())
+            # # compiled_fn_frw.f_globals_keys = set(self.global_scope.keys())
+            # # print(f"self.global_scope: {self.global_scope}")
+            # func_read_writes.append(
+            #     compiled_fn_frw
+            # )
+
+        # # Add a stub for eager function FRW
+        # if eager_fn_local_name:
+        #     eager_fn_frw = FuncReadWrite(
+        #             func_name=unique_id("__eager_fn"),
+        #         eager_fn_local_name=eager_fn_local_name,
+        #         eager_fn_args_actual=eager_fn_args_actual,
+        #     )
+        #     eager_fn_frw.reads = set(eager_fn_args_actual)
+        #     eager_fn_frw.stack_before_entering_function = tx.stack
+        #     func_read_writes.append(
+        #         eager_fn_frw
+        #     )
+
+        print(f"tx.stack: {tx.stack}")
+        for arg in tx.stack:
+            if isinstance(arg, TensorVariable):
+                print(f"tx.stack: arg.as_proxy(): {arg.as_proxy()}")
 
         # restore all the live local vars
         self.add_output_instructions(
@@ -1117,8 +1196,48 @@ class OutputGraph(Checkpointable[OutputGraphState]):
         compiled_fn = self.call_user_compiler(gm)
         compiled_fn = disable(compiled_fn)
 
+        compiled_fn_frw = FuncReadWrite(
+            func_name=name,
+            type="compiled",
+            compiled_fn=compiled_fn,
+        )
+        compiled_fn_frw.tracking_mode = TrackingMode(orig_fn=compiled_fn, is_eager_func=False, frw=compiled_fn_frw)
+        func_read_writes.append(compiled_fn_frw)
+        name_to_frw[name] = compiled_fn_frw
+
+        def _compiled_fn_with_tracking(*args, **kwargs):
+            for i, arg in enumerate(list(args)):
+                if isinstance(arg, torch.Tensor):
+                    if arg.data_ptr() in data_ptr_to_global_var_name:
+                        var_name_global = data_ptr_to_global_var_name[arg.data_ptr()]
+                    else:
+                        var_name_global = unique_id("var")
+                        data_ptr_to_global_var_name[arg.data_ptr()] = var_name_global
+                    if compiled_fn_frw.input_index_to_global_var_name is None:
+                        compiled_fn_frw.input_index_to_global_var_name = {}
+                    compiled_fn_frw.input_index_to_global_var_name[i] = var_name_global
+                    if compiled_fn_frw.reads is None:
+                        compiled_fn_frw.reads = set()
+                    compiled_fn_frw.reads.add(var_name_global)
+
+            with compiled_fn_frw.tracking_mode:
+                outs = compiled_fn(*args, **kwargs)
+
+            var_name_global = unique_id("var")
+            for out in outs:
+                if isinstance(out, torch.Tensor):
+                    data_ptr_to_global_var_name[out.data_ptr()] = var_name_global
+                    if compiled_fn_frw.output_index_to_global_var_name is None:
+                        compiled_fn_frw.output_index_to_global_var_name = {}
+                    compiled_fn_frw.output_index_to_global_var_name[0] = var_name_global
+                    if compiled_fn_frw.outputs is None:
+                        compiled_fn_frw.outputs = set()
+                    compiled_fn_frw.outputs.add(var_name_global)
+
+            return outs
+
         counters["stats"]["unique_graphs"] += 1
-        self.install_global(name, compiled_fn)
+        self.install_global(name, _compiled_fn_with_tracking)
 
         cg = PyCodegen(tx)
         cg.make_call_generated_code(name)

@@ -360,6 +360,7 @@ class ContinueExecutionCache:
         def update(instructions: List[Instruction], code_options: Dict[str, Any]):
             meta.instructions = copy.deepcopy(instructions)
 
+            # TODO(yf225): ok, so the "___stack{i}" name is actually not unique
             args = [f"___stack{i}" for i in range(nstack)]
             args.extend(v for v in argnames if v not in args)
             freevars = tuple(code_options["co_cellvars"] or []) + tuple(
