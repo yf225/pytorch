@@ -394,9 +394,8 @@ class _TorchDynamoContext:
                         is_eager_func = True
                         eager_frw_func_name = unique_id("__eager_fn")
                         eager_frw = FuncReadWrite(
-                            func_name=eager_frw_func_name,
-                            type="eager",
-                            eager_fn=fn,
+                            fn_name=eager_frw_func_name,
+                            fn=fn,
                         )
                         eager_frw.tracking_mode = TrackingMode(orig_fn=fn, is_eager_func=True, frw=eager_frw)
                         func_read_writes.append(eager_frw)

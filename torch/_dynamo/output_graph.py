@@ -1005,9 +1005,8 @@ class OutputGraph(Checkpointable[OutputGraphState]):
         compiled_fn = disable(compiled_fn)
 
         compiled_fn_frw = FuncReadWrite(
-            func_name=name,
-            type="compiled",
-            compiled_fn=compiled_fn,
+            fn_name=name,
+            fn=compiled_fn,
         )
         compiled_fn_frw.tracking_mode = TrackingMode(orig_fn=compiled_fn, is_eager_func=False, frw=compiled_fn_frw)
         func_read_writes.append(compiled_fn_frw)

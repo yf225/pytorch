@@ -73,61 +73,22 @@ data_ptr_to_global_var_name: Dict[int, str] = {}
 class FuncReadWrite:
     # can be either __compiled_fn_X or __eager_fn_X
     fn_name: str
-    # can be "compiled" or "eager"
-    fn_type: str
-    compiled_fn: Optional[types.FunctionType] = None
-    eager_fn: Optional[types.FunctionType] = None
+    fn: Optional[types.FunctionType]
     input_index_to_global_var_name: Dict[int, str] = None
     output_index_to_global_var_name: Dict[int, str] = None
     tracking_mode: "TrackingMode" = None
     # includes reading input tensors, as well as reading intermediate tensors within the function
-    _reads: Optional[Set[str]] = None
+    reads: Optional[Set[str]] = None
     # includes mutating input tensors, as well as mutating intermediate tensors within the function
-    _mutations: Optional[Set[str]] = None
+    mutations: Optional[Set[str]] = None
     # includes tensors returned from the function
-    _outputs: Optional[Set[str]] = None
-
-    @property
-    def param_reads(self) -> Optional[Set[str]]:
-        return self._param_reads
-
-    @param_reads.setter
-    def param_reads(self, v: Optional[Set[str]]) -> None:
-        self._param_reads = v
-
-    @property
-    def reads(self) -> Optional[Set[str]]:
-        return self._reads
-
-    @reads.setter
-    def reads(self, v: Optional[Set[str]]) -> None:
-        self._reads = v
-
-    @property
-    def mutations(self) -> Optional[Set[str]]:
-        return self._mutations
-
-    @mutations.setter
-    def mutations(self, v: Optional[Set[str]]) -> None:
-        self._mutations = v
-        # assume 1 mutation causes 1 additional read
-        # TODO(yf225): `.copy_()` is probably an exception to this, TBD if we need it
-        if self._reads is not None and self._mutations is not None:
-            self._reads = self._reads.union(self._mutations)
-
-    @property
-    def outputs(self) -> Optional[Set[str]]:
-        return self._outputs
-
-    @outputs.setter
-    def outputs(self, v: Optional[Set[str]]) -> None:
-        self._outputs = v
+    outputs: Optional[Set[str]] = None
 
     def is_compiled_func(self) -> bool:
-        return self.type == "compiled"
+        return self.fn_name.startswith("__compiled_fn")
 
     def is_eager_func(self) -> bool:
-        return self.type == "eager"
+        return self.fn_name.startswith("__eager_fn")
 
 
 counters = collections.defaultdict(collections.Counter)
