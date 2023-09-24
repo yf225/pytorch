@@ -66,13 +66,48 @@ from torch._dynamo_utils import DYNAMO_FORCE_INLINE
 from torch._subclasses.fake_tensor import FakeTensor, is_fake
 from torch.nn.modules.lazy import LazyModuleMixin
 from torch.utils._pytree import tree_map
+from torch.utils._python_dispatch import TorchDispatchMode
+from .bytecode_transformation import unique_id
+
+
+class TrackingMode(TorchDispatchMode):
+    def __init__(self, orig_fn: Any, is_eager_func: bool, frw: "FuncReadWrite"):
+        self.orig_fn = orig_fn
+        self.is_eager_func = is_eager_func
+        self.frw = weakref.ref(frw)
+
+    def __torch_dispatch__(self, func, types, args=(), kwargs=None):
+        frw = self.frw()
+        assert frw is not None
+        # first handle read ops (mutation ops are also read ops)
+        for arg in args:
+            if isinstance(arg, torch.Tensor):
+                if arg.data_ptr() in data_ptr_to_global_var_name:
+                    var_name_global = data_ptr_to_global_var_name[arg.data_ptr()]
+                else:
+                    var_name_global = unique_id("var")
+                    data_ptr_to_global_var_name[arg.data_ptr()] = var_name_global
+                frw.reads.add(var_name_global)
+        # then, handle mutation ops specifically
+        if func._schema.is_mutable:
+            if self.is_eager_func:
+                raise Exception("mutation in eager region is not supported in cross-graph optimization")
+            # assume only first arg is mutated
+            if args[0].data_ptr() in data_ptr_to_global_var_name:
+                var_name_global = data_ptr_to_global_var_name[args[0].data_ptr()]
+            else:
+                var_name_global = unique_id("var")
+                data_ptr_to_global_var_name[args[0].data_ptr()] = var_name_global
+            # TODO(yf225): might be worth recording where in the graph does the mutation happen
+            frw.mutations.add(var_name_global)
+        return func(*args, **kwargs)
 
 
 @dataclasses.dataclass
 class FuncReadWrite:
     # can be either __compiled_fn_X or __eager_fn_X
     fn_name: str
-    fn: Optional[types.FunctionType]
+    fn: types.FunctionType
     input_index_to_global_var_name: Dict[int, str] = field(default_factory=dict)
     output_index_to_global_var_name: Dict[int, str] = field(default_factory=dict)
     tracking_mode: "TrackingMode" = None
@@ -88,6 +123,41 @@ class FuncReadWrite:
 
     def is_eager_func(self) -> bool:
         return self.fn_name.startswith("__eager_fn")
+
+    def record_inputs(self, args: Any) -> None:
+        for i, arg in enumerate(args):
+            if isinstance(arg, torch.Tensor):
+                if arg.data_ptr() in data_ptr_to_global_var_name:
+                    var_name_global = data_ptr_to_global_var_name[arg.data_ptr()]
+                else:
+                    var_name_global = unique_id("var")
+                    data_ptr_to_global_var_name[arg.data_ptr()] = var_name_global
+                self.input_index_to_global_var_name[i] = var_name_global
+                self.reads.add(var_name_global)
+
+    def record_outputs(self, outs: Any) -> None:
+        if isinstance(outs, torch.Tensor):
+            outs = (outs,)
+        for i, out in enumerate(outs):
+            if isinstance(out, torch.Tensor):
+                var_name_global = unique_id("var")
+                data_ptr_to_global_var_name[out.data_ptr()] = var_name_global
+                self.output_index_to_global_var_name[i] = var_name_global
+                self.outputs.add(var_name_global)
+
+
+def create_frw(fn: types.FunctionType, is_eager_func: bool, fn_name=None):
+    if fn_name is None:
+        assert is_eager_func
+        fn_name = unique_id("__eager_fn")
+    frw = FuncReadWrite(
+        fn_name=fn_name,
+        fn=fn,
+    )
+    frw.tracking_mode = TrackingMode(orig_fn=fn, is_eager_func=is_eager_func, frw=frw)
+    func_read_writes.append(frw)
+    return frw
+
 
 data_ptr_to_global_var_name: Dict[int, str] = {}
 func_read_writes: List[FuncReadWrite] = []

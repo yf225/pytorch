@@ -79,6 +79,7 @@ from .utils import (
     clone_inputs,
     count_calls,
     counters,
+    create_frw,
     func_read_writes,
     FuncReadWrite,
     data_ptr_to_global_var_name,
@@ -103,7 +104,6 @@ from .variables.tensor import (
     TensorVariable,
     UnspecializedPythonVariable,
 )
-from .eval_frame import TrackingMode
 
 log = logging.getLogger(__name__)
 graph_tabular_log = torch._logging.getArtifactLogger(__name__, "graph")
@@ -1004,33 +1004,15 @@ class OutputGraph(Checkpointable[OutputGraphState]):
         compiled_fn = self.call_user_compiler(gm)
         compiled_fn = disable(compiled_fn)
 
-        compiled_fn_frw = FuncReadWrite(
-            fn_name=name,
-            fn=compiled_fn,
-        )
-        compiled_fn_frw.tracking_mode = TrackingMode(orig_fn=compiled_fn, is_eager_func=False, frw=compiled_fn_frw)
-        func_read_writes.append(compiled_fn_frw)
+        compiled_fn_frw = create_frw(compiled_fn, is_eager_func=False, fn_name=name)
 
         def _compiled_fn_with_tracking(*args, **kwargs):
-            for i, arg in enumerate(list(args)):
-                if isinstance(arg, torch.Tensor):
-                    if arg.data_ptr() in data_ptr_to_global_var_name:
-                        var_name_global = data_ptr_to_global_var_name[arg.data_ptr()]
-                    else:
-                        var_name_global = unique_id("var")
-                        data_ptr_to_global_var_name[arg.data_ptr()] = var_name_global
-                    compiled_fn_frw.input_index_to_global_var_name[i] = var_name_global
-                    compiled_fn_frw.reads.add(var_name_global)
+            compiled_fn_frw.record_inputs(args)
 
             with compiled_fn_frw.tracking_mode:
                 outs = compiled_fn(*args, **kwargs)
 
-            var_name_global = unique_id("var")
-            for out in outs:
-                if isinstance(out, torch.Tensor):
-                    data_ptr_to_global_var_name[out.data_ptr()] = var_name_global
-                    compiled_fn_frw.output_index_to_global_var_name[0] = var_name_global
-                    compiled_fn_frw.outputs.add(var_name_global)
+            compiled_fn_frw.record_outputs(outs)
 
             return outs
 
