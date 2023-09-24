@@ -78,7 +78,8 @@ class TrackingMode(TorchDispatchMode):
         self.seen_vars = set()
 
     def __torch_dispatch__(self, func, types, args=(), kwargs=None):
-        print(f"func: {func}")
+        outs = func(*args, **kwargs)
+
         frw = self.frw()
         assert frw is not None
 
@@ -96,44 +97,23 @@ class TrackingMode(TorchDispatchMode):
                 elif isinstance(arg, torch.Tensor):
                     _check_unseen(arg)
 
-        # handle read ops (mutation ops are also read ops)
+        # record the args to this func
         reads = frw.record_reads(args, is_input=False)
-        outs = func(*args, **kwargs)
+
         # record the intermediate outputs
         intermediates = frw.record_intermediates(outs)
+
+        # add args and intermediate outputs to seen_vars
         self.seen_vars = self.seen_vars.union(reads).union(intermediates)
+
         # handle mutation ops
         if func._schema.is_mutable:
-            print(f"is_mutable: {func}")
             if self.is_eager_func:
                 raise Exception("mutation in eager region is not supported in cross-graph optimization")
             # assume only first arg is mutated
             frw.record_mutations([args[0]])
-        # # set up the dependency tracking between args and outs
-        # if self.is_eager_func:
-        #     for read in reads:
-        #         for intermediate in intermediates:
-        #             frw.add_descendant(read, intermediate)
-        return outs
 
-    # def __exit__(self, exc_type, exc_val, exc_tb):
-    #     if self.is_eager_func:
-    #         # breakpoint()
-    #         frw = self.frw()
-    #         assert frw is not None
-    #         all_descendants_of_all_inputs = set()
-    #         inputs = set()
-    #         # set(global variable reads) = set(reads) - set(inputs) - set(all inputs' all descendants)
-    #         for input_vars in frw.input_index_to_global_var_name.values():
-    #             inputs = inputs.union(set(input_vars))
-    #             for input_var in input_vars:
-    #                 all_descendants_of_this_input = frw.get_recursive_descendants_of_var(input_var)
-    #                 all_descendants_of_all_inputs = all_descendants_of_all_inputs.union(all_descendants_of_this_input)
-    #         global_var_reads = frw.reads - inputs - all_descendants_of_all_inputs
-    #         assert len(global_var_reads) == 0, \
-    #             f"Detected reading global variables {global_var_reads}. " + \
-    #             "Reading from global variable is not allowed in eager region when cross-graph optimzation is enabled"
-    #     super().__exit__(exc_type, exc_val, exc_tb)
+        return outs
 
 
 @dataclasses.dataclass
@@ -171,7 +151,6 @@ class FuncReadWrite:
                 self.tracking_mode.seen_vars.add(var_name_global)
             self.reads.add(var_name_global)
             new_reads.add(var_name_global)
-            print(f"record_reads: {input_index}: {var_name_global}: {arg}")
 
         for input_index, arg in enumerate(args):
             if isinstance(arg, torch.Tensor):
@@ -191,7 +170,6 @@ class FuncReadWrite:
                 var_name_global = record_new_global_var_name(v)
                 self.intermediates.add(var_name_global)
                 new_intermediates.add(var_name_global)
-                print(f"record_intermediates: {i}: {var_name_global}: {v}")
         return new_intermediates
 
     def record_outputs(self, outs: Any) -> Set[str]:
@@ -204,7 +182,6 @@ class FuncReadWrite:
                 self.output_index_to_global_var_name[i] = var_name_global
                 self.outputs.add(var_name_global)
                 new_outputs.add(var_name_global)
-                print(f"record_outputs: {i}: {var_name_global}: {out}")
         return new_outputs
 
     def record_mutations(self, args: Any) -> Set[str]:
@@ -213,24 +190,7 @@ class FuncReadWrite:
             var_name_global = record_new_global_var_name(arg)
             self.mutations.add(var_name_global)
             new_mutations.add(var_name_global)
-            print(f"record_mutations: {i}: {var_name_global}: {arg}")
         return new_mutations
-
-    def add_descendant(self, parent_var: str, child_var: str) -> None:
-        if parent_var not in self.descendants:
-            self.descendants[parent_var] = set()
-        if child_var != parent_var:
-            self.descendants[parent_var].add(child_var)
-
-    def get_recursive_descendants_of_var(self, var: str) -> Set[str]:
-        if var not in self.descendants:
-            return set()
-        else:
-            ret = set()
-            for desc_set in self.descendants[var]:
-                for desc in desc_set:
-                    ret = ret.union(self.get_recursive_descendants_of_var(desc))
-            return ret
 
 
 def create_frw(fn: types.FunctionType, is_eager_func: bool, fn_name=None):
