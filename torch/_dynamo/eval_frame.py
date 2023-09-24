@@ -404,8 +404,6 @@ class _TorchDynamoContext:
                             else:
                                 var_name_global = unique_id("var")
                                 data_ptr_to_global_var_name[arg.data_ptr()] = var_name_global
-                            if eager_frw.input_index_to_global_var_name is None:
-                                eager_frw.input_index_to_global_var_name = {}
                             eager_frw.input_index_to_global_var_name[i] = var_name_global
                             eager_frw.reads.add(var_name_global)
 
@@ -421,11 +419,7 @@ class _TorchDynamoContext:
                     for i, out in enumerate(outs):
                         var_name_global = unique_id("var")
                         data_ptr_to_global_var_name[out.data_ptr()] = var_name_global
-                        if eager_frw.output_index_to_global_var_name is None:
-                            eager_frw.output_index_to_global_var_name = {}
                         eager_frw.output_index_to_global_var_name[i] = var_name_global
-                        if eager_frw.outputs is None:
-                            eager_frw.outputs = set()
                         eager_frw.outputs.add(var_name_global)
 
                 return outs
