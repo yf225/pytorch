@@ -35,6 +35,12 @@ def g1_no_mutation_tensor(d, e):
 def g2(a, b):
     return torch.cat(torch.chunk(a * b, 2))
 
+global_a = torch.randn(4, 4)
+
+@disable()
+def g2_global_var(a, b):
+    return torch.cat(torch.chunk(a * b * global_a, 2))
+
 
 # TODO: cases to handle
 # 1. eager function returning a tensor [DONE]
@@ -51,6 +57,11 @@ class TestModule(torch.nn.Module):
         self.register_buffer('buf', torch.randn(4, 4))
         self.submod = TestSubmodule()
 
+    @disable()
+    def f_global_var(self, c):
+        return c * c * self.weight
+
+    @disable()
     def f(self, c):
         return c * c
 
@@ -66,7 +77,11 @@ class TestModule(torch.nn.Module):
         # return torch.relu(x) + g1_mutation_tuple(x, x)[0] + g1_mutation_tuple(x, x)[1] \
         # return torch.relu(x) + g1_no_mutation_tuple(x, x)[0] + g1_no_mutation_tuple(x, x)[1] \
         # return torch.selu(x) + g1_no_mutation_tensor(x, x) \
-        return torch.relu(x) + g1_no_mutation_tuple(x, x)[0] \
+        # return torch.relu(x) + g2_global_var(x, x) \
+        # return torch.relu(x) + g2(x, x) \
+        # return torch.relu(x) + g1_no_mutation_tuple(x, x)[0] \
+        # return torch.relu(x) + self.f_global_var(x) \
+        return torch.relu(x) + self.f(x) \
             + torch.tanh(self.weight)
             # + torch.selu(self.submod.sub_weight) \
             # + self.buf \

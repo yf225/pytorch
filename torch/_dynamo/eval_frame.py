@@ -347,9 +347,11 @@ class _TorchDynamoContext:
             dynamic_ctx.__enter__()
             try:
                 is_eager_func = False
+                # TODO(yf225): hacky, need to find better way
                 if isinstance(self, DisableContext) \
-                    and isinstance(list(args)[0], torch.Tensor) \
-                    and "aot_module_simplified" not in str(fn):  # TODO(yf225): hacky, need to find better way
+                    and "aot_module_simplified" not in str(fn) \
+                    and "dispatch_trace" not in str(fn) \
+                    and "Tracer.trace" not in str(fn):
                         is_eager_func = True
                         eager_frw = create_frw(fn, is_eager_func=True)
 

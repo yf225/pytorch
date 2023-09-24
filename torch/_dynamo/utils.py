@@ -75,19 +75,65 @@ class TrackingMode(TorchDispatchMode):
         self.orig_fn = orig_fn
         self.is_eager_func = is_eager_func
         self.frw = weakref.ref(frw)
+        self.seen_vars = set()
 
     def __torch_dispatch__(self, func, types, args=(), kwargs=None):
+        print(f"func: {func}")
         frw = self.frw()
         assert frw is not None
-        # first handle read ops (mutation ops are also read ops)
-        frw.record_reads(args, is_input=False)
-        # then, handle mutation ops specifically
+
+        if self.is_eager_func:
+            # if we found an unseen arg, it means user code is reading global variable or module param, and we need to ban it
+            def _check_unseen(arg):
+                var_name_global = record_new_global_var_name(arg)
+                assert var_name_global in self.seen_vars, \
+                    f"{var_name_global} (first used in call stack TODO) is likely a global variable or a module param. " + \
+                    "This is not supported in eager region when cross-graph optimization is enabled"
+            for arg in args:
+                if isinstance(arg, (list, tuple)):
+                    for subarg in arg:
+                        _check_unseen(subarg)
+                elif isinstance(arg, torch.Tensor):
+                    _check_unseen(arg)
+
+        # handle read ops (mutation ops are also read ops)
+        reads = frw.record_reads(args, is_input=False)
+        outs = func(*args, **kwargs)
+        # record the intermediate outputs
+        intermediates = frw.record_intermediates(outs)
+        self.seen_vars = self.seen_vars.union(reads).union(intermediates)
+        # handle mutation ops
         if func._schema.is_mutable:
+            print(f"is_mutable: {func}")
             if self.is_eager_func:
                 raise Exception("mutation in eager region is not supported in cross-graph optimization")
             # assume only first arg is mutated
             frw.record_mutations([args[0]])
-        return func(*args, **kwargs)
+        # # set up the dependency tracking between args and outs
+        # if self.is_eager_func:
+        #     for read in reads:
+        #         for intermediate in intermediates:
+        #             frw.add_descendant(read, intermediate)
+        return outs
+
+    # def __exit__(self, exc_type, exc_val, exc_tb):
+    #     if self.is_eager_func:
+    #         # breakpoint()
+    #         frw = self.frw()
+    #         assert frw is not None
+    #         all_descendants_of_all_inputs = set()
+    #         inputs = set()
+    #         # set(global variable reads) = set(reads) - set(inputs) - set(all inputs' all descendants)
+    #         for input_vars in frw.input_index_to_global_var_name.values():
+    #             inputs = inputs.union(set(input_vars))
+    #             for input_var in input_vars:
+    #                 all_descendants_of_this_input = frw.get_recursive_descendants_of_var(input_var)
+    #                 all_descendants_of_all_inputs = all_descendants_of_all_inputs.union(all_descendants_of_this_input)
+    #         global_var_reads = frw.reads - inputs - all_descendants_of_all_inputs
+    #         assert len(global_var_reads) == 0, \
+    #             f"Detected reading global variables {global_var_reads}. " + \
+    #             "Reading from global variable is not allowed in eager region when cross-graph optimzation is enabled"
+    #     super().__exit__(exc_type, exc_val, exc_tb)
 
 
 @dataclasses.dataclass
@@ -95,7 +141,7 @@ class FuncReadWrite:
     # can be either __compiled_fn_X or __eager_fn_X
     fn_name: str
     fn: types.FunctionType
-    input_index_to_global_var_name: Dict[int, str] = field(default_factory=dict)
+    input_index_to_global_var_name: Dict[int, List[str]] = field(default_factory=dict)
     output_index_to_global_var_name: Dict[int, str] = field(default_factory=dict)
     tracking_mode: "TrackingMode" = None
     # includes reading input tensors, as well as reading intermediate tensors within the function
@@ -104,6 +150,8 @@ class FuncReadWrite:
     mutations: Set[str] = field(default_factory=set)
     # includes tensors returned from the function
     outputs: Set[str] = field(default_factory=set)
+    intermediates: Set[str] = field(default_factory=set)
+    descendants: Dict[str, Set[str]] = field(default_factory=dict)
 
     def is_compiled_func(self) -> bool:
         return self.fn_name.startswith("__compiled_fn")
@@ -111,15 +159,43 @@ class FuncReadWrite:
     def is_eager_func(self) -> bool:
         return self.fn_name.startswith("__eager_fn")
 
-    def record_reads(self, args: Any, is_input: bool) -> None:
-        for i, arg in enumerate(args):
-            if isinstance(arg, torch.Tensor):
-                var_name_global = record_new_global_var_name(arg)
-                if is_input:
-                    self.input_index_to_global_var_name[i] = var_name_global
-                self.reads.add(var_name_global)
+    def record_reads(self, args: Any, is_input: bool, outs: Any = None) -> Set[str]:
+        new_reads = set()
 
-    def record_outputs(self, outs: Any) -> None:
+        def _record(input_index, arg):
+            var_name_global = record_new_global_var_name(arg)
+            if is_input:
+                if input_index not in self.input_index_to_global_var_name:
+                    self.input_index_to_global_var_name[input_index] = []
+                self.input_index_to_global_var_name[input_index].append(var_name_global)
+                self.tracking_mode.seen_vars.add(var_name_global)
+            self.reads.add(var_name_global)
+            new_reads.add(var_name_global)
+            print(f"record_reads: {input_index}: {var_name_global}: {arg}")
+
+        for input_index, arg in enumerate(args):
+            if isinstance(arg, torch.Tensor):
+                _record(input_index, arg)
+            elif isinstance(arg, (list, tuple)):
+                for _, arg2 in enumerate(arg):
+                    _record(input_index, arg2)
+
+        return new_reads
+
+    def record_intermediates(self, intermediates: Any) -> Set[str]:
+        new_intermediates = set()
+        if isinstance(intermediates, torch.Tensor):
+            intermediates = (intermediates,)
+        for i, v in enumerate(intermediates):
+            if isinstance(v, torch.Tensor):
+                var_name_global = record_new_global_var_name(v)
+                self.intermediates.add(var_name_global)
+                new_intermediates.add(var_name_global)
+                print(f"record_intermediates: {i}: {var_name_global}: {v}")
+        return new_intermediates
+
+    def record_outputs(self, outs: Any) -> Set[str]:
+        new_outputs = set()
         if isinstance(outs, torch.Tensor):
             outs = (outs,)
         for i, out in enumerate(outs):
@@ -127,11 +203,34 @@ class FuncReadWrite:
                 var_name_global = record_new_global_var_name(out)
                 self.output_index_to_global_var_name[i] = var_name_global
                 self.outputs.add(var_name_global)
+                new_outputs.add(var_name_global)
+                print(f"record_outputs: {i}: {var_name_global}: {out}")
+        return new_outputs
 
-    def record_mutations(self, args: Any) -> None:
+    def record_mutations(self, args: Any) -> Set[str]:
+        new_mutations = set()
         for i, arg in enumerate(args):
             var_name_global = record_new_global_var_name(arg)
             self.mutations.add(var_name_global)
+            new_mutations.add(var_name_global)
+            print(f"record_mutations: {i}: {var_name_global}: {arg}")
+        return new_mutations
+
+    def add_descendant(self, parent_var: str, child_var: str) -> None:
+        if parent_var not in self.descendants:
+            self.descendants[parent_var] = set()
+        if child_var != parent_var:
+            self.descendants[parent_var].add(child_var)
+
+    def get_recursive_descendants_of_var(self, var: str) -> Set[str]:
+        if var not in self.descendants:
+            return set()
+        else:
+            ret = set()
+            for desc_set in self.descendants[var]:
+                for desc in desc_set:
+                    ret = ret.union(self.get_recursive_descendants_of_var(desc))
+            return ret
 
 
 def create_frw(fn: types.FunctionType, is_eager_func: bool, fn_name=None):
@@ -153,10 +252,12 @@ def record_new_global_var_name(tensor: torch.Tensor) -> str:
     else:
         var_name_global = unique_id("var")
         data_ptr_to_global_var_name[tensor.data_ptr()] = var_name_global
+        global_var_name_to_data_ptr[var_name_global] = tensor.data_ptr()
     return var_name_global
 
 
 data_ptr_to_global_var_name: Dict[int, str] = {}
+global_var_name_to_data_ptr: Dict[str, int] = {}
 func_read_writes: List[FuncReadWrite] = []
 counters = collections.defaultdict(collections.Counter)
 troubleshooting_url = "https://pytorch.org/docs/master/compile/troubleshooting.html"
