@@ -88,8 +88,6 @@ class TrackingMode(TorchDispatchMode):
                 else:
                     var_name_global = unique_id("var")
                     data_ptr_to_global_var_name[arg.data_ptr()] = var_name_global
-                if frw.reads is None:
-                    frw.reads = set()
                 frw.reads.add(var_name_global)
         # then, handle mutation ops specifically
         if func._schema.is_mutable:
@@ -102,8 +100,6 @@ class TrackingMode(TorchDispatchMode):
                 var_name_global = unique_id("var")
                 data_ptr_to_global_var_name[args[0].data_ptr()] = var_name_global
             # TODO(yf225): might be worth recording where in the graph does the mutation happen
-            if frw.mutations is None:
-                frw.mutations = set()
             frw.mutations.add(var_name_global)
         return func(*args, **kwargs)
 
@@ -411,8 +407,6 @@ class _TorchDynamoContext:
                             if eager_frw.input_index_to_global_var_name is None:
                                 eager_frw.input_index_to_global_var_name = {}
                             eager_frw.input_index_to_global_var_name[i] = var_name_global
-                            if eager_frw.reads is None:
-                                eager_frw.reads = set()
                             eager_frw.reads.add(var_name_global)
 
                 if is_eager_func:

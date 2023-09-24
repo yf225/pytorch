@@ -1019,11 +1019,7 @@ class OutputGraph(Checkpointable[OutputGraphState]):
                     else:
                         var_name_global = unique_id("var")
                         data_ptr_to_global_var_name[arg.data_ptr()] = var_name_global
-                    if compiled_fn_frw.input_index_to_global_var_name is None:
-                        compiled_fn_frw.input_index_to_global_var_name = {}
                     compiled_fn_frw.input_index_to_global_var_name[i] = var_name_global
-                    if compiled_fn_frw.reads is None:
-                        compiled_fn_frw.reads = set()
                     compiled_fn_frw.reads.add(var_name_global)
 
             with compiled_fn_frw.tracking_mode:
@@ -1033,11 +1029,7 @@ class OutputGraph(Checkpointable[OutputGraphState]):
             for out in outs:
                 if isinstance(out, torch.Tensor):
                     data_ptr_to_global_var_name[out.data_ptr()] = var_name_global
-                    if compiled_fn_frw.output_index_to_global_var_name is None:
-                        compiled_fn_frw.output_index_to_global_var_name = {}
                     compiled_fn_frw.output_index_to_global_var_name[0] = var_name_global
-                    if compiled_fn_frw.outputs is None:
-                        compiled_fn_frw.outputs = set()
                     compiled_fn_frw.outputs.add(var_name_global)
 
             return outs

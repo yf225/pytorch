@@ -26,6 +26,7 @@ import weakref
 from contextlib import contextmanager
 from functools import lru_cache, wraps
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from dataclasses import field
 
 try:
     import numpy as np
@@ -67,22 +68,20 @@ from torch.nn.modules.lazy import LazyModuleMixin
 from torch.utils._pytree import tree_map
 
 
-data_ptr_to_global_var_name: Dict[int, str] = {}
-
 @dataclasses.dataclass
 class FuncReadWrite:
     # can be either __compiled_fn_X or __eager_fn_X
     fn_name: str
     fn: Optional[types.FunctionType]
-    input_index_to_global_var_name: Dict[int, str] = None
-    output_index_to_global_var_name: Dict[int, str] = None
+    input_index_to_global_var_name: Dict[int, str] = field(default_factory=dict)
+    output_index_to_global_var_name: Dict[int, str] = field(default_factory=dict)
     tracking_mode: "TrackingMode" = None
     # includes reading input tensors, as well as reading intermediate tensors within the function
-    reads: Optional[Set[str]] = None
+    reads: Set[str] = field(default_factory=set)
     # includes mutating input tensors, as well as mutating intermediate tensors within the function
-    mutations: Optional[Set[str]] = None
+    mutations: Set[str] = field(default_factory=set)
     # includes tensors returned from the function
-    outputs: Optional[Set[str]] = None
+    outputs: Set[str] = field(default_factory=set)
 
     def is_compiled_func(self) -> bool:
         return self.fn_name.startswith("__compiled_fn")
@@ -90,9 +89,9 @@ class FuncReadWrite:
     def is_eager_func(self) -> bool:
         return self.fn_name.startswith("__eager_fn")
 
-
-counters = collections.defaultdict(collections.Counter)
+data_ptr_to_global_var_name: Dict[int, str] = {}
 func_read_writes: List[FuncReadWrite] = []
+counters = collections.defaultdict(collections.Counter)
 troubleshooting_url = "https://pytorch.org/docs/master/compile/troubleshooting.html"
 nnmodule_doc_url = "https://pytorch.org/docs/master/compile/nn-module.html"
 nnmodule_doc_url_msg = f"See {nnmodule_doc_url} for more information and limitations."
