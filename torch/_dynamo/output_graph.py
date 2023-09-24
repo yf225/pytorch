@@ -80,9 +80,6 @@ from .utils import (
     count_calls,
     counters,
     create_frw,
-    func_read_writes,
-    FuncReadWrite,
-    data_ptr_to_global_var_name,
     dynamo_timed,
     get_instruction_source_311,
     get_static_address_type,
@@ -1007,7 +1004,7 @@ class OutputGraph(Checkpointable[OutputGraphState]):
         compiled_fn_frw = create_frw(compiled_fn, is_eager_func=False, fn_name=name)
 
         def _compiled_fn_with_tracking(*args, **kwargs):
-            compiled_fn_frw.record_inputs(args)
+            compiled_fn_frw.record_reads(args, is_input=True)
 
             with compiled_fn_frw.tracking_mode:
                 outs = compiled_fn(*args, **kwargs)

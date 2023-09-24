@@ -65,11 +65,7 @@ from .mutation_guard import install_generation_tagging_init
 from .types import DynamoCallback
 from .utils import compile_times
 
-from torch._dynamo.utils import create_frw, data_ptr_to_global_var_name
-from .bytecode_transformation import unique_id
-from torch._utils import is_compiling
-import weakref
-
+from torch._dynamo.utils import create_frw
 
 log = logging.getLogger(__name__)
 
@@ -358,7 +354,7 @@ class _TorchDynamoContext:
                         eager_frw = create_frw(fn, is_eager_func=True)
 
                 if is_eager_func:
-                    eager_frw.record_inputs(args)
+                    eager_frw.record_reads(args, is_input=True)
 
                 ctx_mgr = eager_frw.tracking_mode if is_eager_func else contextlib.nullcontext()
                 with ctx_mgr:
