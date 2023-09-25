@@ -138,6 +138,13 @@ class TrackingMode(TorchDispatchMode):
 
         return outs
 
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        for frw in func_read_writes:
+            if frw.is_eager_func():
+                frw.eager_reads = set([data_ptr_to_global_var_name[x] for x in frw.eager_reads_data_ptr])
+                frw.eager_mutations = set([data_ptr_to_global_var_name[x] for x in frw.eager_mutations_data_ptr])
+        super().__exit__(exc_type, exc_val, exc_tb)
+
     def _is_warmup_run(self, func, args=(), kwargs=None):
         if isinstance(args[0], torch.Tensor):
             return True
