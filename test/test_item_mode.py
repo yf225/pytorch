@@ -21,7 +21,7 @@ def func(a):
     return g_disabled(a) * a
 
 print("eager: ")
-print(func(a))
+# print(func(a))
 
 print("compiled: ")
 print(torch.compile(func)(a))
