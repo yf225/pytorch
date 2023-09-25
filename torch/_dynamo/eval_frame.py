@@ -346,7 +346,7 @@ class _TorchDynamoContext:
             dynamic_ctx = enable_dynamic(self.dynamic, self.export)
             dynamic_ctx.__enter__()
             try:
-                # print(f"_fn: {fn}, type(self): {type(self)}")
+                print(f"_fn: {fn}, type(self): {type(self)}")
                 # for arg in list(args):
                 #     print(f"_fn: type(arg): {type(arg)}")
                 # for k, v in dict(kwargs).items():

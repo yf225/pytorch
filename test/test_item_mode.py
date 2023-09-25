@@ -11,12 +11,17 @@ class TrackingMode(TorchDispatchMode):
 
 a = torch.randn(1)
 
+@torch._dynamo.disable()
+def g_disabled(a):
+    return a + a
+
 def func(a):
     # with TrackingMode():
-    return a.item() * a
+    # return a.item()
+    return g_disabled(a)
 
 print("eager: ")
 print(func(a))
 
 print("compiled: ")
-print(torch.compile(func, backend="aot_eager")(a))
+print(torch.compile(func)(a))

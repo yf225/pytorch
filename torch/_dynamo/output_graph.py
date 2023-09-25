@@ -1001,21 +1001,22 @@ class OutputGraph(Checkpointable[OutputGraphState]):
         compiled_fn = self.call_user_compiler(gm)
         compiled_fn = disable(compiled_fn)
 
-        # compiled_fn_frw = create_frw(compiled_fn, is_eager_func=False, fn_name=name)
+        compiled_fn_frw = create_frw(compiled_fn, is_eager_func=False, fn_name=name)
 
-        # def _compiled_fn_with_tracking(*args, **kwargs):
-        #     compiled_fn_frw.record_reads(args, is_input=True)
+        def _compiled_fn_with_tracking(*args, **kwargs):
+            compiled_fn_frw.record_reads(args, is_input=True)
 
-        #     with compiled_fn_frw.tracking_mode:
-        #         outs = compiled_fn(*args, **kwargs)
+            # TODO(yf225): implement mutation tracking for compiled region
+            # with compiled_fn_frw.tracking_mode:
+            outs = compiled_fn(*args, **kwargs)
 
-        #     compiled_fn_frw.record_outputs(outs)
+            compiled_fn_frw.record_outputs(outs)
 
-        #     return outs
+            return outs
 
         counters["stats"]["unique_graphs"] += 1
-        # self.install_global(name, _compiled_fn_with_tracking)
-        self.install_global(name, compiled_fn)
+        self.install_global(name, _compiled_fn_with_tracking)
+        # self.install_global(name, compiled_fn)
 
         cg = PyCodegen(tx)
         cg.make_call_generated_code(name)

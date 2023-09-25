@@ -81,6 +81,26 @@ class TrackingMode(TorchDispatchMode):
         print(f"func: {func}")
 
         outs = func(*args, **kwargs)
+        if not self._is_warmup_run(func, args, kwargs):
+            return outs
+
+        # TODO(yf225): implement case where program starts with an eager region and needs to create a new FRW
+        frw = func_read_writes[-1]
+        assert frw.is_eager_func()
+
+        if len(func_read_writes) == 0 or func_read_writes[-1].is_compiled_func():
+            eager_frw = create_frw(is_eager_func=True)
+        else:
+            eager_frw = func_read_writes[-1]
+            assert eager_frw.is_eager_func()
+
+        # record read data ptrs
+        eager_frw.record_data_ptrs(args, op_type="read")
+
+        # record mutation data ptrs
+        if func._schema.is_mutable:
+            # assume only first arg is mutated
+            eager_frw.record_data_ptrs([args[0]], op_type="mutation")
 
         # frw = self.frw()
         # assert frw is not None
@@ -122,21 +142,36 @@ class TrackingMode(TorchDispatchMode):
 
         return outs
 
+    def _is_warmup_run(self, func, args=(), kwargs=None):
+        if isinstance(args[0], torch.Tensor):
+            return True
+        elif isinstance(args[0], (tuple, list)) and isinstance(args[0][0], torch.Tensor):
+            return True
+        else:
+            return False
+
 
 @dataclasses.dataclass
 class FuncReadWrite:
     # can be either __compiled_fn_X or __eager_fn_X
     fn_name: str
-    fn: types.FunctionType
+    compiled_fn: Optional[types.FunctionType] = None
     input_index_to_global_var_name: Dict[int, List[str]] = field(default_factory=dict)
     output_index_to_global_var_name: Dict[int, str] = field(default_factory=dict)
     tracking_mode: "TrackingMode" = None
+
     # includes reading input tensors, as well as reading intermediate tensors within the function
-    reads: Set[str] = field(default_factory=set)
+    compiled_reads: Set[str] = field(default_factory=set)
     # includes mutating input tensors, as well as mutating intermediate tensors within the function
-    mutations: Set[str] = field(default_factory=set)
+    compiled_mutations: Set[str] = field(default_factory=set)
     # includes tensors returned from the function
-    outputs: Set[str] = field(default_factory=set)
+    compiled_outputs: Set[str] = field(default_factory=set)
+
+    eager_reads_data_ptr: Set[int] = field(default_factory=set)
+    eager_mutations_data_ptr: Set[int] = field(default_factory=set)
+    eager_reads: Set[str] = field(default_factory=set)
+    eager_mutations: Set[str] = field(default_factory=set)
+
     intermediates: Set[str] = field(default_factory=set)
     descendants: Dict[str, Set[str]] = field(default_factory=dict)
 
@@ -145,6 +180,23 @@ class FuncReadWrite:
 
     def is_eager_func(self) -> bool:
         return self.fn_name.startswith("__eager_fn")
+
+    def record_data_ptrs(self, args: Any, op_type: str) -> None:
+        def _record(arg):
+            data_ptr = arg.data_ptr()
+            assert op_type in ["read", "mutation"]
+            if op_type == "read":
+                self.eager_reads_data_ptr.add(data_ptr)
+            elif op_type == "mutation":
+                self.eager_mutations_data_ptr.add(data_ptr)
+
+        for arg in args:
+            if isinstance(arg, torch.Tensor):
+                _record(arg)
+            elif isinstance(arg, (list, tuple)):
+                for _, arg2 in enumerate(arg):
+                    if isinstance(arg2, torch.Tensor):
+                        _record(arg2)
 
     def record_reads(self, args: Any, is_input: bool, outs: Any = None) -> Set[str]:
         new_reads = set()
@@ -200,15 +252,14 @@ class FuncReadWrite:
         return new_mutations
 
 
-def create_frw(fn: types.FunctionType, is_eager_func: bool, fn_name=None):
+def create_frw(is_eager_func: bool, fn_name: Optional[str]=None, compiled_fn: Optional[types.FunctionType]=None):
     if fn_name is None:
         assert is_eager_func
         fn_name = unique_id("__eager_fn")
     frw = FuncReadWrite(
         fn_name=fn_name,
-        fn=fn,
+        compiled_fn=compiled_fn if not is_eager_func else None,
     )
-    frw.tracking_mode = TrackingMode(orig_fn=fn, is_eager_func=is_eager_func, frw=frw)
     func_read_writes.append(frw)
     return frw
 
