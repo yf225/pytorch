@@ -84,10 +84,6 @@ class TrackingMode(TorchDispatchMode):
         if not self._is_warmup_run(func, args, kwargs):
             return outs
 
-        # TODO(yf225): implement case where program starts with an eager region and needs to create a new FRW
-        frw = func_read_writes[-1]
-        assert frw.is_eager_func()
-
         if len(func_read_writes) == 0 or func_read_writes[-1].is_compiled_func():
             eager_frw = create_frw(is_eager_func=True)
         else:
