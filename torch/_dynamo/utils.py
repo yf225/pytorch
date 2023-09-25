@@ -71,47 +71,54 @@ from .bytecode_transformation import unique_id
 
 
 class TrackingMode(TorchDispatchMode):
-    def __init__(self, orig_fn: Any, is_eager_func: bool, frw: "FuncReadWrite"):
-        self.orig_fn = orig_fn
-        self.is_eager_func = is_eager_func
-        self.frw = weakref.ref(frw)
-        self.seen_vars = set()
+    # def __init__(self, orig_fn: Any, is_eager_func: bool, frw: "FuncReadWrite"):
+    #     self.orig_fn = orig_fn
+    #     self.is_eager_func = is_eager_func
+    #     self.frw = weakref.ref(frw)
+    #     self.seen_vars = set()
 
     def __torch_dispatch__(self, func, types, args=(), kwargs=None):
+        print(f"func: {func}")
+
         outs = func(*args, **kwargs)
 
-        frw = self.frw()
-        assert frw is not None
+        # frw = self.frw()
+        # assert frw is not None
 
-        if self.is_eager_func:
-            # if we found an unseen arg, it means user code is reading global variable or module param, and we need to ban it
-            def _check_unseen(arg):
-                var_name_global = record_new_global_var_name(arg)
-                assert var_name_global in self.seen_vars, \
-                    f"{var_name_global} (first used in call stack TODO) is likely a global variable or a module param. " + \
-                    "This is not supported in eager region when cross-graph optimization is enabled"
-            for arg in args:
-                if isinstance(arg, (list, tuple)):
-                    for subarg in arg:
-                        _check_unseen(subarg)
-                elif isinstance(arg, torch.Tensor):
-                    _check_unseen(arg)
+        # if self.is_eager_func:
+        #     breakpoint()
+        # else:
+        #     breakpoint()
 
-        # record the args to this func
-        reads = frw.record_reads(args, is_input=False)
+        # if self.is_eager_func:
+        #     # if we found an unseen arg, it means user code is reading global variable or module param, and we need to ban it
+        #     def _check_unseen(arg):
+        #         var_name_global = record_new_global_var_name(arg)
+        #         assert var_name_global in self.seen_vars, \
+        #             f"{var_name_global} (first used in call stack TODO) is likely a global variable or a module param. " + \
+        #             "This is not supported in eager region when cross-graph optimization is enabled"
+        #     for arg in args:
+        #         if isinstance(arg, (list, tuple)):
+        #             for subarg in arg:
+        #                 _check_unseen(subarg)
+        #         elif isinstance(arg, torch.Tensor):
+        #             _check_unseen(arg)
 
-        # record the intermediate outputs
-        intermediates = frw.record_intermediates(outs)
+        # # record the args to this func
+        # reads = frw.record_reads(args, is_input=False)
 
-        # add args and intermediate outputs to seen_vars
-        self.seen_vars = self.seen_vars.union(reads).union(intermediates)
+        # # record the intermediate outputs
+        # intermediates = frw.record_intermediates(outs)
 
-        # handle mutation ops
-        if func._schema.is_mutable:
-            if self.is_eager_func:
-                raise Exception("mutation in eager region is not supported in cross-graph optimization")
-            # assume only first arg is mutated
-            frw.record_mutations([args[0]])
+        # # add args and intermediate outputs to seen_vars
+        # self.seen_vars = self.seen_vars.union(reads).union(intermediates)
+
+        # # handle mutation ops
+        # if func._schema.is_mutable:
+        #     if self.is_eager_func:
+        #         raise Exception("mutation in eager region is not supported in cross-graph optimization")
+        #     # assume only first arg is mutated
+        #     frw.record_mutations([args[0]])
 
         return outs
 

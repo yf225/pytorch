@@ -65,7 +65,7 @@ from .mutation_guard import install_generation_tagging_init
 from .types import DynamoCallback
 from .utils import compile_times
 
-from torch._dynamo.utils import create_frw
+from torch._dynamo.utils import create_frw, TrackingMode
 
 log = logging.getLogger(__name__)
 
@@ -346,24 +346,23 @@ class _TorchDynamoContext:
             dynamic_ctx = enable_dynamic(self.dynamic, self.export)
             dynamic_ctx.__enter__()
             try:
-                is_eager_func = False
-                # TODO(yf225): hacky, need to find better way
-                if isinstance(self, DisableContext) \
-                    and "aot_module_simplified" not in str(fn) \
-                    and "dispatch_trace" not in str(fn) \
-                    and "Tracer.trace" not in str(fn):
-                        is_eager_func = True
-                        eager_frw = create_frw(fn, is_eager_func=True)
+                # print(f"_fn: {fn}, type(self): {type(self)}")
+                # for arg in list(args):
+                #     print(f"_fn: type(arg): {type(arg)}")
+                # for k, v in dict(kwargs).items():
+                #     print(f"_fn: {k}: {type(v)}")
+                # is_eager_func = False
+                # # NOTE: if fn is `aot_module_simplified.<locals>.forward` or a local function handle, then it's running eager region
+                # # TODO(yf225): hacky, need to find better way
+                # if isinstance(self, DisableContext) \
+                #     and "dispatch_trace" not in str(fn) \
+                #     and "Tracer.trace" not in str(fn):
+                #         is_eager_func = True
+                #         eager_frw = create_frw(fn, is_eager_func=True)
 
-                if is_eager_func:
-                    eager_frw.record_reads(args, is_input=True)
-
-                ctx_mgr = eager_frw.tracking_mode if is_eager_func else contextlib.nullcontext()
-                with ctx_mgr:
+                # ctx_mgr = eager_frw.tracking_mode if is_eager_func else contextlib.nullcontext()
+                with TrackingMode():
                     outs = fn(*args, **kwargs)
-
-                if is_eager_func:
-                    eager_frw.record_outputs(outs)
 
                 return outs
             finally:
@@ -481,6 +480,7 @@ class RunOnlyContext(_TorchDynamoContext):
 class DisableContext(_TorchDynamoContext):
     def __init__(self):
         super().__init__(callback=None)
+        print(f"DisableContext is created!")
 
 
 def first_real_inst_idx(code):

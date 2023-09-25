@@ -53,8 +53,8 @@ def g2_global_var(a, b):
 class TestModule(torch.nn.Module):
     def __init__(self):
         super().__init__()
-        self.weight = torch.nn.Parameter(torch.randn(4, 4))
-        self.register_buffer('buf', torch.randn(4, 4))
+        self.weight = torch.nn.Parameter(torch.randn(1))  # torch.randn(4, 4))
+        self.register_buffer('buf', torch.randn(1))  # torch.randn(4, 4))
         self.submod = TestSubmodule()
 
     @disable()
@@ -73,7 +73,6 @@ class TestModule(torch.nn.Module):
         #     + g2(self.weight, torch.sigmoid(y + 1)) \
         #  * x.sum().item()
         # return g1_no_mutation_tensor(x, x) + torch.relu(x) + g1_no_mutation_tensor(x * 2, x) \
-        # return torch.relu(x) * self.weight.sum().item() \
         # return torch.relu(x) + g1_mutation_tuple(x, x)[0] + g1_mutation_tuple(x, x)[1] \
         # return torch.relu(x) + g1_no_mutation_tuple(x, x)[0] + g1_no_mutation_tuple(x, x)[1] \
         # return torch.selu(x) + g1_no_mutation_tensor(x, x) \
@@ -81,12 +80,23 @@ class TestModule(torch.nn.Module):
         # return torch.relu(x) + g2(x, x) \
         # return torch.relu(x) + g1_no_mutation_tuple(x, x)[0] \
         # return torch.relu(x) + self.f_global_var(x) \
-        return torch.relu(x) + self.f(x) \
+        # return torch.relu(x) + self.f(x) \
+        # return torch.relu(x) * self.weight.sum().item() \
+        return torch.relu(x) * self.weight.item() \
             + torch.tanh(self.weight)
             # + torch.selu(self.submod.sub_weight) \
             # + self.buf \
             # + self.f(x) \
             # + self.submod(x)
+
+
+# # hack to observe behavior
+# item_orig = torch.Tensor.item
+# def _item(tensor):
+#     import traceback
+#     traceback.print_stack()
+#     return item_orig(tensor)
+# torch.Tensor.item = _item
 
 with (
     torch._dynamo.config.patch(
@@ -97,8 +107,11 @@ with (
 ):
     m = TestModule()
     compiled_m = torch.compile(m, backend="aot_eager", fullgraph=False, dynamic=False)
-    x = torch.randn(4, 4)
-    y = torch.randn(4, 4)
+    # x = torch.randn(4, 4)
+    # y = torch.randn(4, 4)
+    x = torch.randn(1)
+    y = torch.randn(1)
+
     # ref = m(x, y)
     actual = compiled_m(x, y)
     # assert torch.allclose(ref, actual)
