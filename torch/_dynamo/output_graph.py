@@ -1001,7 +1001,7 @@ class OutputGraph(Checkpointable[OutputGraphState]):
         compiled_fn = self.call_user_compiler(gm)
         compiled_fn = disable(compiled_fn)
 
-        compiled_fn_frw = create_frw(compiled_fn, is_eager_func=False, fn_name=name)
+        compiled_fn_frw = create_frw(is_eager_func=False, compiled_fn=compiled_fn, fn_name=name)
 
         def _compiled_fn_with_tracking(*args, **kwargs):
             compiled_fn_frw.record_reads(args, is_input=True)
