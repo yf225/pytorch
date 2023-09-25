@@ -203,7 +203,7 @@ class FuncReadWrite:
                 if input_index not in self.input_index_to_global_var_name:
                     self.input_index_to_global_var_name[input_index] = []
                 self.input_index_to_global_var_name[input_index].append(var_name_global)
-                self.tracking_mode.seen_vars.add(var_name_global)
+                # self.tracking_mode.seen_vars.add(var_name_global)
             self.reads.add(var_name_global)
             new_reads.add(var_name_global)
 
