@@ -18,7 +18,7 @@ def g_disabled(a):
 def func(a):
     # with TrackingMode():
     # return a.item()
-    return g_disabled(a)
+    return g_disabled(a) * a
 
 print("eager: ")
 print(func(a))
