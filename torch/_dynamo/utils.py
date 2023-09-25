@@ -235,17 +235,17 @@ class FuncReadWrite:
             if isinstance(out, torch.Tensor):
                 var_name_global = record_new_global_var_name(out)
                 self.output_index_to_global_var_name[i] = var_name_global
-                self.outputs.add(var_name_global)
+                self.compiled_outputs.add(var_name_global)
                 new_outputs.add(var_name_global)
         return new_outputs
 
-    def record_mutations(self, args: Any) -> Set[str]:
-        new_mutations = set()
-        for i, arg in enumerate(args):
-            var_name_global = record_new_global_var_name(arg)
-            self.compiled_mutations.add(var_name_global)
-            new_mutations.add(var_name_global)
-        return new_mutations
+    # def record_mutations(self, args: Any) -> Set[str]:
+    #     new_mutations = set()
+    #     for i, arg in enumerate(args):
+    #         var_name_global = record_new_global_var_name(arg)
+    #         self.mutations.add(var_name_global)
+    #         new_mutations.add(var_name_global)
+    #     return new_mutations
 
 
 def create_frw(is_eager_func: bool, fn_name: Optional[str]=None, compiled_fn: Optional[types.FunctionType]=None):
