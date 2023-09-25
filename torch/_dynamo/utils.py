@@ -194,7 +194,7 @@ class FuncReadWrite:
                     if isinstance(arg2, torch.Tensor):
                         _record(arg2)
 
-    def record_reads(self, args: Any, is_input: bool, outs: Any = None) -> Set[str]:
+    def record_reads(self, args: Any, is_input: bool) -> Set[str]:
         new_reads = set()
 
         def _record(input_index, arg):
@@ -204,7 +204,7 @@ class FuncReadWrite:
                     self.input_index_to_global_var_name[input_index] = []
                 self.input_index_to_global_var_name[input_index].append(var_name_global)
                 # self.tracking_mode.seen_vars.add(var_name_global)
-            self.reads.add(var_name_global)
+            self.compiled_reads.add(var_name_global)
             new_reads.add(var_name_global)
 
         for input_index, arg in enumerate(args):
@@ -243,7 +243,7 @@ class FuncReadWrite:
         new_mutations = set()
         for i, arg in enumerate(args):
             var_name_global = record_new_global_var_name(arg)
-            self.mutations.add(var_name_global)
+            self.compiled_mutations.add(var_name_global)
             new_mutations.add(var_name_global)
         return new_mutations
 
