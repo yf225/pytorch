@@ -370,10 +370,10 @@ class _TorchDynamoContext:
                         if frw.is_eager_func():
                             for x in frw.eager_reads_data_ptr:
                                 if x in data_ptr_to_global_var_name:
-                                    frw.eager_reads.add(x)
+                                    frw.eager_reads.add(data_ptr_to_global_var_name[x])
                             for x in frw.eager_mutations_data_ptr:
                                 if x in data_ptr_to_global_var_name:
-                                    frw.eager_mutations.add(x)
+                                    frw.eager_mutations.add(data_ptr_to_global_var_name[x])
 
                 return outs
             finally:
