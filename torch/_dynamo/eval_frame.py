@@ -368,12 +368,12 @@ class _TorchDynamoContext:
                     print(f"data_ptr_to_global_var_name: {data_ptr_to_global_var_name}")
                     for frw in func_read_writes:
                         if frw.is_eager_func():
-                            for x in frw.eager_fn_reads_data_ptr:
+                            for x in frw.reads_data_ptr:
                                 if x in data_ptr_to_global_var_name:
-                                    frw.eager_fn_reads.add(data_ptr_to_global_var_name[x])
-                            for x in frw.eager_fn_mutations_data_ptr:
+                                    frw.reads.add(data_ptr_to_global_var_name[x])
+                            for x in frw.mutations_data_ptr:
                                 if x in data_ptr_to_global_var_name:
-                                    frw.eager_fn_mutations.add(data_ptr_to_global_var_name[x])
+                                    frw.mutations.add(data_ptr_to_global_var_name[x])
 
                 return outs
             finally:

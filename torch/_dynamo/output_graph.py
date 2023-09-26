@@ -1026,7 +1026,7 @@ class OutputGraph(Checkpointable[OutputGraphState]):
 
         def _compiled_fn_with_tracking(*args, **kwargs):
             # print(f"_compiled_fn_with_tracking: gm: {gm}")
-            compiled_fn_frw.record_compiled_fn_reads(args, is_input=True)
+            compiled_fn_frw.record_reads(args, is_input=True)
 
             for node in gm.graph.nodes:
                 # print(f"name: {node.name}, op: {node.op}, target: {node.target}, str(target): {str(node.target)}, args: {node.args}")
@@ -1037,7 +1037,7 @@ class OutputGraph(Checkpointable[OutputGraphState]):
                 if "l__self__" in node.name:
 
                     assert node.op == "get_attr"
-                    compiled_fn_frw.record_compiled_fn_reads([getattr(gm, str(node.target))])
+                    compiled_fn_frw.record_reads([getattr(gm, str(node.target))])
                     compiled_fn_frw.nominal_param_reads.add(node.name)
                     compiled_fn_frw.nominal_param_to_actual_param[node.name] = str(node.target)
 
@@ -1071,20 +1071,20 @@ class OutputGraph(Checkpointable[OutputGraphState]):
                 all_aliases_of_this_input = get_all_aliases_of_var(compiled_fn_frw.aliases, nominal_input)
                 for nominal_mutation in compiled_fn_frw.nominal_mutations:
                     if nominal_mutation in all_aliases_of_this_input:
-                        compiled_fn_frw.compiled_fn_mutations = compiled_fn_frw.compiled_fn_mutations.union(set(compiled_fn_frw.input_index_to_global_var_name[i]))
+                        compiled_fn_frw.mutations = compiled_fn_frw.mutations.union(set(compiled_fn_frw.input_index_to_global_var_name[i]))
 
             for nominal_param_read in compiled_fn_frw.nominal_param_reads:
                 # For each nominal param read (i.e. name of module param within the graph), find all its aliases and check whether any of them is mutated.
                 all_aliases_of_this_param = get_all_aliases_of_var(compiled_fn_frw.aliases, nominal_param_read)
                 for nominal_mutation in compiled_fn_frw.nominal_mutations:
                     if nominal_mutation in all_aliases_of_this_param:
-                        compiled_fn_frw.compiled_fn_mutations.add(
+                        compiled_fn_frw.mutations.add(
                             data_ptr_to_global_var_name[getattr(gm, compiled_fn_frw.nominal_param_to_actual_param[nominal_param_read]).data_ptr()]
                         )
 
             outs = compiled_fn(*args, **kwargs)
 
-            compiled_fn_frw.record_compiled_fn_outputs(outs)
+            compiled_fn_frw.record_outputs(outs)
 
             return outs
 
