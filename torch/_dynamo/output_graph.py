@@ -21,6 +21,7 @@ from typing import (
     Set,
     Union,
 )
+import inspect
 
 import sympy
 
@@ -80,6 +81,8 @@ from .utils import (
     count_calls,
     counters,
     create_frw,
+    global_var_name_to_data_ptr,
+    data_ptr_to_global_var_name,
     dynamo_timed,
     get_instruction_source_311,
     get_static_address_type,
@@ -1004,68 +1007,84 @@ class OutputGraph(Checkpointable[OutputGraphState]):
 
         compiled_fn_frw = create_frw(is_eager_func=False, compiled_fn=compiled_fn, fn_name=name)
 
+        def get_all_aliases_of_var(aliases: Dict[str, Set[str]], var: str) -> Set[str]:
+            ret = set([var])
+            if var not in aliases:
+                print(f"{var} not in aliases")
+                return ret
+            else:
+                for alias in aliases[var]:
+                    subret = get_all_aliases_of_var(aliases, alias)
+                    ret = ret.union(subret)
+                print(f"{var} has aliases: {ret}")
+                return ret
+
+        def add_alias(orig_name, alias_name):
+            if orig_name not in compiled_fn_frw.aliases:
+                compiled_fn_frw.aliases[orig_name] = set()
+            compiled_fn_frw.aliases[orig_name].add(alias_name)
+
         def _compiled_fn_with_tracking(*args, **kwargs):
-            compiled_fn_frw.record_compiled_reads(args, is_input=True)
+            # print(f"_compiled_fn_with_tracking: gm: {gm}")
+            compiled_fn_frw.record_compiled_fn_reads(args, is_input=True)
 
-            # # NOTE: walk through the graph to record reads and writes to module params `self.XYZ` and `self.abc.XYZ`
-            # # param_reads: Set[str] = set()
-            # # param_mutations: Set[str] = set()
-            # # input_mutations: Set[str] = set()
-            # # NOTE: we have to use `l__self___weight` / `l__self___submod_sub_weight` format,
-            # # because at this point we already lost the submodule information and hence can't use `self.submod.sub_weight` format.
-            # for node in gm.graph.nodes:
-            #     name = node.name
-            #     op = node.op
-            #     target = node.target
-            #     args = node.args
-            #     print(f"name: {name}, op: {op}, target: {target}, args: {args}")
-            #     if "l__self__" in name:
-            #         # Record parameter reads
-            #         compiled_fn_frw.record_compiled_reads([getattr(gm, target)])
+            for node in gm.graph.nodes:
+                # print(f"name: {node.name}, op: {node.op}, target: {node.target}, str(target): {str(node.target)}, args: {node.args}")
 
-            #     # if func in [
-            #     #     torch.ops.aten.view.default,
-            #     #     torch.ops.aten.split.default,
-            #     #     torch.ops.aten.split.Tensor,
-            #     #     torch.ops.aten.chunk.default,
-            #     #     torch.ops.aten.slice,
-            #     #     torch.ops.aten.cat.default,
-            #     # ]:
-            #     #     # NOTE: for alias ops, tracking only the first arg
-            #     #     arg_maybe_plural = args[0]
-            #     #     if isinstance(arg_maybe_plural, torch.Tensor):
-            #     #         arg = arg_maybe_plural
-            #     #         self.actual_reads.add(arg.data_ptr())
-            #     #         self._add_out_into_aliases(arg, out)
-            #     #     else:
-            #     #         for arg in arg_maybe_plural:
-            #     #             if isinstance(arg, torch.Tensor):
-            #     #                 self.actual_reads.add(arg.data_ptr())
-            #     #                 self._add_out_into_aliases(arg, out)
+                compiled_fn_frw.nominal_inputs = list(inspect.signature(gm.forward).parameters.keys())
 
-            #     # # TODO(yf225): this is not sufficient, we need to track aliases, and mutation to alias is mutation to original
-            #     # if op == "call_method" and target.endswith("_"):
-            #     #     # Record mutations
-            #     #     breakpoint()
+                # Step 1: Record parameter reads
+                if "l__self__" in node.name:
 
-            #     # # TODO(yf225): this is not sufficient, we need to track aliases
-            #     # if op == "call_method" and target.endswith("_"):  # if mutation op
-            #     #     for arg in args:
-            #     #         if arg.name.startswith("l_"):
-            #     #             print(f"arg.name: {arg.name}")
-            #     #             # if mutating a param
-            #     #             if arg.name in param_reads:
-            #     #                 param_mutations.add(arg.name)
-            #     #             else:
-            #     #                 # if mutating an input arg
-            #     #                 input_arg_name = f"L_{arg.name[2:]}"
-            #     #                 if input_arg_name in nominal_arg_to_actual_var:
-            #     #                     input_mutations.add(nominal_arg_to_actual_var[input_arg_name])
+                    assert node.op == "get_attr"
+                    compiled_fn_frw.record_compiled_fn_reads([getattr(gm, str(node.target))])
+                    compiled_fn_frw.nominal_param_reads.add(node.name)
+                    compiled_fn_frw.nominal_param_to_actual_param[node.name] = str(node.target)
 
-            # TODO(yf225): implement mutation tracking for compiled region
+                # Step 2: Record aliasing relationship
+                if node.op == "placeholder":
+                    add_alias(orig_name=str(node.target), alias_name=node.name)
+
+                if node.op == "call_function" and (node.target in [
+                    torch.split,
+                    torch.split,
+                    torch.chunk,
+                    torch.cat,
+                ] or "getitem" in str(node.target)):
+                    # NOTE: for torch.XYZ alias ops, tracking only the first arg
+                    # TODO: add "call_method" cases
+                    if isinstance(node.args[0], (list, tuple)):
+                        for arg in node.args[0]:
+                            add_alias(orig_name=str(arg), alias_name=node.name)
+                    else:
+                        add_alias(orig_name=str(node.args[0]), alias_name=node.name)
+
+                # Step 3: Record mutations
+                if node.op == "call_method" and str(node.target).endswith("_"):
+                    # only record mutation on first arg
+                    # TODO(yf225): do we have cases where we mutate second arg / third arg / ... ?
+                    compiled_fn_frw.nominal_mutations.add(str(node.args[0]))
+                    add_alias(orig_name=str(node.args[0]), alias_name=node.name)
+
+            for i, nominal_input in enumerate(compiled_fn_frw.nominal_inputs):
+                # For each nominal input (i.e. name of graph input within the graph), find all its aliases and check whether any of them is mutated.
+                all_aliases_of_this_input = get_all_aliases_of_var(compiled_fn_frw.aliases, nominal_input)
+                for nominal_mutation in compiled_fn_frw.nominal_mutations:
+                    if nominal_mutation in all_aliases_of_this_input:
+                        compiled_fn_frw.compiled_fn_mutations = compiled_fn_frw.compiled_fn_mutations.union(set(compiled_fn_frw.input_index_to_global_var_name[i]))
+
+            for nominal_param_read in compiled_fn_frw.nominal_param_reads:
+                # For each nominal param read (i.e. name of module param within the graph), find all its aliases and check whether any of them is mutated.
+                all_aliases_of_this_param = get_all_aliases_of_var(compiled_fn_frw.aliases, nominal_param_read)
+                for nominal_mutation in compiled_fn_frw.nominal_mutations:
+                    if nominal_mutation in all_aliases_of_this_param:
+                        compiled_fn_frw.compiled_fn_mutations.add(
+                            data_ptr_to_global_var_name[getattr(gm, compiled_fn_frw.nominal_param_to_actual_param[nominal_param_read]).data_ptr()]
+                        )
+
             outs = compiled_fn(*args, **kwargs)
 
-            compiled_fn_frw.record_compiled_outputs(outs)
+            compiled_fn_frw.record_compiled_fn_outputs(outs)
 
             return outs
 

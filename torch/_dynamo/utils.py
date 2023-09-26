@@ -109,23 +109,32 @@ class TrackingMode(TorchDispatchMode):
 @dataclasses.dataclass
 class FuncReadWrite:
     # can be either __compiled_fn_X or __eager_fn_X
+    # ===== Common metadata =====
     fn_name: str
+
+    # ===== Metadata for compiled functions =====
     compiled_fn: Optional[types.FunctionType] = None
     input_index_to_global_var_name: Dict[int, List[str]] = field(default_factory=dict)
     output_index_to_global_var_name: Dict[int, List[str]] = field(default_factory=dict)
-    tracking_mode: "TrackingMode" = None
 
     # includes reading input tensors, as well as reading module parameters
-    compiled_reads: Set[str] = field(default_factory=set)
+    compiled_fn_reads: Set[str] = field(default_factory=set)
     # includes mutating input tensors, as well as mutating module parameters
-    compiled_mutations: Set[str] = None
+    compiled_fn_mutations: Set[str] = field(default_factory=set)
     # includes tensors returned from the function
-    compiled_outputs: Set[str] = field(default_factory=set)
+    compiled_fn_outputs: Set[str] = field(default_factory=set)
+    aliases: Dict[str, Set[str]] = field(default_factory=dict)
+    # "nominal": names within the function
+    nominal_inputs: List[str] = field(default_factory=list)
+    nominal_param_reads: Set[str] = field(default_factory=set)
+    nominal_param_to_actual_param: Dict[str, str] = field(default_factory=dict)
+    nominal_mutations: Set[str] = field(default_factory=set)
 
-    eager_reads_data_ptr: Set[int] = field(default_factory=set)
-    eager_reads: Set[str] = field(default_factory=set)
-    eager_mutations_data_ptr: Set[int] = field(default_factory=set)
-    eager_mutations: Set[str] = field(default_factory=set)
+    # ===== Metadata for eager functions =====
+    eager_fn_reads_data_ptr: Set[int] = field(default_factory=set)
+    eager_fn_reads: Set[str] = field(default_factory=set)
+    eager_fn_mutations_data_ptr: Set[int] = field(default_factory=set)
+    eager_fn_mutations: Set[str] = field(default_factory=set)
 
     def is_compiled_func(self) -> bool:
         return self.fn_name.startswith("__compiled_fn")
@@ -139,9 +148,9 @@ class FuncReadWrite:
             print(f"record_data_ptrs: {data_ptr}")
             assert op_type in ["read", "mutation"]
             if op_type == "read":
-                self.eager_reads_data_ptr.add(data_ptr)
+                self.eager_fn_reads_data_ptr.add(data_ptr)
             elif op_type == "mutation":
-                self.eager_mutations_data_ptr.add(data_ptr)
+                self.eager_fn_mutations_data_ptr.add(data_ptr)
 
         for arg in args:
             if is_real_tensor(arg):
@@ -151,7 +160,7 @@ class FuncReadWrite:
                     if is_real_tensor(arg2):
                         _record(arg2)
 
-    def record_compiled_reads(self, args: Any, is_input: bool = False) -> Set[str]:
+    def record_compiled_fn_reads(self, args: Any, is_input: bool = False) -> Set[str]:
         new_reads = set()
 
         def _record(input_index, arg):
@@ -160,7 +169,7 @@ class FuncReadWrite:
                 if input_index not in self.input_index_to_global_var_name:
                     self.input_index_to_global_var_name[input_index] = []
                 self.input_index_to_global_var_name[input_index].append(var_name_global)
-            self.compiled_reads.add(var_name_global)
+            self.compiled_fn_reads.add(var_name_global)
             new_reads.add(var_name_global)
 
         for input_index, arg in enumerate(args):
@@ -173,7 +182,7 @@ class FuncReadWrite:
 
         return new_reads
 
-    def record_compiled_outputs(self, outs: Any) -> Set[str]:
+    def record_compiled_fn_outputs(self, outs: Any) -> Set[str]:
         new_outputs = set()
 
         def _record(output_index, out):
@@ -181,7 +190,7 @@ class FuncReadWrite:
             if output_index not in self.output_index_to_global_var_name:
                 self.output_index_to_global_var_name[output_index] = []
             self.output_index_to_global_var_name[output_index].append(var_name_global)
-            self.compiled_outputs.add(var_name_global)
+            self.compiled_fn_outputs.add(var_name_global)
             new_outputs.add(var_name_global)
 
         for output_index, out in enumerate(outs):
@@ -193,20 +202,6 @@ class FuncReadWrite:
                         _record(output_index, out2)
 
         return new_outputs
-
-    def record_compiled_mutations(self, mutations: Any) -> Set[str]:
-        new_mutations = set()
-
-        def _record(mutation_index, mutation):
-            var_name_global = record_new_global_var_name(mutation)
-            self.compiled_mutations.add(var_name_global)
-            new_mutations.add(var_name_global)
-
-        for mutation_index, mutation in enumerate(mutations):
-            if is_real_tensor(mutation):
-                _record(mutation_index, mutation)
-
-        return new_mutations
 
 
 def create_frw(is_eager_func: bool, fn_name: Optional[str]=None, compiled_fn: Optional[types.FunctionType]=None):

@@ -58,7 +58,8 @@ class TestModule(torch.nn.Module):
         self.submod = TestSubmodule()
 
     @disable()
-    def f_global_var(self, c):
+    def f_read_param_mutate_param(self, c):
+        self.buf.relu_()
         return c * c * self.weight
 
     @disable()
@@ -83,12 +84,16 @@ class TestModule(torch.nn.Module):
         # return torch.relu(x) + self.f_global_var(x) \
         # return torch.relu(x) + self.f(x) \
         # return torch.relu(x) * self.weight.sum().item() \
-        y = torch.cat(torch.chunk(x, 2))
-        return torch.relu(y) * self.weight \
+        x = torch.cat(torch.chunk(x, 2))
+        return torch.relu(x) + g1_mutation_tuple(x, x)[0] \
+            + self.f_read_param_mutate_param(x) \
             + torch.tanh(self.weight) \
+            + self.buf \
             + x
+            # + g1_mutation_tuple(x, x)[1] \
+
             # + torch.selu(self.submod.sub_weight) \
-            # + self.buf \
+
             # + self.f(x) \
             # + self.submod(x)
 
@@ -108,6 +113,7 @@ with (
         capture_scalar_outputs=False,
     ),
 ):
+    torch._dynamo.reset()
     m = TestModule()
     compiled_m = torch.compile(m, fullgraph=False, dynamic=False)
     x = torch.randn(4, 4)

@@ -346,7 +346,7 @@ class _TorchDynamoContext:
             dynamic_ctx = enable_dynamic(self.dynamic, self.export)
             dynamic_ctx.__enter__()
             try:
-                print(f"_fn: {fn}, type(self): {type(self)}")
+                # print(f"_fn: {fn}, type(self): {type(self)}")
                 # for arg in list(args):
                 #     print(f"_fn: type(arg): {type(arg)}")
                 # for k, v in dict(kwargs).items():
@@ -368,12 +368,12 @@ class _TorchDynamoContext:
                     print(f"data_ptr_to_global_var_name: {data_ptr_to_global_var_name}")
                     for frw in func_read_writes:
                         if frw.is_eager_func():
-                            for x in frw.eager_reads_data_ptr:
+                            for x in frw.eager_fn_reads_data_ptr:
                                 if x in data_ptr_to_global_var_name:
-                                    frw.eager_reads.add(data_ptr_to_global_var_name[x])
-                            for x in frw.eager_mutations_data_ptr:
+                                    frw.eager_fn_reads.add(data_ptr_to_global_var_name[x])
+                            for x in frw.eager_fn_mutations_data_ptr:
                                 if x in data_ptr_to_global_var_name:
-                                    frw.eager_mutations.add(data_ptr_to_global_var_name[x])
+                                    frw.eager_fn_mutations.add(data_ptr_to_global_var_name[x])
 
                 return outs
             finally:
@@ -491,7 +491,6 @@ class RunOnlyContext(_TorchDynamoContext):
 class DisableContext(_TorchDynamoContext):
     def __init__(self):
         super().__init__(callback=None)
-        print(f"DisableContext is created!")
 
 
 def first_real_inst_idx(code):
