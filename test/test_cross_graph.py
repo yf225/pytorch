@@ -108,7 +108,7 @@ with (
     ),
 ):
     m = TestModule()
-    compiled_m = torch.compile(m, backend="aot_eager", fullgraph=False, dynamic=False)
+    compiled_m = torch.compile(m, fullgraph=False, dynamic=False)
     x = torch.randn(4, 4)
     y = torch.randn(4, 4)
     # x = torch.randn(1)
