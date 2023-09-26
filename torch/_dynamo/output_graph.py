@@ -987,6 +987,7 @@ class OutputGraph(Checkpointable[OutputGraphState]):
         self.real_value_cache.clear()
 
         gm = fx.GraphModule(root, self.graph)
+
         for register_finalizer in self.register_finalizer_fns:
             register_finalizer(gm)
 
@@ -1007,7 +1008,6 @@ class OutputGraph(Checkpointable[OutputGraphState]):
             compiled_fn_frw.record_reads(args, is_input=True)
 
             # TODO(yf225): implement mutation tracking for compiled region
-            # with compiled_fn_frw.tracking_mode:
             outs = compiled_fn(*args, **kwargs)
 
             compiled_fn_frw.record_outputs(outs)

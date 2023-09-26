@@ -65,7 +65,7 @@ from .mutation_guard import install_generation_tagging_init
 from .types import DynamoCallback
 from .utils import compile_times
 
-from torch._dynamo.utils import create_frw, TrackingMode
+from torch._dynamo.utils import create_frw, TrackingMode, func_read_writes, data_ptr_to_global_var_name
 
 log = logging.getLogger(__name__)
 
@@ -363,6 +363,13 @@ class _TorchDynamoContext:
                 # ctx_mgr = eager_frw.tracking_mode if is_eager_func else contextlib.nullcontext()
                 with TrackingMode():
                     outs = fn(*args, **kwargs)
+
+                if isinstance(self, OptimizeContext):
+                    print(f"data_ptr_to_global_var_name: {data_ptr_to_global_var_name}")
+                    for frw in func_read_writes:
+                        if frw.is_eager_func():
+                            frw.eager_reads = set([data_ptr_to_global_var_name[x] for x in frw.eager_reads_data_ptr])
+                            frw.eager_mutations = set([data_ptr_to_global_var_name[x] for x in frw.eager_mutations_data_ptr])
 
                 return outs
             finally:

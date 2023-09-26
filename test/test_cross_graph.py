@@ -45,7 +45,7 @@ def g2_global_var(a, b):
 # TODO: cases to handle
 # 1. eager function returning a tensor [DONE]
 # 2. eager function returning a tuple [DONE]
-# 3. eager function returning a scalar [TBD]
+# 3. eager function returning a scalar [Need unbacked symint support]
 # 4. compiled function has mutation [DONE]
 # 5. compiled function reads module param via `self.` [DONE]
 
@@ -106,7 +106,7 @@ with (
     ),
 ):
     m = TestModule()
-    compiled_m = torch.compile(m, backend="aot_eager", fullgraph=False, dynamic=False)
+    compiled_m = torch.compile(m, fullgraph=False, dynamic=False)
     # x = torch.randn(4, 4)
     # y = torch.randn(4, 4)
     x = torch.randn(1)

@@ -70,16 +70,13 @@ from torch.utils._python_dispatch import TorchDispatchMode
 from .bytecode_transformation import unique_id
 
 
+def is_real_tensor(tensor):
+    return isinstance(tensor, torch.Tensor) and not isinstance(tensor, FakeTensor)
+
+
 class TrackingMode(TorchDispatchMode):
-    # def __init__(self, orig_fn: Any, is_eager_func: bool, frw: "FuncReadWrite"):
-    #     self.orig_fn = orig_fn
-    #     self.is_eager_func = is_eager_func
-    #     self.frw = weakref.ref(frw)
-    #     self.seen_vars = set()
-
     def __torch_dispatch__(self, func, types, args=(), kwargs=None):
-        print(f"func: {func}")
-
+        print(f"func: {func}, args: {args}, kwargs: {kwargs}")
         outs = func(*args, **kwargs)
         if not self._is_warmup_run(func, args, kwargs):
             return outs
@@ -98,57 +95,12 @@ class TrackingMode(TorchDispatchMode):
             # assume only first arg is mutated
             eager_frw.record_data_ptrs([args[0]], op_type="mutation")
 
-        # frw = self.frw()
-        # assert frw is not None
-
-        # if self.is_eager_func:
-        #     breakpoint()
-        # else:
-        #     breakpoint()
-
-        # if self.is_eager_func:
-        #     # if we found an unseen arg, it means user code is reading global variable or module param, and we need to ban it
-        #     def _check_unseen(arg):
-        #         var_name_global = record_new_global_var_name(arg)
-        #         assert var_name_global in self.seen_vars, \
-        #             f"{var_name_global} (first used in call stack TODO) is likely a global variable or a module param. " + \
-        #             "This is not supported in eager region when cross-graph optimization is enabled"
-        #     for arg in args:
-        #         if isinstance(arg, (list, tuple)):
-        #             for subarg in arg:
-        #                 _check_unseen(subarg)
-        #         elif isinstance(arg, torch.Tensor):
-        #             _check_unseen(arg)
-
-        # # record the args to this func
-        # reads = frw.record_reads(args, is_input=False)
-
-        # # record the intermediate outputs
-        # intermediates = frw.record_intermediates(outs)
-
-        # # add args and intermediate outputs to seen_vars
-        # self.seen_vars = self.seen_vars.union(reads).union(intermediates)
-
-        # # handle mutation ops
-        # if func._schema.is_mutable:
-        #     if self.is_eager_func:
-        #         raise Exception("mutation in eager region is not supported in cross-graph optimization")
-        #     # assume only first arg is mutated
-        #     frw.record_mutations([args[0]])
-
         return outs
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        for frw in func_read_writes:
-            if frw.is_eager_func():
-                frw.eager_reads = set([data_ptr_to_global_var_name[x] for x in frw.eager_reads_data_ptr])
-                frw.eager_mutations = set([data_ptr_to_global_var_name[x] for x in frw.eager_mutations_data_ptr])
-        super().__exit__(exc_type, exc_val, exc_tb)
-
     def _is_warmup_run(self, func, args=(), kwargs=None):
-        if isinstance(args[0], torch.Tensor):
+        if is_real_tensor(args[0]):
             return True
-        elif isinstance(args[0], (tuple, list)) and isinstance(args[0][0], torch.Tensor):
+        elif isinstance(args[0], (tuple, list)) and is_real_tensor(args[0][0]):
             return True
         else:
             return False
@@ -166,17 +118,14 @@ class FuncReadWrite:
     # includes reading input tensors, as well as reading intermediate tensors within the function
     compiled_reads: Set[str] = field(default_factory=set)
     # includes mutating input tensors, as well as mutating intermediate tensors within the function
-    compiled_mutations: Set[str] = field(default_factory=set)
+    compiled_mutations: Set[str] = None
     # includes tensors returned from the function
     compiled_outputs: Set[str] = field(default_factory=set)
 
     eager_reads_data_ptr: Set[int] = field(default_factory=set)
-    eager_mutations_data_ptr: Set[int] = field(default_factory=set)
     eager_reads: Set[str] = field(default_factory=set)
+    eager_mutations_data_ptr: Set[int] = field(default_factory=set)
     eager_mutations: Set[str] = field(default_factory=set)
-
-    intermediates: Set[str] = field(default_factory=set)
-    descendants: Dict[str, Set[str]] = field(default_factory=dict)
 
     def is_compiled_func(self) -> bool:
         return self.fn_name.startswith("__compiled_fn")
@@ -187,6 +136,7 @@ class FuncReadWrite:
     def record_data_ptrs(self, args: Any, op_type: str) -> None:
         def _record(arg):
             data_ptr = arg.data_ptr()
+            print(f"record_data_ptrs: {data_ptr}")
             assert op_type in ["read", "mutation"]
             if op_type == "read":
                 self.eager_reads_data_ptr.add(data_ptr)
@@ -194,11 +144,11 @@ class FuncReadWrite:
                 self.eager_mutations_data_ptr.add(data_ptr)
 
         for arg in args:
-            if isinstance(arg, torch.Tensor):
+            if is_real_tensor(arg):
                 _record(arg)
             elif isinstance(arg, (list, tuple)):
                 for _, arg2 in enumerate(arg):
-                    if isinstance(arg2, torch.Tensor):
+                    if is_real_tensor(arg2):
                         _record(arg2)
 
     def record_reads(self, args: Any, is_input: bool) -> Set[str]:
@@ -210,12 +160,11 @@ class FuncReadWrite:
                 if input_index not in self.input_index_to_global_var_name:
                     self.input_index_to_global_var_name[input_index] = []
                 self.input_index_to_global_var_name[input_index].append(var_name_global)
-                # self.tracking_mode.seen_vars.add(var_name_global)
             self.compiled_reads.add(var_name_global)
             new_reads.add(var_name_global)
 
         for input_index, arg in enumerate(args):
-            if isinstance(arg, torch.Tensor):
+            if is_real_tensor(arg):
                 _record(input_index, arg)
             elif isinstance(arg, (list, tuple)):
                 for _, arg2 in enumerate(arg):
@@ -223,36 +172,17 @@ class FuncReadWrite:
 
         return new_reads
 
-    def record_intermediates(self, intermediates: Any) -> Set[str]:
-        new_intermediates = set()
-        if isinstance(intermediates, torch.Tensor):
-            intermediates = (intermediates,)
-        for i, v in enumerate(intermediates):
-            if isinstance(v, torch.Tensor):
-                var_name_global = record_new_global_var_name(v)
-                self.intermediates.add(var_name_global)
-                new_intermediates.add(var_name_global)
-        return new_intermediates
-
     def record_outputs(self, outs: Any) -> Set[str]:
         new_outputs = set()
-        if isinstance(outs, torch.Tensor):
+        if is_real_tensor(outs):
             outs = (outs,)
         for i, out in enumerate(outs):
-            if isinstance(out, torch.Tensor):
+            if is_real_tensor(out):
                 var_name_global = record_new_global_var_name(out)
                 self.output_index_to_global_var_name[i] = var_name_global
                 self.compiled_outputs.add(var_name_global)
                 new_outputs.add(var_name_global)
         return new_outputs
-
-    # def record_mutations(self, args: Any) -> Set[str]:
-    #     new_mutations = set()
-    #     for i, arg in enumerate(args):
-    #         var_name_global = record_new_global_var_name(arg)
-    #         self.mutations.add(var_name_global)
-    #         new_mutations.add(var_name_global)
-    #     return new_mutations
 
 
 def create_frw(is_eager_func: bool, fn_name: Optional[str]=None, compiled_fn: Optional[types.FunctionType]=None):
