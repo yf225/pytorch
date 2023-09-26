@@ -65,8 +65,9 @@ class TestModule(torch.nn.Module):
     def f(self, c):
         return c * c
 
-    def forward(self, x, y):
+    def forward(self, x):
         x.relu_()
+        self.buf.relu_()
         # self.buf.relu_()
         # z = torch.sigmoid(y)
         # return g1_no_mutation(x, z) \
@@ -82,7 +83,8 @@ class TestModule(torch.nn.Module):
         # return torch.relu(x) + self.f_global_var(x) \
         # return torch.relu(x) + self.f(x) \
         # return torch.relu(x) * self.weight.sum().item() \
-        return torch.relu(x) * self.weight.item() \
+        y = torch.cat(torch.chunk(x, 2))
+        return torch.relu(y) * self.weight \
             + torch.tanh(self.weight)
             # + torch.selu(self.submod.sub_weight) \
             # + self.buf \
@@ -106,12 +108,12 @@ with (
     ),
 ):
     m = TestModule()
-    compiled_m = torch.compile(m, fullgraph=False, dynamic=False)
-    # x = torch.randn(4, 4)
-    # y = torch.randn(4, 4)
-    x = torch.randn(1)
-    y = torch.randn(1)
+    compiled_m = torch.compile(m, backend="aot_eager", fullgraph=False, dynamic=False)
+    x = torch.randn(4, 4)
+    y = torch.randn(4, 4)
+    # x = torch.randn(1)
+    # y = torch.randn(1)
 
-    # ref = m(x, y)
-    actual = compiled_m(x, y)
+    # ref = m(x)
+    actual = compiled_m(x)
     # assert torch.allclose(ref, actual)

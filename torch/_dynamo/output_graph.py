@@ -1005,12 +1005,67 @@ class OutputGraph(Checkpointable[OutputGraphState]):
         compiled_fn_frw = create_frw(is_eager_func=False, compiled_fn=compiled_fn, fn_name=name)
 
         def _compiled_fn_with_tracking(*args, **kwargs):
-            compiled_fn_frw.record_reads(args, is_input=True)
+            compiled_fn_frw.record_compiled_reads(args, is_input=True)
+
+            # # NOTE: walk through the graph to record reads and writes to module params `self.XYZ` and `self.abc.XYZ`
+            # # param_reads: Set[str] = set()
+            # # param_mutations: Set[str] = set()
+            # # input_mutations: Set[str] = set()
+            # # NOTE: we have to use `l__self___weight` / `l__self___submod_sub_weight` format,
+            # # because at this point we already lost the submodule information and hence can't use `self.submod.sub_weight` format.
+            # for node in gm.graph.nodes:
+            #     name = node.name
+            #     op = node.op
+            #     target = node.target
+            #     args = node.args
+            #     print(f"name: {name}, op: {op}, target: {target}, args: {args}")
+            #     if "l__self__" in name:
+            #         # Record parameter reads
+            #         compiled_fn_frw.record_compiled_reads([getattr(gm, target)])
+
+            #     # if func in [
+            #     #     torch.ops.aten.view.default,
+            #     #     torch.ops.aten.split.default,
+            #     #     torch.ops.aten.split.Tensor,
+            #     #     torch.ops.aten.chunk.default,
+            #     #     torch.ops.aten.slice,
+            #     #     torch.ops.aten.cat.default,
+            #     # ]:
+            #     #     # NOTE: for alias ops, tracking only the first arg
+            #     #     arg_maybe_plural = args[0]
+            #     #     if isinstance(arg_maybe_plural, torch.Tensor):
+            #     #         arg = arg_maybe_plural
+            #     #         self.actual_reads.add(arg.data_ptr())
+            #     #         self._add_out_into_aliases(arg, out)
+            #     #     else:
+            #     #         for arg in arg_maybe_plural:
+            #     #             if isinstance(arg, torch.Tensor):
+            #     #                 self.actual_reads.add(arg.data_ptr())
+            #     #                 self._add_out_into_aliases(arg, out)
+
+            #     # # TODO(yf225): this is not sufficient, we need to track aliases, and mutation to alias is mutation to original
+            #     # if op == "call_method" and target.endswith("_"):
+            #     #     # Record mutations
+            #     #     breakpoint()
+
+            #     # # TODO(yf225): this is not sufficient, we need to track aliases
+            #     # if op == "call_method" and target.endswith("_"):  # if mutation op
+            #     #     for arg in args:
+            #     #         if arg.name.startswith("l_"):
+            #     #             print(f"arg.name: {arg.name}")
+            #     #             # if mutating a param
+            #     #             if arg.name in param_reads:
+            #     #                 param_mutations.add(arg.name)
+            #     #             else:
+            #     #                 # if mutating an input arg
+            #     #                 input_arg_name = f"L_{arg.name[2:]}"
+            #     #                 if input_arg_name in nominal_arg_to_actual_var:
+            #     #                     input_mutations.add(nominal_arg_to_actual_var[input_arg_name])
 
             # TODO(yf225): implement mutation tracking for compiled region
             outs = compiled_fn(*args, **kwargs)
 
-            compiled_fn_frw.record_outputs(outs)
+            compiled_fn_frw.record_compiled_outputs(outs)
 
             return outs
 

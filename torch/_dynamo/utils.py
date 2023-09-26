@@ -112,12 +112,12 @@ class FuncReadWrite:
     fn_name: str
     compiled_fn: Optional[types.FunctionType] = None
     input_index_to_global_var_name: Dict[int, List[str]] = field(default_factory=dict)
-    output_index_to_global_var_name: Dict[int, str] = field(default_factory=dict)
+    output_index_to_global_var_name: Dict[int, List[str]] = field(default_factory=dict)
     tracking_mode: "TrackingMode" = None
 
-    # includes reading input tensors, as well as reading intermediate tensors within the function
+    # includes reading input tensors, as well as reading module parameters
     compiled_reads: Set[str] = field(default_factory=set)
-    # includes mutating input tensors, as well as mutating intermediate tensors within the function
+    # includes mutating input tensors, as well as mutating module parameters
     compiled_mutations: Set[str] = None
     # includes tensors returned from the function
     compiled_outputs: Set[str] = field(default_factory=set)
@@ -151,7 +151,7 @@ class FuncReadWrite:
                     if is_real_tensor(arg2):
                         _record(arg2)
 
-    def record_reads(self, args: Any, is_input: bool) -> Set[str]:
+    def record_compiled_reads(self, args: Any, is_input: bool = False) -> Set[str]:
         new_reads = set()
 
         def _record(input_index, arg):
@@ -168,21 +168,45 @@ class FuncReadWrite:
                 _record(input_index, arg)
             elif isinstance(arg, (list, tuple)):
                 for _, arg2 in enumerate(arg):
-                    _record(input_index, arg2)
+                    if is_real_tensor(arg2):
+                        _record(input_index, arg2)
 
         return new_reads
 
-    def record_outputs(self, outs: Any) -> Set[str]:
+    def record_compiled_outputs(self, outs: Any) -> Set[str]:
         new_outputs = set()
-        if is_real_tensor(outs):
-            outs = (outs,)
-        for i, out in enumerate(outs):
+
+        def _record(output_index, out):
+            var_name_global = record_new_global_var_name(out)
+            if output_index not in self.output_index_to_global_var_name:
+                self.output_index_to_global_var_name[output_index] = []
+            self.output_index_to_global_var_name[output_index].append(var_name_global)
+            self.compiled_outputs.add(var_name_global)
+            new_outputs.add(var_name_global)
+
+        for output_index, out in enumerate(outs):
             if is_real_tensor(out):
-                var_name_global = record_new_global_var_name(out)
-                self.output_index_to_global_var_name[i] = var_name_global
-                self.compiled_outputs.add(var_name_global)
-                new_outputs.add(var_name_global)
+                _record(output_index, out)
+            elif isinstance(out, (list, tuple)):
+                for _, out2 in enumerate(out):
+                    if is_real_tensor(out2):
+                        _record(output_index, out2)
+
         return new_outputs
+
+    def record_compiled_mutations(self, mutations: Any) -> Set[str]:
+        new_mutations = set()
+
+        def _record(mutation_index, mutation):
+            var_name_global = record_new_global_var_name(mutation)
+            self.compiled_mutations.add(var_name_global)
+            new_mutations.add(var_name_global)
+
+        for mutation_index, mutation in enumerate(mutations):
+            if is_real_tensor(mutation):
+                _record(mutation_index, mutation)
+
+        return new_mutations
 
 
 def create_frw(is_eager_func: bool, fn_name: Optional[str]=None, compiled_fn: Optional[types.FunctionType]=None):
