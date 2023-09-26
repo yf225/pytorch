@@ -86,6 +86,7 @@ class TestModule(torch.nn.Module):
         y = torch.cat(torch.chunk(x, 2))
         return torch.relu(y) * self.weight \
             + torch.tanh(self.weight)
+            + x
             # + torch.selu(self.submod.sub_weight) \
             # + self.buf \
             # + self.f(x) \
