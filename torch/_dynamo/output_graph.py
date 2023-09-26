@@ -1027,7 +1027,10 @@ class OutputGraph(Checkpointable[OutputGraphState]):
             compiled_fn_frw.record_reads(args, is_input=True)
 
             for node in gm.graph.nodes:
+                # print(f"node.op: {node.op}, node.target: {node.target}, node.args: {node.args}")
                 compiled_fn_frw.nominal_inputs = list(inspect.signature(gm.forward).parameters.keys())
+                if node.op == "output":
+                    compiled_fn_frw.nominal_outputs = list(str(arg) for arg in node.args[0])
 
                 # Step 1: Record parameter reads
                 if "l__self__" in node.name:

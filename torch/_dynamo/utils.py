@@ -76,7 +76,6 @@ def is_real_tensor(tensor):
 
 class TrackingMode(TorchDispatchMode):
     def __torch_dispatch__(self, func, types, args=(), kwargs=None):
-        # print(f"func: {func}, args: {args}, kwargs: {kwargs}")
         outs = func(*args, **kwargs)
         if not self._is_warmup_run(func, args, kwargs):
             return outs
@@ -127,6 +126,7 @@ class FuncReadWrite:
     aliases: Dict[str, Set[str]] = field(default_factory=dict)
     # "nominal": names within the function
     nominal_inputs: List[str] = field(default_factory=list)
+    nominal_outputs: List[str] = field(default_factory=list)
     nominal_param_reads: Set[str] = field(default_factory=set)
     nominal_param_to_actual_param: Dict[str, str] = field(default_factory=dict)
     nominal_mutations: Set[str] = field(default_factory=set)
