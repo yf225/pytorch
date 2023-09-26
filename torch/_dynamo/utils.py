@@ -108,8 +108,8 @@ class TrackingMode(TorchDispatchMode):
 
 @dataclasses.dataclass
 class FuncReadWrite:
-    # can be either __compiled_fn_X or __eager_fn_X
     # ===== Common metadata =====
+    # can be either __compiled_fn_X or __eager_fn_X
     fn_name: str
     # includes reading input tensors, as well as reading module parameters
     reads: Set[str] = field(default_factory=set)

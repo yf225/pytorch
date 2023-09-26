@@ -409,7 +409,6 @@ def _run_from_cache(compiled_graph: CompiledFxGraph, inputs):
             else (),
         ).call
 
-    print(f"inputs: {inputs}")
     return compiled_graph.compiled_artifact(inputs)
 
 

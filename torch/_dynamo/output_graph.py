@@ -990,7 +990,6 @@ class OutputGraph(Checkpointable[OutputGraphState]):
         self.real_value_cache.clear()
 
         gm = fx.GraphModule(root, self.graph)
-
         for register_finalizer in self.register_finalizer_fns:
             register_finalizer(gm)
 
@@ -1025,12 +1024,9 @@ class OutputGraph(Checkpointable[OutputGraphState]):
             compiled_fn_frw.aliases[orig_name].add(alias_name)
 
         def _compiled_fn_with_tracking(*args, **kwargs):
-            # print(f"_compiled_fn_with_tracking: gm: {gm}")
             compiled_fn_frw.record_reads(args, is_input=True)
 
             for node in gm.graph.nodes:
-                # print(f"name: {node.name}, op: {node.op}, target: {node.target}, str(target): {str(node.target)}, args: {node.args}")
-
                 compiled_fn_frw.nominal_inputs = list(inspect.signature(gm.forward).parameters.keys())
 
                 # Step 1: Record parameter reads
@@ -1090,7 +1086,6 @@ class OutputGraph(Checkpointable[OutputGraphState]):
 
         counters["stats"]["unique_graphs"] += 1
         self.install_global(name, _compiled_fn_with_tracking)
-        # self.install_global(name, compiled_fn)
 
         cg = PyCodegen(tx)
         cg.make_call_generated_code(name)

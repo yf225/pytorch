@@ -346,26 +346,13 @@ class _TorchDynamoContext:
             dynamic_ctx = enable_dynamic(self.dynamic, self.export)
             dynamic_ctx.__enter__()
             try:
-                # print(f"_fn: {fn}, type(self): {type(self)}")
-                # for arg in list(args):
-                #     print(f"_fn: type(arg): {type(arg)}")
-                # for k, v in dict(kwargs).items():
-                #     print(f"_fn: {k}: {type(v)}")
-                # is_eager_func = False
-                # # NOTE: if fn is `aot_module_simplified.<locals>.forward` or a local function handle, then it's running eager region
-                # # TODO(yf225): hacky, need to find better way
-                # if isinstance(self, DisableContext) \
-                #     and "dispatch_trace" not in str(fn) \
-                #     and "Tracer.trace" not in str(fn):
-                #         is_eager_func = True
-                #         eager_frw = create_frw(fn, is_eager_func=True)
-
-                # ctx_mgr = eager_frw.tracking_mode if is_eager_func else contextlib.nullcontext()
                 with TrackingMode():
                     outs = fn(*args, **kwargs)
 
+                # At the end of each iteration, we go through each eager region’s reads / mutations data ptrs
+                # and map them to global var names
+                # TODO(yf225): assert the reads/mutations pattern is the same as previous iterations.
                 if isinstance(self, OptimizeContext):
-                    print(f"data_ptr_to_global_var_name: {data_ptr_to_global_var_name}")
                     for frw in func_read_writes:
                         if frw.is_eager_func():
                             for x in frw.reads_data_ptr:
