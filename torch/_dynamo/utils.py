@@ -76,7 +76,7 @@ def is_real_tensor(tensor):
 
 class TrackingMode(TorchDispatchMode):
     def __torch_dispatch__(self, func, types, args=(), kwargs=None):
-        print(f"func: {func}, args: {args}, kwargs: {kwargs}")
+        # print(f"func: {func}, args: {args}, kwargs: {kwargs}")
         outs = func(*args, **kwargs)
         if not self._is_warmup_run(func, args, kwargs):
             return outs
@@ -91,6 +91,7 @@ class TrackingMode(TorchDispatchMode):
         eager_frw.record_data_ptrs(args, op_type="read")
 
         # record mutation data ptrs
+        # works also for aliases because alias and original share the same data ptr
         if func._schema.is_mutable:
             # assume only first arg is mutated
             eager_frw.record_data_ptrs([args[0]], op_type="mutation")
