@@ -76,6 +76,10 @@ def is_real_tensor(tensor):
 
 class TrackingMode(TorchDispatchMode):
     def __torch_dispatch__(self, func, types, args=(), kwargs=None):
+        # print(f"func: {func}, args: {args}, kwargs: {kwargs}")
+        for arg in args:
+            if is_real_tensor(arg):
+                print(f"arg.data_ptr(): {arg.data_ptr()}")
         outs = func(*args, **kwargs)
         if not self._is_warmup_run(func, args, kwargs):
             return outs
@@ -421,6 +425,8 @@ def dump_func_read_writes():
     import pprint
     for frw in func_read_writes:
         pprint.pprint(frw)
+    pprint.pprint(data_ptr_to_global_var_name)
+    pprint.pprint(global_var_name_to_data_ptr)
 
 
 tensortype_to_dtype = {

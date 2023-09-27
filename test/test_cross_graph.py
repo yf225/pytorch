@@ -34,7 +34,7 @@ global_a = torch.randn(4, 4, device="cuda")
 
 @disable()
 def g2_read_global_var(a, b):
-    return torch.cat(torch.chunk(a * b * torch.selu(global_a), 2))
+    return torch.cat(torch.chunk(a * b.div(torch.selu(global_a)), 2))
 
 
 class TestModule(torch.nn.Module):
@@ -56,12 +56,23 @@ class TestModule(torch.nn.Module):
         z = torch.relu(x) + g1_mutation_tuple(x, y)[0]
         z = z + g1_mutation_tensor(x, x)
         z = z + g2(x, y)
+        z = x + y
         z = z + g2_read_global_var(x, y)
         z = z + self.f_read_param_mutate_param(x)
         z = z + torch.tanh(self.weight)
         z = z + self.buf
         z = z + global_a
         return z
+
+
+# class TestModule2(torch.nn.Module):
+#     def __init__(self):
+#         super().__init__()
+
+#     def forward(self, x, y):
+#         z = x + y
+#         z = z + g2_read_global_var(x, y)
+#         return z
 
 """
 var_2: x
@@ -74,8 +85,8 @@ var_14: g1_mutation_tensor(x, x)
 var_15: z = z + g1_mutation_tensor(x, x)
 var_19: g2(x, y)
 var_20: z = z + g2(x, y)
-var_24: g2_read_global_var(x, y) or TODO
-var_25: z = z + g2_read_global_var(x, y) or TODO
+var_24: g2_read_global_var(x, y) or b.div(torch.selu(global_a)) -> TODO: this doesn't make sense
+var_25: z = z + g2_read_global_var(x, y) or a * b.div(torch.selu(global_a)) -> TODO: this doesn't make sense
 var_28: self.f_read_param_mutate_param(x)
 var_29: global_a
 var_30: self.weight
