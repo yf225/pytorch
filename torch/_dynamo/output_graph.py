@@ -1046,9 +1046,7 @@ class OutputGraph(Checkpointable[OutputGraphState]):
 
                 if node.op == "call_function" and (node.target in [
                     torch.split,
-                    torch.split,
                     torch.chunk,
-                    torch.cat,
                 ] or "getitem" in str(node.target)):
                     # NOTE: for torch.XYZ alias ops, tracking only the first arg
                     # TODO: add "call_method" cases
@@ -1078,7 +1076,7 @@ class OutputGraph(Checkpointable[OutputGraphState]):
                 for nominal_mutation in compiled_fn_frw.nominal_mutations:
                     if nominal_mutation in all_aliases_of_this_param:
                         compiled_fn_frw.mutations.add(
-                            data_ptr_to_global_var_name[getattr(gm, compiled_fn_frw.nominal_param_to_actual_param[nominal_param_read]).data_ptr()]
+                            data_ptr_to_global_var_name[tensor_unique_id(getattr(gm, compiled_fn_frw.nominal_param_to_actual_param[nominal_param_read]))]
                         )
 
             outs = compiled_fn(*args, **kwargs)
