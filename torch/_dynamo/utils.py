@@ -455,17 +455,22 @@ def dump_func_read_writes():
                     recorded_inputs[frw2.fn_name].add(mutation)
                 if mutation in frw2.mutations:
                     break
-    # Record raw inputs (not from an earlier FRW)
+    # Build edges from raw inputs, for inputs that are not from an earlier FRW
     for i, frw in enumerate(func_read_writes):
         for read in frw.reads:
             if read not in recorded_inputs[frw.fn_name]:
                 edges.add((read, frw.fn_name, f"{read}_read"))
+    # Build edges for program flow
+    for i in range(1, len(func_read_writes)):
+        edges.add((func_read_writes[i-1].fn_name, func_read_writes[i].fn_name, f"program_flow"))
 
     G = pygraphviz.AGraph(strict=False, directed=True)
-    pprint.pprint(edges)
     for edge in edges:
         node_a, node_b, label = edge
-        G.add_edge(node_a, node_b, label=label)
+        penwidth = 1
+        if label == "program_flow":
+            penwidth = 5
+        G.add_edge(node_a, node_b, label=label, penwidth=penwidth)
     # print(G.string())
     G.draw("test/dep_graph.svg", prog='dot', format='svg:cairo')
 
