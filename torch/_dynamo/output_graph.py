@@ -81,6 +81,7 @@ from .utils import (
     count_calls,
     counters,
     create_frw,
+    tensor_unique_id,
     global_var_name_to_data_ptr,
     data_ptr_to_global_var_name,
     dynamo_timed,
