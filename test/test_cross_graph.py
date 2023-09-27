@@ -101,15 +101,26 @@ var_30: self.weight
 
 """
 >>> x = torch.randn(4, 4, device="cuda")
+>>> x.stride()
+(4, 1)
 >>> x.data_ptr()
-140294506938368
+140626427379712
+>>> x.storage().data_ptr()
+<stdin>:1: UserWarning: TypedStorage is deprecated. It will be removed in the future and UntypedStorage will be the only storage class. This should only matter to you if you are using storages directly.  To access UntypedStorage directly, use tensor.untyped_storage() instead of tensor.storage()
+140626427379712
+>>> x.storage()._cdata
+100713264
 >>> x._cdata
-1474148608
+1469156160
 >>> y = x[1]
 >>> y.data_ptr()
-140294506938384
+140626427379728
+>>> y.storage().data_ptr()
+140626427379712
+>>> y.storage()._cdata
+100713264
 >>> y._cdata
-115322752
+115315808
 """
 
 with (

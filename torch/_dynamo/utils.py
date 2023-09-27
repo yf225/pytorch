@@ -74,13 +74,13 @@ def is_real_tensor(tensor):
     return isinstance(tensor, torch.Tensor) and not isinstance(tensor, FakeTensor)
 
 
-def tensor_unique_id(tensor):
-    return f"{tensor.data_ptr()}_{tensor._cdata}"
+def unique_tensor_id(tensor):
+    return f"{tensor.storage().data_ptr()}_{tensor.storage()._cdata}"
 
 
 class TrackingMode(TorchDispatchMode):
     def __torch_dispatch__(self, func, types, args=(), kwargs=None):
-        print(f"func: {func}, args: {args}, kwargs: {kwargs}")
+        # print(f"func: {func}, args: {args}, kwargs: {kwargs}")
         for arg in args:
             if is_real_tensor(arg):
                 print(f"arg.data_ptr(): {arg.data_ptr()}, arg._cdata: {arg._cdata}")
@@ -151,7 +151,7 @@ class FuncReadWrite:
 
     def record_data_ptrs(self, args: Any, op_type: str) -> None:
         def _record(arg):
-            data_ptr = tensor_unique_id(arg)
+            data_ptr = unique_tensor_id(arg)
             print(f"record_data_ptrs: {data_ptr}")
             assert op_type in ["read", "mutation"]
             if op_type == "read":
@@ -224,7 +224,7 @@ def create_frw(is_eager_func: bool, fn_name: Optional[str]=None, compiled_fn: Op
 
 
 def record_new_global_var_name(tensor: torch.Tensor) -> str:
-    tid = tensor_unique_id(tensor)
+    tid = unique_tensor_id(tensor)
     if tid in data_ptr_to_global_var_name:
         var_name_global = data_ptr_to_global_var_name[tid]
     else:

@@ -81,7 +81,7 @@ from .utils import (
     count_calls,
     counters,
     create_frw,
-    tensor_unique_id,
+    unique_tensor_id,
     global_var_name_to_data_ptr,
     data_ptr_to_global_var_name,
     dynamo_timed,
@@ -1077,7 +1077,7 @@ class OutputGraph(Checkpointable[OutputGraphState]):
                 for nominal_mutation in compiled_fn_frw.nominal_mutations:
                     if nominal_mutation in all_aliases_of_this_param:
                         compiled_fn_frw.mutations.add(
-                            data_ptr_to_global_var_name[tensor_unique_id(getattr(gm, compiled_fn_frw.nominal_param_to_actual_param[nominal_param_read]))]
+                            data_ptr_to_global_var_name[unique_tensor_id(getattr(gm, compiled_fn_frw.nominal_param_to_actual_param[nominal_param_read]))]
                         )
 
             outs = compiled_fn(*args, **kwargs)
