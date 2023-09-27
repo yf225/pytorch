@@ -433,6 +433,42 @@ def dump_func_read_writes():
     pprint.pprint(data_ptr_to_global_var_name)
     pprint.pprint(global_var_name_to_data_ptr)
 
+    import pygraphviz
+    from collections import defaultdict
+
+    edges = set()
+    recorded_inputs: Dict[str, Set[str]] = defaultdict(set)
+    for i, frw in enumerate(func_read_writes):
+        # For each output, find all FRWs that reads it, and build an edge between them, until we encounter a FRW that mutates it, or reach the end of the list
+        for out in frw.outputs:
+            for frw2 in func_read_writes[i+1:]:
+                if out in frw2.reads:
+                    edges.add((frw.fn_name, frw2.fn_name, f"{out}_output_read"))
+                    recorded_inputs[frw2.fn_name].add(out)
+                if out in frw2.mutations:
+                    break
+        # For each mutation, find the next FRW that reads it, and build an edge between them, until we encounter a FRW that mutates it, or reach the end of the list
+        for mutation in frw.mutations:
+            for frw2 in func_read_writes[i+1:]:
+                if mutation in frw2.reads:
+                    edges.add((frw.fn_name, frw2.fn_name, f"{mutation}_mutation_read"))
+                    recorded_inputs[frw2.fn_name].add(mutation)
+                if mutation in frw2.mutations:
+                    break
+    # Record raw inputs (not from an earlier FRW)
+    for i, frw in enumerate(func_read_writes):
+        for read in frw.reads:
+            if read not in recorded_inputs[frw.fn_name]:
+                edges.add((read, frw.fn_name, f"{read}_read"))
+
+    G = pygraphviz.AGraph(strict=False, directed=True)
+    pprint.pprint(edges)
+    for edge in edges:
+        node_a, node_b, label = edge
+        G.add_edge(node_a, node_b, label=label)
+    # print(G.string())
+    G.draw("test/dep_graph.svg", prog='dot', format='svg:cairo')
+
 
 tensortype_to_dtype = {
     torch.FloatTensor: (torch.float32, torch.float),

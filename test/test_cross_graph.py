@@ -6,6 +6,8 @@ from torch._dynamo import disable
 
 # TORCH_LOGS="+dynamo,aot,inductor" TORCH_COMPILE_DEBUG=1 python test/test_cross_graph.py
 
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
 @disable()
 def g1_mutation_tuple(d, e):
     d.relu_()
@@ -20,7 +22,7 @@ def g1_mutation_tensor(d, e):
 def g2(a, b):
     return torch.cat(torch.chunk(a * b, 2))
 
-global_a = torch.randn(4, 4, device="cuda")
+global_a = torch.randn(4, 4, device=device)
 
 @disable()
 def g2_read_global_var(a, b):
@@ -63,10 +65,10 @@ with (
 ):
     torch._dynamo.reset()
     m = TestModule()
-    m = m.cuda()
-    compiled_m = torch.compile(m, fullgraph=False, dynamic=False)
-    x = torch.randn(4, 4, device="cuda")
-    y = torch.randn(4, 4, device="cuda")
+    m = m.to(device)
+    compiled_m = torch.compile(m, backend="aot_eager" if device == "cpu" else "inductor", fullgraph=False, dynamic=False)
+    x = torch.randn(4, 4, device=device)
+    y = torch.randn(4, 4, device=device)
 
     # ref = m(x, y)
     actual = compiled_m(x, y)
