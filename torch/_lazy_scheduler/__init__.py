@@ -433,6 +433,8 @@ and then in RunWithSomeTorchDispatchMode, we call mod.func1 with a torch dispatc
 that tags the FX node with segment_name via `fx_traceback.current_meta`
 
 This way we don't need to do any change to Dynamo internals.
+
+But, does this work for tagging BWD nodes?
 ```
 """
 
