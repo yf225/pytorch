@@ -1,3 +1,5 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates
+# Owner(s): ["oncall: distributed"]
 import torch
 import torch.distributed as dist
 import torch._dynamo
@@ -19,8 +21,8 @@ from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import (
 )
 # AC/selective AC
 policy_fn = [
-    # torch.ops.aten.addmm.default,
-    # torch.ops.aten.mm.default,
+    torch.ops.aten.addmm.default,
+    torch.ops.aten.mm.default,
     # torch.ops.aten.bmm.default,
     # torch.ops.aten.baddbmm.default,
     # torch.ops.aten._scaled_dot_product_flash_attention.default,
@@ -82,9 +84,9 @@ class TransformerBlock(nn.Module):
     def forward(self, x):
         return self.mlp(self.attn(x))
 class SimpleTransformer(nn.Module):
-    def __init__(self):
+    def __init__(self, n_layers=2):
         super().__init__()
-        n_layers = 2
+        self.n_layers = n_layers
         self.norm = RMSNormPython(16)
         self.layers = nn.ModuleList()
         for layer in range(n_layers):
@@ -114,7 +116,8 @@ class TestDTensorCompile(torch._dynamo.test_case.TestCase):
         return 4
     def test_2d_fsdp_tp_compile(self):
         model_parallel_size = 2
-        model = SimpleTransformer().to(self.device_type)
+        n_layers = 5
+        model = SimpleTransformer(n_layers).to(self.device_type)
         # 2-D mesh is [dp, tp]
         mesh_2d = init_device_mesh("cuda", (2, 2), mesh_dim_names=("dp", "tp"))
         tp_mesh = mesh_2d["tp"]
@@ -129,7 +132,7 @@ class TestDTensorCompile(torch._dynamo.test_case.TestCase):
                 "attn.wk": ColwiseParallel(),
                 "attn.wv": ColwiseParallel(),
                 "attn.wo": RowwiseParallel(output_layouts=Shard(0)),
-                "mlp.net1": ColwiseParallel(),
+                "mlp.net1": ColwiseParallel(input_layouts=Shard(0)),
                 "mlp.net2": RowwiseParallel(output_layouts=Shard(0)),
             }
             parallelize_module(
@@ -137,14 +140,13 @@ class TestDTensorCompile(torch._dynamo.test_case.TestCase):
                 device_mesh=tp_mesh,
                 parallelize_plan=parallel_plan,
             )
-        torch._dynamo.config._experimental_support_context_fn_in_torch_utils_checkpoint = True
         # model = checkpoint_wrapper(model)
+        torch._dynamo.config._experimental_support_context_fn_in_torch_utils_checkpoint = True
         model = sac_checkpoint_wrapper(model)
         model = torch.compile(model, backend="aot_eager")
         fsdp_mod = FSDP(model, device_mesh=mesh_2d["dp"], use_orig_params=True)
         inp = torch.rand(20, 16).to(self.device_type)
         out = fsdp_mod(inp)
         out.sum().backward()
-        print(f">>>>> out :{out}")
 if __name__ == "__main__":
     run_tests()
