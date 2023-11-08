@@ -204,9 +204,13 @@ def reduce_scatter_tensor(
     that information and perform collective algebraic optimization. Use other forms of input for that.
     """
     tag, rankset, group_size = _expand_group(group, tag)
+    print(f"group_size: {group_size}")
+    print(f"type(group_size): {type(group_size)}")
+    print(f"self.size(scatter_dim): {self.size(scatter_dim)}")
+    print(f"type(self.size(scatter_dim)): {type(self.size(scatter_dim))}")
     assert (
         self.size(scatter_dim) % group_size == 0
-    ), f"input dimension 0 ({self.size(0)} must be a multiple of group_size {group_size}"
+    ), f"input dimension {scatter_dim} ({self.size(scatter_dim)}) must be a multiple of group_size {group_size}"
     if scatter_dim != 0:
         tensor_list = torch.chunk(self, group_size, dim=scatter_dim)
         self = torch.cat(tensor_list)

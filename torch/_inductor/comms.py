@@ -341,11 +341,11 @@ def reorder_compute_and_comm_for_overlap(
             overlap_log.debug(
                 f"==== Visualize overlap before reordering pass {p} ===="  # noqa: G004
             )
-            visualize_overlap(order)
+            # visualize_overlap(order)
         order = p(order)  # type: ignore[operator]
         if torch.distributed.get_rank() == 0:
             overlap_log.debug(
                 f"==== Visualize overlap after reordering pass {p} ===="  # noqa: G004
             )
-            visualize_overlap(order)
+            # visualize_overlap(order)
     return order
