@@ -576,10 +576,10 @@ class ActivationCheckpointingViaTagsTests(torch._dynamo.test_case.TestCase):
         self._validate(fn, backend, x, y)
 
     @unittest.skipIf(IS_WINDOWS, "torch.compile doesn't work with windows")
-    @unittest.skip(
-        "In-place op support in selective checkpointing + torch.compile "
-        "requires TorchDispatchMode + torch.compile work to complete"
-    )
+    # @unittest.skip(
+    #     "In-place op support in selective checkpointing + torch.compile "
+    #     "requires TorchDispatchMode + torch.compile work to complete"
+    # )
     @torch._dynamo.config.patch(
         "_experimental_support_context_fn_in_torch_utils_checkpoint", True
     )
