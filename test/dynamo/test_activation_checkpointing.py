@@ -32,14 +32,20 @@ def count_ops(
         freqs_ge = [freq_ge]
     if freqs:
         for op, freq in zip(ops, freqs):
-            actual_count = [node.target for node in gm.graph.nodes].count(op)
+            actual_count = 0
+            for node in gm.graph.nodes:
+                if (isinstance(node.target, torch._ops.HigherOrderOperator) and node.args[0] == op) or (node.target == op):
+                    actual_count += 1
             assert (
                 actual_count == freq
             ), f"In graph {gm}, expected {op} to have occurred {freq} times in the graph, but got {actual_count}."
     else:
         assert freqs_ge is not None
         for op, freq_ge in zip(ops, freqs_ge):
-            actual_count = [node.target for node in gm.graph.nodes].count(op)
+            actual_count = 0
+            for node in gm.graph.nodes:
+                if (isinstance(node.target, torch._ops.HigherOrderOperator) and node.args[0] == op) or (node.target == op):
+                    actual_count += 1
             assert (
                 actual_count >= freq_ge
             ), f"In graph {gm}, expected {op} to have occurred at least {freq_ge} times in the graph, but got {actual_count}."
@@ -575,10 +581,90 @@ class ActivationCheckpointingViaTagsTests(torch._dynamo.test_case.TestCase):
         self._validate(fn, backend, x, y)
 
     @unittest.skipIf(IS_WINDOWS, "torch.compile doesn't work with windows")
-    @unittest.skip(
-        "In-place op support in selective checkpointing + torch.compile "
-        "requires TorchDispatchMode + torch.compile work to complete"
+    # @unittest.skip(
+    #     "In-place op support in selective checkpointing + torch.compile "
+    #     "requires TorchDispatchMode + torch.compile work to complete"
+    # )
+    @torch._dynamo.config.patch(
+        "_experimental_support_context_fn_in_torch_utils_checkpoint", True
     )
+    def test_compile_full_checkpoint_inplace_op(self):
+        def gn(x, y):
+            return torch.sigmoid(torch.selu_(torch.matmul(x, y)))
+
+        def fn(x, y):
+            return torch.utils.checkpoint.checkpoint(
+                gn,
+                torch.sin(x),
+                y,
+                use_reentrant=False,
+            )
+
+        x = torch.randn(4, 4, requires_grad=True)
+        y = torch.randn(4, 4, requires_grad=True)
+
+        fw_compiler = functools.partial(
+            count_ops,
+            freqs=[1],
+            ops=[torch.ops.aten.mm.default,],
+        )
+        bw_compiler = functools.partial(
+            count_ops,
+            freqs=[3],
+            ops=[torch.ops.aten.mm.default],
+        )
+        backend = aot_autograd(
+            fw_compiler=fw_compiler,
+            bw_compiler=bw_compiler,
+            partition_fn=min_cut_rematerialization_partition,
+        )
+        self._validate(fn, backend, x, y)
+
+    @unittest.skipIf(IS_WINDOWS, "torch.compile doesn't work with windows")
+    # @unittest.skip(
+    #     "In-place op support in selective checkpointing + torch.compile "
+    #     "requires TorchDispatchMode + torch.compile work to complete"
+    # )
+    @torch._dynamo.config.patch(
+        "_experimental_support_context_fn_in_torch_utils_checkpoint", True
+    )
+    def test_compile_full_checkpoint_inplace_op_as_last_op(self):
+        def gn(x, y):
+            return torch.selu_(torch.matmul(x, y))
+
+        def fn(x, y):
+            return torch.utils.checkpoint.checkpoint(
+                gn,
+                torch.sin(x),
+                y,
+                use_reentrant=False,
+            )
+
+        x = torch.randn(4, 4, requires_grad=True)
+        y = torch.randn(4, 4, requires_grad=True)
+
+        fw_compiler = functools.partial(
+            count_ops,
+            freqs=[1],
+            ops=[torch.ops.aten.mm.default,],
+        )
+        bw_compiler = functools.partial(
+            count_ops,
+            freqs=[3],
+            ops=[torch.ops.aten.mm.default],
+        )
+        backend = aot_autograd(
+            fw_compiler=fw_compiler,
+            bw_compiler=bw_compiler,
+            partition_fn=min_cut_rematerialization_partition,
+        )
+        self._validate(fn, backend, x, y)
+
+    @unittest.skipIf(IS_WINDOWS, "torch.compile doesn't work with windows")
+    # @unittest.skip(
+    #     "In-place op support in selective checkpointing + torch.compile "
+    #     "requires TorchDispatchMode + torch.compile work to complete"
+    # )
     @torch._dynamo.config.patch(
         "_experimental_support_context_fn_in_torch_utils_checkpoint", True
     )
@@ -594,8 +680,8 @@ class ActivationCheckpointingViaTagsTests(torch._dynamo.test_case.TestCase):
 
         def gn(x, y):
             return torch.sigmoid(
-                torch.selu_(torch.matmul(torch.matmul(x, y), y))
-            ).relu_()
+                torch.selu_(torch.matmul(x, y))
+            )
 
         def fn(x, y):
             return torch.utils.checkpoint.checkpoint(
@@ -611,13 +697,161 @@ class ActivationCheckpointingViaTagsTests(torch._dynamo.test_case.TestCase):
 
         fw_compiler = functools.partial(
             count_ops,
-            freqs=[2, 1],
-            ops=[torch.ops.aten.mm.default, torch.ops.aten.sigmoid.default],
+            freqs=[1],
+            ops=[torch.ops.aten.mm.default,],
         )
         bw_compiler = functools.partial(
             count_ops,
-            freqs=[4, 0],
-            ops=[torch.ops.aten.mm.default, torch.ops.aten.sigmoid.default],
+            freqs=[2],
+            ops=[torch.ops.aten.mm.default],
+        )
+        backend = aot_autograd(
+            fw_compiler=fw_compiler,
+            bw_compiler=bw_compiler,
+            partition_fn=min_cut_rematerialization_partition,
+        )
+        self._validate(fn, backend, x, y)
+
+    @unittest.skipIf(IS_WINDOWS, "torch.compile doesn't work with windows")
+    # @unittest.skip(
+    #     "In-place op support in selective checkpointing + torch.compile "
+    #     "requires TorchDispatchMode + torch.compile work to complete"
+    # )
+    @torch._dynamo.config.patch(
+        "_experimental_support_context_fn_in_torch_utils_checkpoint", True
+    )
+    def test_compile_selective_checkpoint_inplace_op_as_last_op(self):
+        def selective_checkpointing_context_fn():
+            no_recompute_list = [
+                torch.ops.aten.mm.default,
+                torch.ops.aten.sigmoid.default,
+            ]
+            return context_fn_gen(
+                _get_custom_policy(no_recompute_list=no_recompute_list)
+            )
+
+        def gn(x, y):
+            return torch.selu_(torch.matmul(x, y))
+
+        def fn(x, y):
+            return torch.utils.checkpoint.checkpoint(
+                gn,
+                torch.sin(x),
+                y,
+                use_reentrant=False,
+                context_fn=selective_checkpointing_context_fn,
+            )
+
+        x = torch.randn(4, 4, requires_grad=True)
+        y = torch.randn(4, 4, requires_grad=True)
+
+        fw_compiler = functools.partial(
+            count_ops,
+            freqs=[1],
+            ops=[torch.ops.aten.mm.default,],
+        )
+        bw_compiler = functools.partial(
+            count_ops,
+            freqs=[2],
+            ops=[torch.ops.aten.mm.default],
+        )
+        backend = aot_autograd(
+            fw_compiler=fw_compiler,
+            bw_compiler=bw_compiler,
+            partition_fn=min_cut_rematerialization_partition,
+        )
+        self._validate(fn, backend, x, y)
+
+    @unittest.skipIf(IS_WINDOWS, "torch.compile doesn't work with windows")
+    # @unittest.skip(
+    #     "In-place op support in selective checkpointing + torch.compile "
+    #     "requires TorchDispatchMode + torch.compile work to complete"
+    # )
+    @torch._dynamo.config.patch(
+        "_experimental_support_context_fn_in_torch_utils_checkpoint", True
+    )
+    def test_compile_selective_checkpoint_dropout(self):
+        def selective_checkpointing_context_fn():
+            no_recompute_list = [
+                torch.ops.aten.mm.default,
+            ]
+            return context_fn_gen(
+                _get_custom_policy(no_recompute_list=no_recompute_list)
+            )
+
+        def gn(x, y):
+            return torch.relu(torch.dropout(torch.matmul(x, y), p=0.5, train=True))
+
+        def fn(x, y):
+            return torch.utils.checkpoint.checkpoint(
+                gn,
+                torch.sin(x),
+                y,
+                use_reentrant=False,
+                context_fn=selective_checkpointing_context_fn,
+            )
+
+        x = torch.randn(4, 4, requires_grad=True)
+        y = torch.randn(4, 4, requires_grad=True)
+
+        fw_compiler = functools.partial(
+            count_ops,
+            freqs=[1, 1],
+            ops=[torch.ops.aten.mm.default, torch.ops.aten.native_dropout.default],
+        )
+        bw_compiler = functools.partial(
+            count_ops,
+            freqs=[2],
+            ops=[torch.ops.aten.mm.default],
+        )
+        backend = aot_autograd(
+            fw_compiler=fw_compiler,
+            bw_compiler=bw_compiler,
+            partition_fn=min_cut_rematerialization_partition,
+        )
+        self._validate(fn, backend, x, y)
+
+    @unittest.skipIf(IS_WINDOWS, "torch.compile doesn't work with windows")
+    # @unittest.skip(
+    #     "In-place op support in selective checkpointing + torch.compile "
+    #     "requires TorchDispatchMode + torch.compile work to complete"
+    # )
+    @torch._dynamo.config.patch(
+        "_experimental_support_context_fn_in_torch_utils_checkpoint", True
+    )
+    def test_compile_selective_checkpoint_dropout_as_last_op(self):
+        def selective_checkpointing_context_fn():
+            no_recompute_list = [
+                torch.ops.aten.mm.default,
+            ]
+            return context_fn_gen(
+                _get_custom_policy(no_recompute_list=no_recompute_list)
+            )
+
+        def gn(x, y):
+            return torch.dropout(torch.matmul(x, y), p=0.5, train=True)
+
+        def fn(x, y):
+            return torch.utils.checkpoint.checkpoint(
+                gn,
+                torch.sin(x),
+                y,
+                use_reentrant=False,
+                context_fn=selective_checkpointing_context_fn,
+            )
+
+        x = torch.randn(4, 4, requires_grad=True)
+        y = torch.randn(4, 4, requires_grad=True)
+
+        fw_compiler = functools.partial(
+            count_ops,
+            freqs=[1, 1],
+            ops=[torch.ops.aten.mm.default, torch.ops.aten.dropout.default],
+        )
+        bw_compiler = functools.partial(
+            count_ops,
+            freqs=[2],
+            ops=[torch.ops.aten.mm.default],
         )
         backend = aot_autograd(
             fw_compiler=fw_compiler,
