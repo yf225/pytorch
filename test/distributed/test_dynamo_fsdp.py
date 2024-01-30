@@ -1,9 +1,9 @@
 """
-1/29/2024: Copied this file from https://github.com/pytorch/pytorch/pull/110609.
+Adapted from fsdp.py in https://github.com/pytorch/pytorch/pull/110609.
 """
 
 """
-torchrun --standalone --nproc_per_node=2 test_dynamo_fsdp.py
+TORCH_LOGS_RANKS=0 TORCH_COMPILE_DEBUG=1 torchrun --standalone --nproc_per_node=2 test/distributed/test_dynamo_fsdp.py
 """
 import contextlib
 import logging
@@ -107,6 +107,7 @@ def main(compiled_fwd, compiled_bwd, aot_eager):
             torch_log.warning("RUNNING COMPILE with backend %s", backend)
             torch._dynamo.config.capture_dynamic_output_shape_ops = True
             torch._dynamo.config.capture_scalar_outputs = True
+            torch._dynamo.config.trace_distributed = True
             model = torch._dynamo.optimize(backend, nopython=True, dynamic=False)(model)
             res = run(model, optim)
         else:
@@ -121,7 +122,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--compiled-fwd', action='store_true', default=True)
     parser.add_argument('--no-compiled-fwd', action='store_false', dest='compiled_fwd')
-    parser.add_argument('--compiled-bwd', action='store_true', default=False)
+    parser.add_argument('--compiled-bwd', action='store_true', default=True)
     parser.add_argument('--no-compiled-bwd', action='store_false', dest='compiled_bwd')
     parser.add_argument('--aot-eager', action='store_true', default=True)
     parser.add_argument('--no-aot-eager', action='store_false', dest='aot_eager')

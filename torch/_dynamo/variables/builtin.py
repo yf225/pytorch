@@ -1287,7 +1287,13 @@ class BuiltinVariable(VariableTracker):
                 # Note - this distributed check is a hack - we rely on the fact that we know
                 # in our current distributed approaches (DDP, FSDP, etc) that we never do this
                 # mutation in a way that introduce a new leaf from a non leaf or vice versa.
+                #
+                # Concretely, for FSDP, this happens in:
+                #   File "torch/distributed/fsdp/_flat_param.py", line 2385, in _reset_flat_param_grad_info_if_needed
+                #     flat_param.requires_grad = requires_grad
+                #
                 # TODO(voz): Teach aot_autograd to handle this case properly.
+                # TODO(yf225): As an easier approach, consider whether to introduce an API just for this specific case in FSDP, and remove `config.trace_distributed`
                 if name == "requires_grad" and not config.trace_distributed:
                     unimplemented(
                         "mutating requires_grad can introduce a new leaf from non-leaf or vice versa in "

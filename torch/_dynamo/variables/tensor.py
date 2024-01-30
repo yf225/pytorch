@@ -713,6 +713,7 @@ class TensorVariable(VariableTracker):
             # so Jansel proposed we just use the same higher order op pattern Voz uses for
             # intermediaries.
             compiled_autograd_enabled = compiled_autograd.compiled_autograd_enabled
+            # TODO(yf225): remove `config.trace_distributed`
             should_treat_post_acc_grad_hook_as_intermediary = compiled_autograd_enabled and name == "register_post_accumulate_grad_hook" and config.trace_distributed
             if not self.source or should_treat_post_acc_grad_hook_as_intermediary:
                 # Intermediary

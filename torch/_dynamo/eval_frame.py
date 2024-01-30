@@ -1533,6 +1533,7 @@ class TorchPatcher:
 
         # annoying - we cannot annotate these functions directly due to
         # torch.package issues, see https://github.com/pytorch/pytorch/pull/116229
+        # TODO(yf225): remove config.trace_distributed and do this by default.
         if config.trace_distributed and torch.distributed.is_available():
             import torch.distributed.fsdp._flat_param as flat_param
 
