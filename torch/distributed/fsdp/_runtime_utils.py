@@ -1,3 +1,4 @@
+import contextlib
 import functools
 import logging
 from enum import auto, Enum
@@ -317,7 +318,10 @@ def _unshard(
     """
     if not handle:
         return
-    with state._device_handle.stream(pre_unshard_stream):
+    ctx = contextlib.nullcontext()
+    if not torch.distributed._functional_collectives.is_torchdynamo_compiling():
+        ctx = state._device_handle.stream(pre_unshard_stream)
+    with ctx:
         ran_pre_unshard = handle.pre_unshard()
     if ran_pre_unshard:
         unshard_stream.wait_stream(pre_unshard_stream)
@@ -328,7 +332,10 @@ def _unshard(
                 "FullyShardedDataParallel.rate_limiter"
             ):
                 event.synchronize()
-    with state._device_handle.stream(unshard_stream):
+    ctx = contextlib.nullcontext()
+    if not torch.distributed._functional_collectives.is_torchdynamo_compiling():
+        ctx = state._device_handle.stream(unshard_stream)
+    with ctx:
         handle.unshard()
         handle.post_unshard()
 
@@ -768,7 +775,10 @@ def _post_backward_hook(
                 state._device_handle.current_stream()
             )
 
-        with state._device_handle.stream(state._post_backward_stream):
+        ctx = contextlib.nullcontext()
+        if not torch.distributed._functional_collectives.is_torchdynamo_compiling():
+            ctx = state._device_handle.stream(state._post_backward_stream)
+        with ctx:
             autograd_computed_grad = flat_param.grad.data
             if (
                 not _low_precision_hook_enabled(state)
@@ -864,7 +874,10 @@ def _reduce_grad(state: _FSDPState, handle: FlatParamHandle) -> None:
             # Don't wait during trace
             if not torch.distributed._functional_collectives.is_torchdynamo_compiling():
                 state._all_reduce_stream.wait_stream(state._post_backward_stream)
-            with state._device_handle.stream(state._all_reduce_stream):
+            ctx = contextlib.nullcontext()
+            if not torch.distributed._functional_collectives.is_torchdynamo_compiling():
+                ctx = state._device_handle.stream(state._all_reduce_stream)
+            with ctx:
                 # Since the new sharded gradient is produced in the post-
                 # backward stream and consumed in the all-reduce stream,
                 # inform the caching allocator

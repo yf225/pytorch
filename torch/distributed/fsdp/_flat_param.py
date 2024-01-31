@@ -915,6 +915,7 @@ class FlatParamHandle:
                 allocated = flat_param._typed_storage()._size() > 0
                 if allocated:
                     flat_param._typed_storage()._resize_(0)
+            self._compile_only_flat_param_storage_size = 0
             flat_param.set_(sharded_flat_param)  # type: ignore[call-overload]
             start_idx = sharded_flat_param.numel() * self.rank
             end_idx = sharded_flat_param.numel() * (self.rank + 1) - 1  # inclusive
@@ -1281,6 +1282,7 @@ class FlatParamHandle:
         )
         # Invariant: `_mp_shard` is always on the compute device.
         flat_param.data = flat_param._mp_shard  # type: ignore[attr-defined]
+        self._compile_only_flat_param_storage_size = flat_param.numel() * flat_param.element_size()
 
     def unshard(self):
         """
@@ -1303,19 +1305,26 @@ class FlatParamHandle:
                 else self.flat_param
             )
             self._use_unsharded_flat_param(unsharded_flat_param)
+            self._compile_only_flat_param_storage_size = self.flat_param.numel() * self.flat_param.element_size()
             return
         unsharded_flat_param = self._alloc_padded_unsharded_flat_param()
         padded_unsharded_flat_param = self._all_gather_flat_param(unsharded_flat_param)
         self._use_unsharded_flat_param(padded_unsharded_flat_param)
+        self._compile_only_flat_param_storage_size = self.flat_param.numel() * self.flat_param.element_size()
 
     def needs_unshard(self) -> bool:
         """Return if the handle's flat parameter needs to be unsharded."""
         if not self.uses_sharded_strategy:
             return False
         unsharded_flat_param = self._get_padded_unsharded_flat_param()
-        already_unsharded = _same_storage_size(
-            unsharded_flat_param, unsharded_flat_param.numel()
-        )
+        if not torch.distributed._functional_collectives.is_torchdynamo_compiling():
+            already_unsharded = _same_storage_size(
+                unsharded_flat_param, unsharded_flat_param.numel()
+            )
+        else:
+            already_unsharded = _same_storage_size_compile(
+                self._compile_only_flat_param_storage_size, unsharded_flat_param.element_size(), unsharded_flat_param.numel()
+            )
         return not already_unsharded
 
     def _alloc_padded_unsharded_flat_param(self):
@@ -1425,6 +1434,7 @@ class FlatParamHandle:
         flat_param_part = padded_unsharded_flat_param[: unsharded_size.numel()]
         # slicing [:] is not visible to autograd because of .data
         self.flat_param.data = flat_param_part
+        self._compile_only_flat_param_storage_size = self.flat_param.numel() * self.flat_param.element_size()
         in_forward = self._training_state == HandleTrainingState.FORWARD
         in_pre_backward = self._training_state == HandleTrainingState.BACKWARD_PRE
         if self._use_orig_params:
@@ -1766,6 +1776,7 @@ class FlatParamHandle:
                 f"Expects the local shard to be on CPU but got {device}",
             )
         flat_param.data = flat_param._local_shard  # type: ignore[attr-defined]
+        self._compile_only_flat_param_storage_size = flat_param.numel() * flat_param.element_size()
         if self._use_orig_params:
             if skip_use_sharded_views:
                 self._unsharded_flat_param_for_skipped_views = unsharded_flat_param
@@ -2716,6 +2727,10 @@ def _same_storage(a, b):
 
 def _same_storage_size(a: torch.Tensor, b: int):
     return a.untyped_storage().size() // a.element_size() == b
+
+
+def _same_storage_size_compile(a_size: int, a_element_size: int, b: int):
+    return a_size // a_element_size == b
 
 
 def _storage_size_allocated(tensor: Tensor):
