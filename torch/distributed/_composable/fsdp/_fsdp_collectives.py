@@ -1,4 +1,4 @@
-from typing import List, NamedTuple, Optional
+from typing import List, NamedTuple, Optional, Any
 
 import torch
 import torch.distributed as dist
@@ -10,6 +10,7 @@ from ._fsdp_common import (
 )
 
 from ._fsdp_param import FSDPParam
+import contextlib
 
 
 class AllGatherResult(NamedTuple):
@@ -28,6 +29,9 @@ class AllGatherState(NamedTuple):
 @torch.no_grad()
 def foreach_all_gather(
     fsdp_params: List[FSDPParam],
+    param_all_gather_inputs: List[torch.Tensor],
+    inp_split_sizes: List[int],
+    all_gather_input_numel: int,
     group: dist.ProcessGroup,
     async_op: bool,
     all_gather_copy_in_stream: torch.cuda.Stream,
@@ -37,12 +41,15 @@ def foreach_all_gather(
 ) -> Optional[AllGatherResult]:
     world_size, rank = group.size(), group.rank()
     # - Copy in
-    with torch.cuda.stream(all_gather_copy_in_stream):
-        param_all_gather_inputs = [
-            fsdp_param.all_gather_input for fsdp_param in fsdp_params
-        ]
-        inp_split_sizes = [inp.numel() for inp in param_all_gather_inputs]
-        all_gather_input_numel = sum(inp_split_sizes)
+    ctx = contextlib.nullcontext()
+    if not torch.distributed._functional_collectives.is_torchdynamo_compiling():
+        ctx = torch.cuda.stream(all_gather_copy_in_stream)
+    with ctx:
+        # param_all_gather_inputs = [
+        #     fsdp_param.all_gather_input for fsdp_param in fsdp_params
+        # ]
+        # inp_split_sizes = [inp.numel() for inp in param_all_gather_inputs]
+        # all_gather_input_numel = sum(inp_split_sizes)
         all_gather_output = torch.empty(
             (all_gather_input_numel * world_size,), dtype=dtype, device=device
         )
@@ -52,10 +59,15 @@ def foreach_all_gather(
         foreach_copy_dsts = torch.split(all_gather_input, inp_split_sizes)
         torch._foreach_copy_(foreach_copy_dsts, param_all_gather_inputs)
         del param_all_gather_inputs
-        all_gather_copy_in_event = torch.cuda.Event()
-        all_gather_copy_in_event.record()
-    all_gather_stream.wait_event(all_gather_copy_in_event)
-    with torch.cuda.stream(all_gather_stream):
+        if not torch.distributed._functional_collectives.is_torchdynamo_compiling():
+            all_gather_copy_in_event = torch.cuda.Event()
+            all_gather_copy_in_event.record()
+    if not torch.distributed._functional_collectives.is_torchdynamo_compiling():
+        all_gather_stream.wait_event(all_gather_copy_in_event)
+    ctx = contextlib.nullcontext()
+    if not torch.distributed._functional_collectives.is_torchdynamo_compiling():
+        ctx = torch.cuda.stream(all_gather_stream)
+    with ctx:
         # - All-gather
         all_gather_work = dist.all_gather_into_tensor(
             output_tensor=all_gather_output,
@@ -63,8 +75,11 @@ def foreach_all_gather(
             group=group,
             async_op=async_op,
         )
-        all_gather_event = torch.cuda.Event()
-        all_gather_event.record()
+        if not torch.distributed._functional_collectives.is_torchdynamo_compiling():
+            all_gather_event = torch.cuda.Event()
+            all_gather_event.record()
+        else:
+            all_gather_event = None
         return AllGatherResult(
             all_gather_output, all_gather_event, all_gather_work, inp_split_sizes
         )
@@ -79,7 +94,8 @@ def foreach_all_gather_copy_out(
     if (event := all_gather_result.all_gather_event) is not None:  # sync op
         torch.cuda.current_stream().wait_event(event)
     if (work := all_gather_result.all_gather_work) is not None:  # async op
-        work.wait()
+        if not torch.distributed._functional_collectives.is_torchdynamo_compiling():
+            work.wait()
     world_size = group.size()
     dtype, device = all_gather_output.dtype, all_gather_output.device
     for all_gather_input_numel, fsdp_param in zip(all_gather_input_numels, fsdp_params):
@@ -93,7 +109,11 @@ def foreach_all_gather_copy_out(
     ]
     # TODO: Use `torch.split_with_sizes_copy` fast path once it lands.
     splits = torch.split(all_gather_output, all_gather_input_numels, dim=1)
-    with _unsafe_preserve_version_counters(out):
+    # TODO(yf225): need to think about whether we need this in compile mode
+    ctx = contextlib.nullcontext()
+    if not torch.distributed._functional_collectives.is_torchdynamo_compiling():
+        ctx = _unsafe_preserve_version_counters(out)
+    with ctx:
         torch._foreach_copy_(out, splits)  # one `copy_` per parameter
 
 

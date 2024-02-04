@@ -31,25 +31,64 @@ _ModuleToHandleDict = Dict[nn.Module, RemovableHandle]  # for state dict
 class FSDPCommContext:
     """This has the communication state shared across FSDP states/parameter groups."""
 
-    def init(self):
+    def init(self, compile=False):
         # Setting the all-gather/reduce-scatter streams to be higher priority
         # can help avoid some issues where their copies in/out are delayed and
         # block computation
         high_priority = -1
-        self.default_stream = torch.cuda.current_stream()
+        self.default_stream = torch.cuda.current_stream() if not compile else None
         # All-gather state and copy-in stream allow overlapping the next
         # copy-in with the current all-gather in forward; copy-in overlaps with
         # reduce-scatter in backward without the separate copy-in stream
-        self.all_gather_copy_in_stream = torch.cuda.Stream(priority=high_priority)
+        self.all_gather_copy_in_stream = torch.cuda.Stream(priority=high_priority) if not compile else None
         self.all_gather_state: Optional[AllGatherState] = None
         # All-gather stream allows overlapping next all-gather with current
         # forward compute
-        self.all_gather_stream = torch.cuda.Stream(priority=high_priority)
+        self.all_gather_stream = torch.cuda.Stream(priority=high_priority) if not compile else None
         # Reduce-scatter stream gives separate execution "thread" for post-
         # backward logic like pre/post-gradient division and reduce-scatter
-        self.reduce_scatter_stream = torch.cuda.Stream(priority=high_priority)
+        self.reduce_scatter_stream = torch.cuda.Stream(priority=high_priority) if not compile else None
         # Post-forward order for explicit backward prefetching
         self.post_forward_order: List[FSDPParamGroup] = []
+
+
+# TODO(yf225): moved to global due to "UNPACK_SEQUENCE" error, not sure why, need debug
+def param_group_pre_forward(
+    param_group, module: nn.Module, args: Tuple[Any, ...], kwargs: Dict[str, Any]
+) -> Tuple[Tuple[Any, ...], Dict[str, Any]]:
+    with torch.profiler.record_function("FSDP::param_group_pre_forward"):
+        param_group._training_state = TrainingState.FORWARD
+        param_group.unshard()
+        param_group.wait_for_unshard()
+        args, kwargs = _param_group_register_post_backward_hook(param_group, args, kwargs)
+        return args, kwargs
+
+
+def _param_group_register_post_backward_hook(
+    param_group, args: Tuple[Any, ...], kwargs: Dict[str, Any]
+) -> Tuple[Tuple[Any, ...], Dict[str, Any]]:
+    if not torch.is_grad_enabled():
+        return args, kwargs
+    args_list, args_spec = tree_flatten(args)
+    kwargs_list, kwargs_spec = tree_flatten(kwargs)
+    args_kwargs_list = list(args_list) + list(kwargs_list)
+    inp_tensor_indices: List[int] = []
+    inp_tensors: List[torch.Tensor] = []
+    for i, obj in enumerate(args_kwargs_list):
+        if not torch.is_tensor(obj) or not obj.requires_grad:
+            continue
+        inp_tensor_indices.append(i)
+        inp_tensors.append(obj)
+    if len(inp_tensors) == 0:
+        return args, kwargs  # no tensors that require gradients
+    inp_tensors = RegisterPostBackwardHook.apply(param_group, *inp_tensors)
+    for inp_tensor_idx, inp_tensor in zip(inp_tensor_indices, inp_tensors):
+        args_kwargs_list[inp_tensor_idx] = inp_tensor
+    args_list = args_kwargs_list[: len(args_list)]
+    kwargs_list = args_kwargs_list[len(args_list) :]
+    args = tree_unflatten(args_list, args_spec)
+    kwargs = tree_unflatten(kwargs_list, kwargs_spec)
+    return args, kwargs
 
 
 class FSDPParamGroup:
@@ -76,6 +115,11 @@ class FSDPParamGroup:
             )
             for param, module_info in zip(params, param_module_infos)
         ]
+        self.param_all_gather_inputs = [
+            fsdp_param.all_gather_input for fsdp_param in self.fsdp_params
+        ]
+        self.inp_split_sizes = [inp.numel() for inp in self.param_all_gather_inputs]
+        self.all_gather_input_numel = sum(self.inp_split_sizes)
         self.mesh_info = mesh_info
         self.post_forward_mesh_info = post_forward_mesh_info
         self.device = device
@@ -172,7 +216,10 @@ class FSDPParamGroup:
             self._reshard_after_forward_event = None
         self._all_gather_result = foreach_all_gather(
             self.fsdp_params,
-            self._all_gather_process_group,
+            self.param_all_gather_inputs,
+            self.inp_split_sizes,
+            self.all_gather_input_numel,
+            self._all_gather_process_group(),
             async_op,
             self._all_gather_copy_in_stream_for_unshard,
             self._all_gather_stream_for_unshard,
@@ -196,7 +243,7 @@ class FSDPParamGroup:
                 self._wait_all_gather_streams_on_event(prev_all_gather_state.event)
                 self.comm_ctx.all_gather_state = None  # free the all-gather result
         foreach_all_gather_copy_out(
-            self._all_gather_result, self.fsdp_params, self._all_gather_process_group
+            self._all_gather_result, self.fsdp_params, self._all_gather_process_group()
         )
         for fsdp_param in self.fsdp_params:
             fsdp_param.init_unsharded_param()  # no-op after 1st call
@@ -212,8 +259,9 @@ class FSDPParamGroup:
         self._all_gather_result = None  # free unless saved in `all_gather_state`
 
     def _wait_all_gather_streams_on_event(self, event: torch.cuda.Event):
-        self.comm_ctx.all_gather_copy_in_stream.wait_event(event)
-        self.comm_ctx.all_gather_stream.wait_event(event)
+        if not torch.distributed._functional_collectives.is_torchdynamo_compiling():
+            self.comm_ctx.all_gather_copy_in_stream.wait_event(event)
+            self.comm_ctx.all_gather_stream.wait_event(event)
 
     def reshard(self):
         if self._training_state == TrainingState.FORWARD:
@@ -225,16 +273,6 @@ class FSDPParamGroup:
                 self._reshard_after_forward_event.record()
                 return
         self._to_sharded()
-
-    def pre_forward(
-        self, module: nn.Module, args: Tuple[Any, ...], kwargs: Dict[str, Any]
-    ) -> Tuple[Tuple[Any, ...], Dict[str, Any]]:
-        with torch.profiler.record_function("FSDP::pre_forward"):
-            self._training_state = TrainingState.FORWARD
-            self.unshard()
-            self.wait_for_unshard()
-            args, kwargs = self._register_post_backward_hook(args, kwargs)
-            return args, kwargs
 
     def post_forward(self, module: nn.Module, input: Any, output: Any):
         with torch.profiler.record_function("FSDP::post_forward"):
@@ -347,32 +385,6 @@ class FSDPParamGroup:
             self._training_state = old_training_state
 
     # Hook Registration #
-    def _register_post_backward_hook(
-        self, args: Tuple[Any, ...], kwargs: Dict[str, Any]
-    ) -> Tuple[Tuple[Any, ...], Dict[str, Any]]:
-        if not torch.is_grad_enabled():
-            return args, kwargs
-        args_list, args_spec = tree_flatten(args)
-        kwargs_list, kwargs_spec = tree_flatten(kwargs)
-        args_kwargs_list = list(args_list) + list(kwargs_list)
-        inp_tensor_indices: List[int] = []
-        inp_tensors: List[torch.Tensor] = []
-        for i, obj in enumerate(args_kwargs_list):
-            if not torch.is_tensor(obj) or not obj.requires_grad:
-                continue
-            inp_tensor_indices.append(i)
-            inp_tensors.append(obj)
-        if len(inp_tensors) == 0:
-            return args, kwargs  # no tensors that require gradients
-        inp_tensors = RegisterPostBackwardHook.apply(self, *inp_tensors)
-        for inp_tensor_idx, inp_tensor in zip(inp_tensor_indices, inp_tensors):
-            args_kwargs_list[inp_tensor_idx] = inp_tensor
-        args_list = args_kwargs_list[: len(args_list)]
-        kwargs_list = args_kwargs_list[len(args_list) :]
-        args = tree_unflatten(args_list, args_spec)
-        kwargs = tree_unflatten(kwargs_list, kwargs_spec)
-        return args, kwargs
-
     def _register_state_dict_hooks(self) -> None:
         assert len(self._module_to_pre_save_state_dict_hook_handle) == 0
         assert len(self._module_to_pre_load_state_dict_hook_handle) == 0
@@ -403,14 +415,13 @@ class FSDPParamGroup:
             and self.mesh_info != self.post_forward_mesh_info
         )
 
-    @property
     def _all_gather_process_group(self) -> dist.ProcessGroup:
         mesh_info = (
             cast(FSDPMeshInfo, self.post_forward_mesh_info)
             if self._sharded_state == ShardedState.SHARDED_POST_FORWARD
             else self.mesh_info
         )
-        assert isinstance(mesh_info, FSDPMeshInfo)
+        # assert isinstance(mesh_info, FSDPMeshInfo)
         return mesh_info.shard_process_group
 
     @property

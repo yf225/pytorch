@@ -222,6 +222,7 @@ class ProcessGroupVariable(DistributedVariable):
         if name == "rank":
             return variables.ConstantVariable.create(self.value.rank())
         if name == "size":
+            print(f"self.value: {self.value}")
             return variables.ConstantVariable.create(self.value.size())
 
         return super().call_method(tx, name, args, kwargs)

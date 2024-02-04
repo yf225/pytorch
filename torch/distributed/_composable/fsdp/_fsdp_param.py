@@ -375,7 +375,7 @@ class FSDPParam:
         )
 
     def alloc_all_gather_output(self) -> None:
-        unsafe_alloc_storage(self.all_gather_output)
+        unsafe_alloc_storage(self.all_gather_output, self)
 
     def free_all_gather_output(self) -> None:
         unsafe_free_storage(self.all_gather_output)
@@ -417,15 +417,20 @@ class FSDPParam:
 # NOTE: Unsafe here refers to not checking whether the storage is already
 # allocated or freed, respectively. We should be safe to use them since we
 # explicitly manage the state transition.
-def unsafe_alloc_storage(tensor: torch.Tensor) -> None:
+def unsafe_alloc_storage(tensor: torch.Tensor, fsdp_param: FSDPParam) -> None:
     # Skip the already-allocated check and assume that `tensor` is the base
     # tensor to save CPU overhead
-    tensor.untyped_storage().resize_(tensor.numel() * tensor.itemsize)
+    new_storage_size = tensor.numel() * tensor.itemsize
+    if not torch.distributed._functional_collectives.is_torchdynamo_compiling():
+        tensor.untyped_storage().resize_(new_storage_size)
+    fsdp_param._tensor_storage_size = new_storage_size
 
 
 def unsafe_free_storage(tensor: torch.Tensor) -> None:
     # Skip the already-freed check to save CPU overhead
-    tensor.untyped_storage().resize_(0)
+    if not torch.distributed._functional_collectives.is_torchdynamo_compiling():
+        tensor.untyped_storage().resize_(0)
+    fsdp_param._tensor_storage_size = 0
 
 
 # NOTE: These bypass `nn.Module.__setattr__` checks, which incur non-trivial

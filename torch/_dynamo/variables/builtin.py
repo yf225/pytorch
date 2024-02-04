@@ -80,6 +80,19 @@ IN_PLACE_DESUGARING_MAP = {
 }
 
 
+def _resolve_GetAttrVariable(var):
+    if isinstance(var.obj, variables.GetAttrVariable):
+        return _resolve_GetAttrVariable(var.obj)
+    else:
+        assert isinstance(var.obj, variables.UserDefinedObjectVariable)
+        out = inspect.getattr_static(var.obj.value, var.name)
+        if var.name == "_fsdp_param_group":
+            out = variables.UserDefinedObjectVariable(out)
+        else:
+            raise Exception(f"out: {out}, type(out): {type(out)}")
+        return out
+
+
 def _polyfill_call_impl(name):
     """Create a BuiltinVariable.call_{name} method that inlines through polyfill.{name}"""
 
@@ -1047,9 +1060,18 @@ class BuiltinVariable(VariableTracker):
             return variables.TupleVariable(items)
 
     def call_len(self, tx, *args, **kwargs):
+        # # TODO(yf225): can we do this? why or why not?
+        # if isinstance(args[0], variables.GetAttrVariable):
+        #     args_0 = _resolve_GetAttrVariable(args[0])
+        #     if isinstance(args_0, list):
+        #         return variables.ConstantVariable(len(args_0))
         return args[0].call_method(tx, "__len__", args[1:], kwargs)
 
     def call_getitem(self, tx, *args, **kwargs):
+        # # TODO(yf225): can we do this? why or why not?
+        # if isinstance(args[0], variables.GetAttrVariable) and args[0].name == "fsdp_params":
+        #     args_0 = _resolve_GetAttrVariable(args[0])
+        #     return variables.UserDefinedObjectVariable(args_0[args[1].value])
         return args[0].call_method(tx, "__getitem__", args[1:], kwargs)
 
     def call_isinstance(self, tx, arg, isinstance_type):
@@ -1323,6 +1345,26 @@ class BuiltinVariable(VariableTracker):
     ):
         from .distributed import PlacementVariable
 
+        print(f"here222 obj: {obj}")
+        # print(f"str(obj.value): {str(obj.value)}")
+
+        if isinstance(obj, variables.GetAttrVariable):
+            final_obj = _resolve_GetAttrVariable(obj)
+        else:
+            final_obj = obj
+        if (
+            isinstance(final_obj, variables.UserDefinedObjectVariable) \
+            and name_var.as_python_constant() in ["_training_state", "_is_root"]
+        ):
+            # TODO(yf225): I am not sure which approach is correct here
+            # tx.output.side_effects.store_attr(final_obj, name_var.as_python_constant(), val)
+            # return val
+            # TODO(yf225): I believe this mutates the Python object state during tracing, which is probably terrible.
+            setattr(
+                final_obj.value, name_var.as_python_constant(), val.as_python_constant()
+            )
+            return ConstantVariable(None)
+
         if isinstance(
             obj,
             (
@@ -1397,7 +1439,7 @@ class BuiltinVariable(VariableTracker):
             return val
         elif isinstance(obj, variables.UserDefinedObjectVariable):
             unimplemented(
-                f"setattr(UserDefinedObjectVariable) {type(obj.value).__setattr__}"
+                f"setattr(UserDefinedObjectVariable) {obj.source} {type(obj.value).__setattr__}"
             )
         elif isinstance(obj, variables.NNModuleVariable):
             if not tx.output.is_root_tracer():
@@ -1549,6 +1591,7 @@ class BuiltinVariable(VariableTracker):
             UserFunctionVariable,
         )
         from .lists import SizeVariable
+        from .nn_module import FSDPManagedNNModuleVariable
         from .tensor import (
             supported_const_comparison_ops,
             supported_tensor_comparison_ops,
@@ -1561,22 +1604,19 @@ class BuiltinVariable(VariableTracker):
 
         if (
             all(
-                isinstance(x, (NNModuleVariable, ConstantVariable))
+                isinstance(x, (NNModuleVariable, ConstantVariable, FSDPManagedNNModuleVariable))
                 for x in [left, right]
             )
             and op in supported_const_comparison_ops.values()
         ):
-            left = (
-                tx.output.get_submodule(left.module_key)
-                if isinstance(left, NNModuleVariable)
-                else left.as_python_constant()
-            )
-            right = (
-                tx.output.get_submodule(right.module_key)
-                if isinstance(right, NNModuleVariable)
-                else right.as_python_constant()
-            )
-            return ConstantVariable.create(op(left, right))
+            def _get(element):
+                if isinstance(element, (NNModuleVariable, FSDPManagedNNModuleVariable)):
+                    return element.module
+                else:
+                    return element.as_python_constant()
+
+            left = _get(left)
+            right = _get(right)
 
         if isinstance(left, UserFunctionVariable):
             if op not in supported_const_comparison_ops.values():
@@ -1668,6 +1708,12 @@ class BuiltinVariable(VariableTracker):
 
         if isinstance(left, BuiltinVariable) and isinstance(right, BuiltinVariable):
             return ConstantVariable.create(op(left.fn, right.fn))
+
+        if isinstance(left, variables.GetAttrVariable) and isinstance(right, variables.EnumVariable):
+            return ConstantVariable.create(op(left.const_getattr(tx, left.name), right.value))
+
+        if isinstance(left, variables.EnumVariable) and isinstance(right, variables.GetAttrVariable):
+            return ConstantVariable.create(op(left.value, right.const_getattr(tx, right.name)))
 
         _unimplemented()
 

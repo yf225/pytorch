@@ -897,7 +897,7 @@ class InstructionTranslatorBase(Checkpointable[InstructionTranslatorGraphState])
             if name in self.f_globals:
                 self.exec_recorder.add_global_var(name, self.f_globals[name])
             else:
-                assert name in self.f_builtins
+                assert name in self.f_builtins, f"name: {name}"
                 self.exec_recorder.builtins[name] = self.f_builtins[name]
 
         if inst.argval == "AssertionError":

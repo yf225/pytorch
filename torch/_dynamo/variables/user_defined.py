@@ -422,6 +422,8 @@ class UserDefinedObjectVariable(UserDefinedVariable):
         super().__init__(**kwargs)
         self.value = value
         self.value_type = value_type or type(value)
+        # print(f"self.value: {self.value}")
+        # print(f"self.value_type: {self.value_type}")
         assert type(value) is self.value_type
 
     def __str__(self):
@@ -434,6 +436,9 @@ class UserDefinedObjectVariable(UserDefinedVariable):
         ]:
             inner = str(getattr(self.value, "__name__", None))
         return f"{self.__class__.__name__}({inner})"
+
+    # def as_proxy(self):
+    #     return self.value
 
     def python_type(self):
         return self.value_type
@@ -498,6 +503,7 @@ class UserDefinedObjectVariable(UserDefinedVariable):
         )
 
         method = self._maybe_get_baseclass_method(name)
+        print(f"call_method: method: {method}")
         if method is not None:
             if method is object.__init__:
                 return ConstantVariable.create(None)
@@ -559,6 +565,16 @@ class UserDefinedObjectVariable(UserDefinedVariable):
                     tx, args, kwargs
                 )
 
+            # if "FSDPState" in str(self.value.__class__):
+            #     return UserMethodVariable(method, self, source=self.source).call_function(
+            #         tx, args, kwargs
+            #     )
+
+            # if name == "_pre_forward":
+            #     return UserMethodVariable(method, self, source=source).call_function(
+            #         tx, args, kwargs
+            #     )
+
             if method is list.__len__ and self.source and not (args or kwargs):
                 install_guard(self.source.make_guard(GuardBuilder.LIST_LENGTH))
                 return ConstantVariable(len(self.value))
@@ -592,6 +608,11 @@ class UserDefinedObjectVariable(UserDefinedVariable):
     def call_function(
         self, tx, args: "List[VariableTracker]", kwargs: "Dict[str, VariableTracker]"
     ) -> "VariableTracker":
+        print(f"self: {self}")
+        print(f"self.value: {self.value}")
+        print(f"self.value_type: {self.value_type}")
+        print(f"self.value.__self__: {self.value.__self__}")
+        print(f'"FSDPState" in str(self.value.__self__): {"FSDPState" in str(self.value.__self__)}')
         from .. import trace_rules
         from .builder import VariableBuilder
 
@@ -600,6 +621,7 @@ class UserDefinedObjectVariable(UserDefinedVariable):
             and all(k.is_python_constant() for k in args)
             and all(v.is_python_constant() for v in kwargs.values())
         ):
+            print("hereA")
             args = [x.as_python_constant() for x in args]
             kwargs = {k: v.as_python_constant() for k, v in kwargs.items()}
             random_call_index = len(tx.random_calls)
@@ -619,6 +641,7 @@ class UserDefinedObjectVariable(UserDefinedVariable):
                 )
                 and not (args or kwargs)
             ):
+                print("hereB1")
                 return variables.TorchCtxManagerClassVariable(
                     obj.__class__
                 ).call_function(tx, args, kwargs)
@@ -632,6 +655,12 @@ class UserDefinedObjectVariable(UserDefinedVariable):
                 return variables.TorchCtxManagerClassVariable(
                     obj.__class__
                 ).call_function(tx, [var], kwargs)
+
+            # if "FSDPState" in str(obj):
+            #     if self.source:
+            #         install_guard(self.source.make_guard(GuardBuilder.FUNCTION_MATCH))
+            #     # TODO(yf225): how do we make sure we are reusing the same UDO variable for FSDPState obj?
+            #     return UserDefinedObjectVariable(obj).call_method(tx, self.value.__name__, args, kwargs)
         elif (
             istype(self.value, functools.partial)
             and trace_rules.lookup(self.value.func)
@@ -641,6 +670,7 @@ class UserDefinedObjectVariable(UserDefinedVariable):
                 for v in itertools.chain(self.value.args, self.value.keywords.values())
             )
         ):
+            print("hereC")
             if self.source:
                 install_guard(
                     AttrSource(self.source, "func").make_guard(GuardBuilder.ID_MATCH),
@@ -669,6 +699,7 @@ class UserDefinedObjectVariable(UserDefinedVariable):
                 self.value.func
             ).call_function(tx, partial_args, partial_kwargs)
         elif callable(self.value):
+            print("hereD")
             if self.source:
                 install_guard(self.source.make_guard(GuardBuilder.FUNCTION_MATCH))
             return self.call_method(tx, "__call__", args, kwargs)
@@ -825,6 +856,16 @@ class UserDefinedObjectVariable(UserDefinedVariable):
         if name == "__class__":
             return UserDefinedClassVariable(type(self.value), **options)
 
+        if "enum" in str(type(subobj)):
+            return variables.constant.EnumVariable(value=subobj, source=source)
+
+        if "FSDPStateContext" in str(type(subobj)) or "FSDPParamGroup" in str(type(subobj)) or "FSDPCommContext" in str(type(subobj)):
+            return UserDefinedObjectVariable(subobj, **options)
+        if "FSDPMeshInfo" in str(type(subobj)):
+            return variables.DataClassVariable.create(subobj, [], {}, options)
+
+        print(f"subobj: {subobj}")
+        print(f"type(subobj): {type(subobj)}")
         return variables.GetAttrVariable(self, name, **options)
 
     def call_hasattr(self, tx, name: str) -> "VariableTracker":

@@ -198,6 +198,9 @@ class SideEffects:
         )
 
     def is_attribute_mutation(self, item):
+        print(f"item: {item}")
+        print(f"item.mutable_local: {item.mutable_local}")
+        print(f"isinstance(item.mutable_local, AttributeMutation): {isinstance(item.mutable_local, AttributeMutation)}")
         return isinstance(item.mutable_local, AttributeMutation)
 
     def has_pending_mutation(self, item):

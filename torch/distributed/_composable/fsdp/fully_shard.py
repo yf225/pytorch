@@ -19,6 +19,7 @@ from ._fsdp_init import (
 )
 from ._fsdp_param_group import FSDPParamGroup
 from ._fsdp_state import _get_module_fsdp_state, FSDPState
+from torch.distributed.fsdp._dynamo_utils import _annotate_modules_for_dynamo
 
 
 # The decorator adds a state object to `module` that can be accessed via
@@ -30,6 +31,7 @@ def fully_shard(
     mesh: Optional[DeviceMesh] = None,
     reshard_after_forward: Union[bool, int] = True,
     mp_policy: MixedPrecisionPolicy = MixedPrecisionPolicy(),
+    compile = False,
 ):
     """
     Args:
@@ -88,6 +90,8 @@ def fully_shard(
     dct = {"__deepcopy__": unimplemented_deepcopy}
     new_cls = type(f"FSDP{cls.__name__}", (FSDP, cls), dct)
     module.__class__ = new_cls
+    state._lazy_init(compile=compile)
+    _annotate_modules_for_dynamo(module, [], True)
     return module
 
 

@@ -677,6 +677,7 @@ class TensorVariable(VariableTracker):
         elif name in {"register_hook", "register_post_accumulate_grad_hook"}:
             # Note - do not arbitrarily add hooks here - make sure they match the same contract
             # see [On tensor.register_hook]
+            print(f"here345")
             assert len(args) == 1
             fn_var = args[0]
             if not isinstance(

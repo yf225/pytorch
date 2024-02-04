@@ -18,7 +18,7 @@ from torch.utils.hooks import RemovableHandle
 from ._fsdp_api import MixedPrecisionPolicy
 from ._fsdp_common import _cast_fp_tensor, TrainingState
 from ._fsdp_param import FSDPParam
-from ._fsdp_param_group import FSDPCommContext, FSDPParamGroup
+from ._fsdp_param_group import FSDPCommContext, FSDPParamGroup, param_group_pre_forward
 
 
 class FSDPStateContext:
@@ -33,6 +33,34 @@ class FSDPStateContext:
         self.iter_forward_root: Optional[FSDPState] = None
         # Final callback should only be queued once per backward
         self.post_backward_final_callback_queued: bool = False
+
+
+def _fsdp_state_pre_forward(
+    fsdp_state, module: nn.Module, args: Tuple[Any, ...], kwargs: Dict[str, Any]
+) -> Tuple[Tuple[Any, ...], Dict[str, Any]]:
+    # When composing with module-hook-based activation checkpointing, the
+    # the pre-backward hook is responsible for the unshard
+    if fsdp_state._training_state == TrainingState.PRE_BACKWARD:
+        return args, kwargs
+    fsdp_state._training_state = TrainingState.FORWARD
+    args, kwargs = fsdp_state._root_pre_forward(module, args, kwargs)
+    # TODO(yf225): "Dynamic control flow is not supported at the moment"
+    # if self._mp_policy.cast_forward_inputs and self._mp_policy.param_dtype:
+    #     with torch.profiler.record_function("FSDP::cast_forward_inputs"):
+    #         cast_fn = functools.partial(
+    #             _cast_fp_tensor, self._mp_policy.param_dtype
+    #         )
+    #         args, kwargs = tree_map(cast_fn, args), tree_map(cast_fn, kwargs)
+    # if self._fsdp_param_group:
+    args, kwargs = param_group_pre_forward(fsdp_state._fsdp_param_group, module, args, kwargs)
+    return args, kwargs
+
+
+def _fsdp_state_pre_backward(fsdp_state, *unused: Any) -> None:
+    fsdp_state._training_state = TrainingState.PRE_BACKWARD
+    fsdp_state._register_root_post_backward_final_callback()
+    if fsdp_state._fsdp_param_group:
+        fsdp_state._fsdp_param_group.pre_backward(*unused)
 
 
 class FSDPState(_State):
@@ -57,7 +85,7 @@ class FSDPState(_State):
         self._device = device
         self._mp_policy = mp_policy
         self._pre_forward_hook_handle = module.register_forward_pre_hook(
-            self._pre_forward, prepend=True, with_kwargs=True
+            functools.partial(_fsdp_state_pre_forward, self), prepend=True, with_kwargs=True
         )
         self._post_forward_hook_handle = module.register_forward_hook(
             self._post_forward, prepend=False
@@ -66,15 +94,16 @@ class FSDPState(_State):
     def _root_pre_forward(
         self, module: nn.Module, args: Tuple[Any, ...], kwargs: Dict[str, Any]
     ) -> Tuple[Tuple[Any, ...], Dict[str, Any]]:
-        self._lazy_init()
+        # self._lazy_init()
         if self._state_ctx.iter_forward_root is not None:
             return args, kwargs
         self._state_ctx.iter_forward_root = self
         with torch.profiler.record_function("FSDP::root_pre_forward"):
             # Wait for optimizer before implicitly prefetched all-gathers
-            current_stream = torch.cuda.current_stream()
-            self._comm_ctx.all_gather_copy_in_stream.wait_stream(current_stream)
-            self._comm_ctx.all_gather_stream.wait_stream(current_stream)
+            if not torch.distributed._functional_collectives.is_torchdynamo_compiling():
+                current_stream = torch.cuda.current_stream()
+                self._comm_ctx.all_gather_copy_in_stream.wait_stream(current_stream)
+                self._comm_ctx.all_gather_stream.wait_stream(current_stream)
             if self._device.type == "cuda":
                 with torch.profiler.record_function("FSDP::inputs_to_device"):
                     args_tuple, kwargs_tuple = _to_kwargs(
@@ -83,7 +112,7 @@ class FSDPState(_State):
                 args, kwargs = args_tuple[0], kwargs_tuple[0]
         return args, kwargs
 
-    def _lazy_init(self) -> None:
+    def _lazy_init(self, compile=False) -> None:
         """
         Lazy initialization logically represents when all modules' parallelisms
         have finalized (e.g. FSDP has been applied to all desired modules).
@@ -113,10 +142,10 @@ class FSDPState(_State):
             # the parameters would be freed and all-gathered immediately
             self._fsdp_param_group.post_forward_mesh_info = None
         self._init_fqns()
-        self._init_shared_state()
+        self._init_shared_state(compile=compile)
 
-    def _init_shared_state(self) -> None:
-        self._comm_ctx.init()
+    def _init_shared_state(self, compile=False) -> None:
+        self._comm_ctx.init(compile=compile)
         for state in self._state_ctx.all_states:
             state._state_ctx = self._state_ctx
             state._comm_ctx = self._comm_ctx
@@ -141,40 +170,22 @@ class FSDPState(_State):
             if module in module_to_fsdp_param_group:
                 module_to_fsdp_param_group[module]._module_fqn = module_name
 
-    def _pre_forward(
-        self, module: nn.Module, args: Tuple[Any, ...], kwargs: Dict[str, Any]
-    ) -> Tuple[Tuple[Any, ...], Dict[str, Any]]:
-        # When composing with module-hook-based activation checkpointing, the
-        # the pre-backward hook is responsible for the unshard
-        if self._training_state == TrainingState.PRE_BACKWARD:
-            return args, kwargs
-        self._training_state = TrainingState.FORWARD
-        args, kwargs = self._root_pre_forward(module, args, kwargs)
-        if self._mp_policy.cast_forward_inputs and self._mp_policy.param_dtype:
-            with torch.profiler.record_function("FSDP::cast_forward_inputs"):
-                cast_fn = functools.partial(
-                    _cast_fp_tensor, self._mp_policy.param_dtype
-                )
-                args, kwargs = tree_map(cast_fn, args), tree_map(cast_fn, kwargs)
-        if self._fsdp_param_group:
-            args, kwargs = self._fsdp_param_group.pre_forward(module, args, kwargs)
-        return args, kwargs
-
     def _post_forward(self, module: nn.Module, input: Any, output: Any) -> Any:
         # When composing with module-hook-based activation checkpointing, the
         # post-backward hook is responsible for the reshard
         if self._training_state == TrainingState.PRE_BACKWARD:
             return output
-        if self._fsdp_param_group:
-            output = self._fsdp_param_group.post_forward(module, input, output)
+        # if self._fsdp_param_group:  # TODO(yf225): Dynamic control flow is not supported at the moment
+        output = self._fsdp_param_group.post_forward(module, input, output)
         output = self._register_pre_backward_hook(output)
         self._training_state = TrainingState.IDLE
         if self._state_ctx.iter_forward_root is self:
             if all_gather_state := self._comm_ctx.all_gather_state:
-                self._comm_ctx.all_gather_copy_in_stream.wait_event(
-                    all_gather_state.event
-                )
-                self._comm_ctx.all_gather_stream.wait_event(all_gather_state.event)
+                if not torch.distributed._functional_collectives.is_torchdynamo_compiling():
+                    self._comm_ctx.all_gather_copy_in_stream.wait_event(
+                        all_gather_state.event
+                    )
+                    self._comm_ctx.all_gather_stream.wait_event(all_gather_state.event)
                 self._comm_ctx.all_gather_state = None  # free the all-gather result
             self._state_ctx.iter_forward_root = None
         if self._mp_policy.output_dtype is not None:
@@ -184,12 +195,6 @@ class FSDPState(_State):
                     output,
                 )
         return output
-
-    def _pre_backward(self, *unused: Any) -> None:
-        self._training_state = TrainingState.PRE_BACKWARD
-        self._register_root_post_backward_final_callback()
-        if self._fsdp_param_group:
-            self._fsdp_param_group.pre_backward(*unused)
 
     def _root_post_backward_final_callback(self) -> None:
         with torch.profiler.record_function("FSDP::root_post_backward_callback"):
@@ -209,9 +214,10 @@ class FSDPState(_State):
             return output
 
         flat_outputs, _ = tree_flatten(output)
-        tensors = tuple(t for t in flat_outputs if t.requires_grad)
+        # tensors = tuple(t for t in flat_outputs if t.requires_grad)  # TODO(yf225): Dynamic control flow is not supported at the moment
+        tensors = flat_outputs
         if tensors:
-            handle = register_multi_grad_hook(tensors, self._pre_backward, mode="any")
+            handle = register_multi_grad_hook(tensors, functools.partial(_fsdp_state_pre_backward, fsdp_state=self), mode="any")
             self._pre_backward_hook_handles.append(handle)
             if self._fsdp_param_group:
                 self._fsdp_param_group.expected_backward_unshard_count += 1
