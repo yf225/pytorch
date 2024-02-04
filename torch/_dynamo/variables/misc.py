@@ -547,8 +547,6 @@ class LambdaVariable(VariableTracker):
 class GetAttrVariable(VariableTracker):
     def __init__(self, obj, name, **kwargs):
         super().__init__(**kwargs)
-        import traceback
-        traceback.print_stack()
         assert isinstance(obj, VariableTracker)
         assert isinstance(name, str)
         self.obj = obj

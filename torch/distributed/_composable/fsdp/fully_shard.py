@@ -90,7 +90,6 @@ def fully_shard(
     dct = {"__deepcopy__": unimplemented_deepcopy}
     new_cls = type(f"FSDP{cls.__name__}", (FSDP, cls), dct)
     module.__class__ = new_cls
-    state._lazy_init(compile=compile)
     _annotate_modules_for_dynamo(module, [], True)
     return module
 

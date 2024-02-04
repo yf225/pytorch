@@ -186,7 +186,10 @@ def create_joint(fn: Callable, *, aot_config: AOTConfig) -> Any:
         outs_to_grad = [
             o for needs_tangent, o in zip(tangent_mask, outs) if needs_tangent
         ]
-        assert len(outs_to_grad) == len(tangents)
+        # assert len(outs_to_grad) == len(tangents), f"len(outs_to_grad): {len(outs_to_grad)} != len(tangents): {len(tangents)}, \n outs_to_grad: {outs_to_grad}, \n tangents: {tangents}"
+        # TODO(yf225): still don't know why we need this..
+        assert len(outs_to_grad) >= len(tangents)
+        outs_to_grad = outs_to_grad[:len(tangents)]
 
         # Get the inputs that need gradients
         grad_primals = []

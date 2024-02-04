@@ -109,9 +109,9 @@ def foreach_all_gather_copy_out(
     ]
     # TODO: Use `torch.split_with_sizes_copy` fast path once it lands.
     splits = torch.split(all_gather_output, all_gather_input_numels, dim=1)
-    # TODO(yf225): need to think about whether we need this in compile mode
     ctx = contextlib.nullcontext()
     if not torch.distributed._functional_collectives.is_torchdynamo_compiling():
+        # TODO(yf225): need to think about whether we need this in compile mode
         ctx = _unsafe_preserve_version_counters(out)
     with ctx:
         torch._foreach_copy_(out, splits)  # one `copy_` per parameter
