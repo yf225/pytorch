@@ -1345,9 +1345,6 @@ class BuiltinVariable(VariableTracker):
     ):
         from .distributed import PlacementVariable
 
-        print(f"here222 obj: {obj}")
-        # print(f"str(obj.value): {str(obj.value)}")
-
         if isinstance(obj, variables.GetAttrVariable):
             final_obj = _resolve_GetAttrVariable(obj)
         else:

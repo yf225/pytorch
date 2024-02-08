@@ -584,9 +584,6 @@ class GetAttrVariable(VariableTracker):
     def call_function(
         self, tx, args: "List[VariableTracker]", kwargs: "Dict[str, VariableTracker]"
     ) -> "VariableTracker":
-        print(f"self: {self}")
-        print(f"self.obj: {self.obj}")
-        print(f"self.name: {self.name}")
         if self.source:
             install_guard(self.source.make_guard(GuardBuilder.FUNCTION_MATCH))
 
@@ -609,56 +606,7 @@ class GetAttrVariable(VariableTracker):
             return out
         else:
             return inner.call_method(tx, self.name, args, kwargs)
-
-        # print(f"here2 self.name: {self.name}")
-        # if self.name in ["shard_process_group"]:
-        #     return variables.distributed.ProcessGroupVariable(inspect.getattr_static(inner, self.name), source=self.source)
-        # if self.name in ["_fsdp_param_group", "mesh_info"]:
-        #     return variables.UserDefinedObjectVariable(inspect.getattr_static(inner, self.name))
-        # else:  # methods
-        #     return inner.call_method(tx, self.name, args, kwargs)
-        # else:
-        #     if isinstance(self.obj, variables.UserDefinedObjectVariable):
-        #         out = inspect.getattr_static(self.obj.value, self.name)
-        #         if self.name == "_fsdp_param_group":
-        #             out = variables.UserDefinedObjectVariable(out)
-        #         return out
-        #     elif isinstance(self.obj, (variables.dicts.ConstDictVariable, variables.lists.ListVariable, variables.tensor.TensorVariable)):
-        #         return self.obj.call_method(tx, self.name, args, kwargs)
-        #     else:
-        #         raise Exception(f"type(self.obj): {type(self.obj)}")
-
         return self.obj.call_method(tx, self.name, args, kwargs)
-
-        # if isinstance(self.obj, GetAttrVariable):
-        #     pass
-        #     # if isinstance(self.obj.obj, GetAttrVariable):
-        #     #     return self.obj.call_function(tx, args, kwargs)
-        #     # else:
-        #     #     if self.source:
-        #     #         install_guard(self.source.make_guard(GuardBuilder.FUNCTION_MATCH))
-
-        #     # print(f"self.obj: {self.obj}")
-        #     # print(f"self.obj.obj: {self.obj.obj}")
-        #     # obj_class = self.obj.obj.value.__class__
-        #     # if "FSDPState" in str(obj_class) and self.obj.name == "_fsdp_param_group":
-        #     #     fsdp_param_group = inspect.getattr_static(self.obj.obj.value, "_fsdp_param_group")
-        #     #     if self.source:
-        #     #         install_guard(self.source.make_guard(GuardBuilder.FUNCTION_MATCH))
-        #     #     return UserDefinedObjectVariable(fsdp_param_group).call_method(tx, self.name, args, kwargs)
-        #     # if "FSDPParamGroup" in str(obj_class) and self.obj.name == "_all_gather_process_group":
-        #     #     all_gather_process_group = inspect.getattr_static(self.obj.obj.value, "_all_gather_process_group")
-        #     #     print(f"all_gather_process_group: {all_gather_process_group}")
-        #     #     if self.source:
-        #     #         install_guard(self.source.make_guard(GuardBuilder.FUNCTION_MATCH))
-        #     #     return variables.distributed.ProcessGroupVariable(all_gather_process_group, source=self.source).call_method(tx, self.name, args, kwargs)
-        """
-        if "FSDPState" in str(obj):
-                if self.source:
-                    install_guard(self.source.make_guard(GuardBuilder.FUNCTION_MATCH))
-                # TODO(yf225): how do we make sure we are reusing the same UDO variable for FSDPState obj?
-                return UserDefinedObjectVariable(obj).call_method(tx, self.value.__name__, args, kwargs)
-        """
 
 
 class MethodWrapperVariable(VariableTracker):

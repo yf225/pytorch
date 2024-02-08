@@ -269,13 +269,13 @@ class FSDPParam:
         world_size = self.mesh_info.shard_mesh_size
         padded_unsharded_param_size = _get_dim0_padded_size(self._orig_size, world_size)
         # TODO(yf225): this is where the view relationship happens
-        print(f"here21: self.all_gather_output.shape: {self.all_gather_output.shape}")
+        # print(f"here21: self.all_gather_output.shape: {self.all_gather_output.shape}")
         padded_unsharded_param = self.all_gather_output.view(
             padded_unsharded_param_size
         )
-        print(f"here22: padded_unsharded_param.shape: {padded_unsharded_param.shape}")
+        # print(f"here22: padded_unsharded_param.shape: {padded_unsharded_param.shape}")
         unsharded_param = padded_unsharded_param[: self._orig_size[0]]
-        print(f"here23: unsharded_param.shape: {unsharded_param.shape}")
+        # print(f"here23: unsharded_param.shape: {unsharded_param.shape}")
         assert not self.is_dtensor, "TODO(yf225): just to make sure we don't need to test this"
         if self.is_dtensor:
             unsharded_param = _from_local_no_grad(
@@ -288,8 +288,6 @@ class FSDPParam:
         # TODO(yf225): this is where the view relationship happens
         # self._unsharded_param = nn.Parameter(unsharded_param)
         self._unsharded_param = unsharded_param
-        # # TODO(yf225): hack to see if can remove view relationship
-        # self._unsharded_param = nn.Parameter(self.all_gather_output)
         self._unsharded_param.requires_grad_(self.sharded_param.requires_grad)
 
     def to_sharded(self) -> None:

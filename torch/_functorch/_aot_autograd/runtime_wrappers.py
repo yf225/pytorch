@@ -1015,16 +1015,20 @@ def merge_view_inputs(
         args_to_functionalization = base_args + other_args
         arg_to_old_idx_map = {}
         for i, arg in enumerate(fwd_inputs):
+            # NOTE(yf225): it's interesting - we have SymInts with the same underlying int value as inputs, and we need to use id(arg) to indicate their difference
+            if isinstance(arg, torch.SymInt):
+                arg = id(arg)
             if arg in arg_to_old_idx_map:
                 print(f"already in arg_to_old_idx_map: arg: {arg}: type(arg): {type(arg)}, old_idx: {i}, idx_in_map: {arg_to_old_idx_map[arg]}")
             arg_to_old_idx_map[arg] = i
         # arg_to_old_idx_map = {arg: i for (i, arg) in enumerate(fwd_inputs)}
         print(f"arg_to_old_idx_map:")
-        # TODO(yf225): ok, we have duplicated inputs in fwd_inputs (same tensor identity), hence why arg_to_old_idx_map can't record them
         for k, v in arg_to_old_idx_map.items():
             print(f"k: {k}, v: {v}")
         for i, other_arg in enumerate(other_args):
             new_idx = len(base_args) + i
+            if isinstance(other_arg, torch.SymInt):
+                other_arg = id(other_arg)
             old_idx = arg_to_old_idx_map[other_arg]
             inner_calling_convention_meta[old_idx] = new_idx
         # NOTE(yf225): I added this assert to make sure the length of post_processed_calling_convention_meta is correct
