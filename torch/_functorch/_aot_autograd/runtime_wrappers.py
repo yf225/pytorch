@@ -1016,9 +1016,9 @@ def merge_view_inputs(
         arg_to_old_idx_map = {}
         for i, arg in enumerate(fwd_inputs):
             if arg in arg_to_old_idx_map:
-                print(f"already in arg_to_old_idx_map: arg: {arg}: old_idx: {i}, idx_in_map: {arg_to_old_idx_map[arg]}")
+                print(f"already in arg_to_old_idx_map: arg: {arg}: type(arg): {type(arg)}, old_idx: {i}, idx_in_map: {arg_to_old_idx_map[arg]}")
             arg_to_old_idx_map[arg] = i
-        arg_to_old_idx_map = {arg: i for (i, arg) in enumerate(fwd_inputs)}
+        # arg_to_old_idx_map = {arg: i for (i, arg) in enumerate(fwd_inputs)}
         print(f"arg_to_old_idx_map:")
         # TODO(yf225): ok, we have duplicated inputs in fwd_inputs (same tensor identity), hence why arg_to_old_idx_map can't record them
         for k, v in arg_to_old_idx_map.items():
