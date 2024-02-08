@@ -1015,7 +1015,8 @@ def merge_view_inputs(
         args_to_functionalization = base_args + other_args
         arg_to_old_idx_map = {}
         for i, arg in enumerate(fwd_inputs):
-            assert arg not in arg_to_old_idx_map, f"i: {i}, arg: {arg}"
+            if arg in arg_to_old_idx_map:
+                print(f"already in arg_to_old_idx_map: arg: {arg}: old_idx: {i}, idx_in_map: {arg_to_old_idx_map[arg]}")
             arg_to_old_idx_map[arg] = i
         arg_to_old_idx_map = {arg: i for (i, arg) in enumerate(fwd_inputs)}
         print(f"arg_to_old_idx_map:")
