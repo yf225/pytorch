@@ -862,6 +862,7 @@ def merge_view_inputs(
             return False
         return True
 
+    print(f"len(fwd_inputs): {len(fwd_inputs)}, len(mutated_input_info): {len(mutated_input_info)}")
     assert len(fwd_inputs) == len(mutated_input_info)
     storage_ref_to_idx: Dict[StorageWeakRef, List[int]] = collections.defaultdict(list)
     base_args = []
@@ -879,6 +880,9 @@ def merge_view_inputs(
     # - idx, view_tensor, where we can generate the new output with view_tensor._view_func(old_args[idx])
     #   idx corresponds to which synthetic base from the outer calling context to view
     inner_calling_convention_meta: Dict[int, Union[int, Tuple[int, torch.Tensor]]] = {}
+    print("storage_ref_to_idx:")
+    for k, v in storage_ref_to_idx.items():
+        print(f"k: {k}, v: {v}")
     for aliased_input_indices in storage_ref_to_idx.values():
         if len(aliased_input_indices) <= 1 or not any(
             # We only care about mutations that affect all aliases,
@@ -918,23 +922,35 @@ def merge_view_inputs(
             # is more complicated and hopefully pretty rare. Not currently handled.
             if not is_inference:
                 # TODO(yf225): Error "aot_autograd() does not yet handle non-differentiable view input mutations" due to `torch._foreach_copy_` usage
-                # assert _are_differentiable_views(
-                #     view1, view2
-                # ), "aot_autograd() does not yet handle non-differentiable view input mutations."
-                pass
+                assert _are_differentiable_views(
+                    view1, view2
+                ), "aot_autograd() does not yet handle non-differentiable view input mutations."
             # Regenerating views when reinterpreting complex / real tensors seems non-trivial,
             # not handling for now
             assert _same_dtype_views(
                 view1, view2
             ), "aot_autograd() does not yet handle input mutations on views with different dtypes."
-        non_none_bases = [
-            fwd_inputs[i]._base
-            for i in aliased_input_indices
-            if fwd_inputs[i]._base is not None
-        ]
-        aliases_with_none_bases = [
-            fwd_inputs[i] for i in aliased_input_indices if fwd_inputs[i]._base is None
-        ]
+        print(f"aliased_input_indices: {aliased_input_indices}")
+        non_none_bases = []
+        for i in aliased_input_indices:
+            if fwd_inputs[i]._base is not None:
+                print(f"non_none_base: index: {i}")
+                non_none_bases.append(fwd_inputs[i]._base)
+        print(f"non_none_bases: {non_none_bases}")
+        # non_none_bases = [
+        #     fwd_inputs[i]._base
+        #     for i in aliased_input_indices
+        #     if fwd_inputs[i]._base is not None
+        # ]
+        aliases_with_none_bases = []
+        for i in aliased_input_indices:
+            if fwd_inputs[i]._base is None:
+                print(f"aliases_with_none_bases: index: {i}")
+                aliases_with_none_bases.append(fwd_inputs[i])
+        print(f"aliases_with_none_bases: {aliases_with_none_bases}")
+        # aliases_with_none_bases = [
+        #     fwd_inputs[i] for i in aliased_input_indices if fwd_inputs[i]._base is None
+        # ]
         if len(non_none_bases) == 0:
             # Case where none of the aliases have a ._base
             # we generate a synthetic base without gradients, and generate views off of it
@@ -979,7 +995,7 @@ def merge_view_inputs(
             for alias in aliases_with_none_bases:
                 assert (
                     alias is synthetic_base
-                ), "aot_autograd() does not yet handle non-differentiable view input mutations."
+                ), f"aot_autograd() does not yet handle non-differentiable view input mutations. But got: alias: {alias}, base: {synthetic_base}"
         base_args.append(synthetic_base)
         for curr_view_idx in aliased_input_indices:
             curr_view = fwd_inputs[curr_view_idx]
@@ -997,18 +1013,32 @@ def merge_view_inputs(
         # (2) Metadata telling functionalization how to generate the inner argument list given the outer calling convention.
         #     We post-process it into a list, where meta[i] tells you info about the i'th argument in the inner calling convention.
         args_to_functionalization = base_args + other_args
+        arg_to_old_idx_map = {}
+        for i, arg in enumerate(fwd_inputs):
+            assert arg not in arg_to_old_idx_map, f"i: {i}, arg: {arg}"
+            arg_to_old_idx_map[arg] = i
         arg_to_old_idx_map = {arg: i for (i, arg) in enumerate(fwd_inputs)}
+        print(f"arg_to_old_idx_map:")
+        # TODO(yf225): ok, we have duplicated inputs in fwd_inputs (same tensor identity), hence why arg_to_old_idx_map can't record them
+        for k, v in arg_to_old_idx_map.items():
+            print(f"k: {k}, v: {v}")
         for i, other_arg in enumerate(other_args):
             new_idx = len(base_args) + i
             old_idx = arg_to_old_idx_map[other_arg]
             inner_calling_convention_meta[old_idx] = new_idx
+        # NOTE(yf225): I added this assert to make sure the length of post_processed_calling_convention_meta is correct
         # post process into a list
         post_processed_calling_convention_meta: List[
             Union[int, Tuple[int, torch.Tensor]]
         ] = [-1 for _ in range(len(inner_calling_convention_meta))]
+        print(f"len(post_processed_calling_convention_meta): {len(post_processed_calling_convention_meta)}")
+        for k, v in inner_calling_convention_meta.items():
+            print(f"inner_calling_convention_meta: k: {k}, v: {v}")
+        assert len(post_processed_calling_convention_meta) == len(fwd_inputs)
         for k, v in inner_calling_convention_meta.items():
             post_processed_calling_convention_meta[k] = v
         # Quick assert: every argument in the inner calling convention should be accounted for.
+        print(f"post_processed_calling_convention_meta: {post_processed_calling_convention_meta}")
         for x in post_processed_calling_convention_meta:
             assert x != -1
         return args_to_functionalization, post_processed_calling_convention_meta

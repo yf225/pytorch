@@ -773,7 +773,8 @@ class VariableBuilder:
             self.install_guards(GuardBuilder.FUNCTION_MATCH)
             return MethodWrapperVariable(value)
         elif issubclass(type(value), type):
-            self.install_guards(GuardBuilder.FUNCTION_MATCH)
+            # TODO(yf225) HIGH RISK: "L['hooks'][0].keywords['fn'].args[0]._fsdp_param_group.__bool__" but "'FSDPParamGroup' object has no attribute '__bool__'"
+            # self.install_guards(GuardBuilder.FUNCTION_MATCH)
             return UserDefinedClassVariable(
                 value,
                 source=self.source,

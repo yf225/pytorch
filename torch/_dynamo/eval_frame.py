@@ -1573,6 +1573,12 @@ class TorchPatcher:
             if hasattr(opt, "_init_group"):
                 opt._init_group = disable(opt._init_group)
 
+        # if torch.distributed.is_available():
+        #     import torch.distributed._composable.fsdp._fsdp_param as _fsdp_param
+
+        #     torch._dynamo.allow_in_graph(_fsdp_param.unsafe_alloc_storage)
+        #     torch._dynamo.allow_in_graph(_fsdp_param.unsafe_free_storage)
+
     @staticmethod
     def suppress_torch_distributed_warnings(fn):
         def inner_fn(*args, **kwargs):

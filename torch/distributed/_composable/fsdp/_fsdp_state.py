@@ -199,6 +199,8 @@ class FSDPState(_State):
 
     def _root_post_backward_final_callback(self) -> None:
         with torch.profiler.record_function("FSDP::root_post_backward_callback"):
+            if self._training_state == TrainingState.IDLE:
+                return
             self._training_state = TrainingState.IDLE
             for state in self._state_ctx.all_states:
                 state._training_state = TrainingState.IDLE
@@ -228,12 +230,20 @@ class FSDPState(_State):
         return output
 
     def _register_root_post_backward_final_callback(self):
-        if self._state_ctx.post_backward_final_callback_queued:
-            return
-        self._state_ctx.post_backward_final_callback_queued = True
-        Variable._execution_engine.queue_callback(
-            self._root_post_backward_final_callback
-        )
+        if not torch.distributed._functional_collectives.is_torchdynamo_compiling():
+            if self._state_ctx.post_backward_final_callback_queued:
+                return
+            self._state_ctx.post_backward_final_callback_queued = True
+            Variable._execution_engine.queue_callback(
+                self._root_post_backward_final_callback
+            )
+        else:
+            for state in self._state_ctx.all_states:
+                for fsdp_param in state._fsdp_param_group.fsdp_params:
+                    # NOTE(yf225): the hook operates on the global state, so putting the hook on any fsdp_param works.
+                    # assert fsdp_param.sharded_param.grad_fn is None
+                    fsdp_param.sharded_param.register_post_accumulate_grad_hook(self._root_post_backward_final_callback)
+                    # fsdp_param._unsharded_param.register_post_accumulate_grad_hook(self._root_post_backward_final_callback)
 
 
 def _get_module_fsdp_state(module: nn.Module) -> Optional[FSDPState]:

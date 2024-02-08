@@ -103,18 +103,40 @@ def foreach_all_gather_copy_out(
             all_gather_input_numel, world_size, dtype, device
         )  # no-op after 1st call
         fsdp_param.alloc_all_gather_output()
+    # print(f"here11-1: all_gather_output.shape: {all_gather_output.shape}")
     all_gather_output = all_gather_output.view(world_size, -1)
+    # print(f"here11-2: all_gather_output.shape: {all_gather_output.shape}")
+    # for fsdp_param in fsdp_params:
+    #     print(f"here11-3: fsdp_param.all_gather_output.shape: {fsdp_param.all_gather_output.shape}")
     out = [
         fsdp_param.all_gather_output.view(world_size, -1) for fsdp_param in fsdp_params
     ]
+    # for o in out:
+    #     print(f"here11-4: o.shape: {o.shape}")
     # TODO: Use `torch.split_with_sizes_copy` fast path once it lands.
     splits = torch.split(all_gather_output, all_gather_input_numels, dim=1)
+    # for split in splits:
+    #     print(f"here11-5: split.shape: {split.shape}")
     ctx = contextlib.nullcontext()
     if not torch.distributed._functional_collectives.is_torchdynamo_compiling():
-        # TODO(yf225): need to think about whether we need this in compile mode
+        # TODO(yf225) HIGH RISK: need to think about whether we need this in compile mode
         ctx = _unsafe_preserve_version_counters(out)
     with ctx:
-        torch._foreach_copy_(out, splits)  # one `copy_` per parameter
+        with torch.no_grad():
+            # TODO(yf225): this is the culprit, but what is this code trying to do?
+            # If we can pass the original (instead of the view) as-is into the hook, it will help AOTAutograd resolve this
+            torch._foreach_copy_(out, splits)  # one `copy_` per parameter
+    # # TODO(yf255): dumb hack to see if it can work
+    # out_list = []
+    # tmp_list = []
+    # for fsdp_param in fsdp_params:
+    #     out_list.append(fsdp_param.all_gather_output)
+    #     tmp_list.append(torch.empty_like(fsdp_param.all_gather_output))
+    # ctx = contextlib.nullcontext()
+    # if not torch.distributed._functional_collectives.is_torchdynamo_compiling():
+    #     ctx = _unsafe_preserve_version_counters(out_list)
+    # with ctx:
+    #     torch._foreach_copy_(out_list, tmp_list)
 
 
 @torch.no_grad()

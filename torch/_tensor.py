@@ -618,9 +618,9 @@ class Tensor(torch._C.TensorBase):
             raise RuntimeError(
                 "cannot register a hook on a tensor that doesn't require gradient"
             )
-        if self.grad_fn is not None:
+        if self.grad_fn is not None and not "Error" in str(self.grad_fn):
             raise RuntimeError(
-                "post accumulate grad hooks cannot be registered on non-leaf tensors"
+                f"post accumulate grad hooks cannot be registered on non-leaf tensors, but got: {self}, self.grad_fn: {self.grad_fn}"
             )
         if self._post_accumulate_grad_hooks is None:
             self._post_accumulate_grad_hooks: Dict[Any, Any] = OrderedDict()

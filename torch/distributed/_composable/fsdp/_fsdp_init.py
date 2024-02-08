@@ -63,6 +63,7 @@ def _get_post_forward_mesh_info(
                 post_forward_mesh_info = FSDPMeshInfo(
                     post_forward_mesh, shard_mesh_dim=0
                 )
+    # assert post_forward_mesh_info is not None
     return post_forward_mesh_info
 
 

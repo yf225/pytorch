@@ -268,8 +268,8 @@ class FSDPParamGroup:
 
     def reshard(self):
         if self._training_state == TrainingState.FORWARD:
-            if not self._reshard_after_forward:
-                return
+            # if not self._reshard_after_forward:
+            #     return
             if self._use_post_forward_mesh:
                 self._to_sharded_post_forward()
                 self._reshard_after_forward_event = torch.cuda.Event()

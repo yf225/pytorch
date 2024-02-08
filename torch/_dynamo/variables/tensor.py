@@ -677,7 +677,6 @@ class TensorVariable(VariableTracker):
         elif name in {"register_hook", "register_post_accumulate_grad_hook"}:
             # Note - do not arbitrarily add hooks here - make sure they match the same contract
             # see [On tensor.register_hook]
-            print(f"here345")
             assert len(args) == 1
             fn_var = args[0]
             if not isinstance(
@@ -704,7 +703,13 @@ class TensorVariable(VariableTracker):
                 mutable_local=variables.base.MutableLocal(),
             )
 
-            if not self.source:
+            # It is always sound to treat any hook as intermediary.
+            # In this case - it was very tricky getting residual hook mapping right,
+            # so Jansel proposed we just use the same higher order op pattern Voz uses for
+            # intermediaries.
+            compiled_autograd_enabled = compiled_autograd.compiled_autograd_enabled
+            should_treat_post_acc_grad_hook_as_intermediary = compiled_autograd_enabled and name == "register_post_accumulate_grad_hook"
+            if not self.source or should_treat_post_acc_grad_hook_as_intermediary:
                 # Intermediary
                 src = fn_var.source
                 if (

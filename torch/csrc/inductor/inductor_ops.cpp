@@ -8,6 +8,13 @@
 #include <torch/csrc/inductor/inductor_ops.h>
 #include <torch/library.h>
 
+#ifdef USE_CUDA
+#include <ATen/native/cuda/Resize.h>
+#include <cuda_runtime.h>
+#endif
+
+#include <ATen/native/Resize.h>
+
 namespace torch {
 namespace inductor {
 using namespace at;
@@ -75,6 +82,26 @@ static void accumulate_grad_(const Tensor& variable, const Tensor& new_grad) {
   }
 }
 
+static void resize_storage_(const Tensor& variable, int64_t new_storage_size) {
+  c10::DeviceType device_type = variable.storage().device_type();
+  if (device_type == at::kCPU) {
+    at::native::resize_bytes_cpu(variable.storage().unsafeGetStorageImpl(), new_storage_size);
+#ifdef USE_CUDA
+  } else if (device_type == at::kCUDA) {
+    ptrdiff_t size_bytes_i = new_storage_size;
+    TORCH_CHECK(
+        !c10::overflows<size_t>(size_bytes_i),
+        "Requested storage size (",
+        size_bytes_i,
+        ") cannot be represented as a size_t");
+    const auto size_bytes = static_cast<size_t>(size_bytes_i);
+    at::native::resize_bytes_cuda(variable.storage().unsafeGetStorageImpl(), size_bytes);
+#endif
+  } else if (device_type == at::kMeta) {
+    at::native::resize_bytes_meta(variable.storage().unsafeGetStorageImpl(), new_storage_size);
+  }
+}
+
 TORCH_LIBRARY_FRAGMENT(inductor, m) {
   m.def(
       "_mm_plus_mm(Tensor a, Tensor b, Tensor c, Tensor d, Tensor(t!) out) -> Tensor(t!)",
@@ -92,6 +119,10 @@ TORCH_LIBRARY_FRAGMENT(inductor, m) {
   m.def(
       "accumulate_grad_(Tensor variable, Tensor new_grad) -> ()",
       dispatch(c10::DispatchKey::CompositeExplicitAutograd, accumulate_grad_),
+      {at::Tag::pt2_compliant_tag});
+  m.def(
+      "resize_storage_(Tensor variable, int new_storage_size) -> ()",
+      dispatch(c10::DispatchKey::CompositeExplicitAutograd, resize_storage_),
       {at::Tag::pt2_compliant_tag});
 }
 
