@@ -13,10 +13,7 @@ def _annotate_modules_for_dynamo(
     ``ignored_modules``, indicating that the submodules are FSDP-managed and
     saving the ``use_orig_params`` setting passed to the FSDP constructor.
     """
-    print(f"module.modules(): {module.modules()}")
-    print(f"list(module.children()): {list(module.children())}")
     for submodule in module.modules():
-        print(f"submodule: {submodule}")
         if submodule not in ignored_modules:
             """[note: Dynamo treats FSDP wrapped modules as UnspecializedNNModule]
 

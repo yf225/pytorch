@@ -773,7 +773,6 @@ class VariableBuilder:
             self.install_guards(GuardBuilder.FUNCTION_MATCH)
             return MethodWrapperVariable(value)
         elif issubclass(type(value), type):
-            # TODO(yf225) HIGH RISK: "L['hooks'][0].keywords['fn'].args[0]._fsdp_param_group.__bool__" but "'FSDPParamGroup' object has no attribute '__bool__'"
             # self.install_guards(GuardBuilder.FUNCTION_MATCH)
             return UserDefinedClassVariable(
                 value,
@@ -869,9 +868,6 @@ class VariableBuilder:
         if mutation_guard.is_dynamic_nn_module(value) and not getattr(
             value, "_is_fsdp_managed_module", False
         ):
-            print(f"value: {value}")
-            print(f"dir(value): {dir(value)}")
-            print(f"hasattr(value, '_is_fsdp_managed_module'): {hasattr(value, '_is_fsdp_managed_module')}")
             # created dynamically, don't specialize on it
             self.install_guards(GuardBuilder.TYPE_MATCH)
             result = UnspecializedNNModuleVariable(value, source=self.source)
@@ -882,7 +878,6 @@ class VariableBuilder:
         elif issubclass(
             value.__class__, torch.nn.parallel.distributed.DistributedDataParallel
         ):
-            print("here12")
             self.install_guards(GuardBuilder.TYPE_MATCH)
             return UnspecializedNNModuleVariable(value)
         elif getattr(value, "_is_fsdp_managed_module", False):

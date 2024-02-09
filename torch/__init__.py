@@ -299,7 +299,6 @@ class SymInt:
         if ret is not None:
             return hash(ret)
         else:
-            # return hash(self.node.int_())
             # We could support constant SymInts as well, but not doing it for now
             raise TypeError("unhashable type: non-singleton SymInt")
 

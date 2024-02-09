@@ -560,8 +560,6 @@ class GetAttrVariable(VariableTracker):
         return getattr(base_proxy, attr)
 
     def as_proxy(self):
-        # out = variables.builtin._resolve_GetAttrVariable(self)
-        # print(f"type(out): {type(out)}")
         return GetAttrVariable.create_getattr_proxy(self.obj.as_proxy(), self.name)
 
     def const_getattr(self, tx, name):
@@ -584,28 +582,6 @@ class GetAttrVariable(VariableTracker):
     def call_function(
         self, tx, args: "List[VariableTracker]", kwargs: "Dict[str, VariableTracker]"
     ) -> "VariableTracker":
-        if self.source:
-            install_guard(self.source.make_guard(GuardBuilder.FUNCTION_MATCH))
-
-        if isinstance(self.obj, GetAttrVariable):
-            inner = self.obj.call_function(tx, args, kwargs)
-        else:
-            inner = self.obj
-
-        if isinstance(inner, variables.UserDefinedObjectVariable):
-            out = inspect.getattr_static(inner.value, self.name)
-            print(f"out: {out}")
-            if callable(out):
-                return inner.call_method(tx, self.name, args, kwargs)
-            elif "FSDPParamGroup" in str(out.__class__) or "FSDPMeshInfo" in str(out.__class__) or "FSDPParam" in str(out.__class__):
-                return variables.UserDefinedObjectVariable(out)
-            elif isinstance(out, torch.distributed.distributed_c10d.ProcessGroup):
-                return variables.distributed.ProcessGroupVariable(out, source=self.source)
-            else:
-                raise Exception(f"out: {out}, type(out): {type(out)}")
-            return out
-        else:
-            return inner.call_method(tx, self.name, args, kwargs)
         return self.obj.call_method(tx, self.name, args, kwargs)
 
 

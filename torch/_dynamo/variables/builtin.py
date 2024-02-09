@@ -1060,18 +1060,9 @@ class BuiltinVariable(VariableTracker):
             return variables.TupleVariable(items)
 
     def call_len(self, tx, *args, **kwargs):
-        # # TODO(yf225): can we do this? why or why not?
-        # if isinstance(args[0], variables.GetAttrVariable):
-        #     args_0 = _resolve_GetAttrVariable(args[0])
-        #     if isinstance(args_0, list):
-        #         return variables.ConstantVariable(len(args_0))
         return args[0].call_method(tx, "__len__", args[1:], kwargs)
 
     def call_getitem(self, tx, *args, **kwargs):
-        # # TODO(yf225): can we do this? why or why not?
-        # if isinstance(args[0], variables.GetAttrVariable) and args[0].name == "fsdp_params":
-        #     args_0 = _resolve_GetAttrVariable(args[0])
-        #     return variables.UserDefinedObjectVariable(args_0[args[1].value])
         return args[0].call_method(tx, "__getitem__", args[1:], kwargs)
 
     def call_isinstance(self, tx, arg, isinstance_type):
@@ -1353,10 +1344,6 @@ class BuiltinVariable(VariableTracker):
             isinstance(final_obj, variables.UserDefinedObjectVariable) \
             and name_var.as_python_constant() in ["_training_state", "_is_root"]
         ):
-            # TODO(yf225): I am not sure which approach is correct here
-            # tx.output.side_effects.store_attr(final_obj, name_var.as_python_constant(), val)
-            # return val
-            # TODO(yf225): I believe this mutates the Python object state during tracing, which is probably terrible.
             setattr(
                 final_obj.value, name_var.as_python_constant(), val.as_python_constant()
             )
