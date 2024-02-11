@@ -360,13 +360,15 @@ class FSDPParam:
             _raise_assert_with_print(
                 f"Expects size {self.sharded_size} but got {tensor.shape}"
             )
-        return DTensor.from_local(
+        ret = DTensor.from_local(
             tensor,
             self._global_mesh,
             self._global_placements,
             shape=self._global_size,
             stride=self._global_stride,
         )
+        print(f"to_sharded_dtensor: id(ret): {id(ret)}")
+        return ret
 
     def to_sharded_post_forward_dtensor(self, tensor: torch.Tensor) -> DTensor:
         if tensor.shape != self.sharded_post_forward_size:
@@ -375,13 +377,15 @@ class FSDPParam:
             )
         assert self.post_forward_mesh_info is not None  # mypy
         # TODO: Prefer this DTensor to be read-only.
-        return DTensor.from_local(
+        ret = DTensor.from_local(
             tensor,
             self.post_forward_mesh_info.mesh,
             (Shard(0),),  # TODO: generalize once we support TP
             shape=self._global_size,
             stride=self._global_stride,
         )
+        print(f"to_sharded_post_forward_dtensor: id(ret): {id(ret)}")
+        return ret
 
     def alloc_all_gather_output(self) -> None:
         unsafe_alloc_storage(self.all_gather_output)
