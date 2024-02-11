@@ -319,7 +319,7 @@ class FSDPParam:
             storage_offset=0,
             requires_grad=True,  # TODO(yf225): is this change okay for making grad flow through and tracking view relationship? where does it show up in compile log?
         )
-        self._sharded_post_forward_param = nn.Parameter(
+        self._sharded_post_forward_param = nn.Parameter(  # TODO(yf225): how do we let view relationship preserve through nn.Parameter wrapping?
             self.to_sharded_post_forward_dtensor(sharded_post_forward_tensor)
         )
         self._setattr_on_modules(self._sharded_post_forward_param)
