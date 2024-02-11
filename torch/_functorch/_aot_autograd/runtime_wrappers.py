@@ -645,6 +645,9 @@ def aot_wrapper_synthetic_base(
                 print(f"id(tensor): {id(tensor)}, tensor._local_tensor: {tensor._local_tensor}, tensor._local_tensor._base: {tensor._local_tensor._base}")
 
     # export path: ban synthetic bases for now, add later if requested.
+    # TODO(yf225): can we check "example_value" storage pointer to know if DTensor has overlap with other input tensors? And if none found, we let this DTensor through?
+    # `storage().data_ptr() + storage()._cdata`
+    # e.g. `self.proxy.node.meta.get("example_value")` ?
     if requires_subclass_dispatch(flat_args, fw_metadata):
         raise RuntimeError(
             """\
