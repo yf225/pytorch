@@ -638,6 +638,9 @@ def aot_wrapper_synthetic_base(
     if synthetic_base_info is None:
         return compiler_fn(flat_fn, flat_args, aot_config, fw_metadata=fw_metadata)
 
+    for i, tensor in enumerate(flat_args):
+        print(f"i: {i}, tensor: {tensor}, tensor._base: {tensor._base}")
+
     # export path: ban synthetic bases for now, add later if requested.
     if requires_subclass_dispatch(flat_args, fw_metadata):
         raise RuntimeError(
