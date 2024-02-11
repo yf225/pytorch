@@ -639,7 +639,8 @@ def aot_wrapper_synthetic_base(
         return compiler_fn(flat_fn, flat_args, aot_config, fw_metadata=fw_metadata)
 
     for i, tensor in enumerate(flat_args):
-        print(f"i: {i}, tensor: {tensor}, tensor._base: {tensor._base}")
+        if isinstance(tensor, torch.Tensor):
+            print(f"i: {i}, tensor: {tensor}, tensor._base: {tensor._base}")
 
     # export path: ban synthetic bases for now, add later if requested.
     if requires_subclass_dispatch(flat_args, fw_metadata):
