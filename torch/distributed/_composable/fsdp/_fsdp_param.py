@@ -317,6 +317,7 @@ class FSDPParam:
             size=self.sharded_post_forward_size,
             stride=self.contiguous_sharded_post_forward_stride,
             storage_offset=0,
+            requires_grad=True,
         )
         self._sharded_post_forward_param = nn.Parameter(
             self.to_sharded_post_forward_dtensor(sharded_post_forward_tensor)
