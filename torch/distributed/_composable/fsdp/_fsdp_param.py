@@ -276,14 +276,13 @@ class FSDPParam:
         # print(f"here22: padded_unsharded_param.shape: {padded_unsharded_param.shape}")
         unsharded_param = padded_unsharded_param[: self._orig_size[0]]
         # print(f"here23: unsharded_param.shape: {unsharded_param.shape}")
-        assert not self.is_dtensor, "TODO(yf225): just to make sure we don't need to test this"
         if self.is_dtensor:
-            unsharded_param = _from_local_no_grad(
+            unsharded_param = DTensor.from_local(
                 unsharded_param,
                 self._tp_spec.mesh,
                 self._tp_spec.placements,
-                self._global_size,
-                self._global_stride,
+                shape=self._global_size,
+                stride=self._global_stride,
             )
         # TODO(yf225): this is where the view relationship happens
         # self._unsharded_param = nn.Parameter(unsharded_param)
@@ -360,12 +359,12 @@ class FSDPParam:
             _raise_assert_with_print(
                 f"Expects size {self.sharded_size} but got {tensor.shape}"
             )
-        return _from_local_no_grad(
+        return DTensor.from_local(
             tensor,
             self._global_mesh,
             self._global_placements,
-            self._global_size,
-            self._global_stride,
+            shape=self._global_size,
+            stride=self._global_stride,
         )
 
     def to_sharded_post_forward_dtensor(self, tensor: torch.Tensor) -> DTensor:
@@ -375,12 +374,12 @@ class FSDPParam:
             )
         assert self.post_forward_mesh_info is not None  # mypy
         # TODO: Prefer this DTensor to be read-only.
-        return _from_local_no_grad(
+        return DTensor.from_local(
             tensor,
             self.post_forward_mesh_info.mesh,
             (Shard(0),),  # TODO: generalize once we support TP
-            self._global_size,
-            self._global_stride,
+            shape=self._global_size,
+            stride=self._global_stride,
         )
 
     def alloc_all_gather_output(self) -> None:
