@@ -643,6 +643,9 @@ def aot_wrapper_synthetic_base(
             print(f"i: {i}, tensor: {tensor}, tensor._base: {tensor._base}")
             if isinstance(tensor, torch.distributed._tensor.DTensor):
                 print(f"id(tensor): {id(tensor)}, tensor._local_tensor: {tensor._local_tensor}, tensor._local_tensor._base: {tensor._local_tensor._base}")
+                print(f"tensor._local_tensor.storage().data_ptr(): {tensor._local_tensor.storage().data_ptr()}, tensor._local_tensor.storage()._cdata: {tensor._local_tensor.storage()._cdata}")
+            else:
+                print(f"tensor.storage().data_ptr(): {tensor.storage().data_ptr()}, tensor.storage()._cdata: {tensor.storage()._cdata}")
 
     # export path: ban synthetic bases for now, add later if requested.
     # TODO(yf225): can we check "example_value" storage pointer to know if DTensor has overlap with other input tensors? And if none found, we let this DTensor through?
