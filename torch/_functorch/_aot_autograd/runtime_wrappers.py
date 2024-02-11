@@ -642,7 +642,7 @@ def aot_wrapper_synthetic_base(
         if isinstance(tensor, torch.Tensor):
             print(f"i: {i}, tensor: {tensor}, tensor._base: {tensor._base}")
             if isinstance(tensor, torch.distributed._tensor.DTensor):
-                print(f"tensor.local_tensor: {tensor.local_tensor}, tensor.local_tensor._base: {tensor.local_tensor._base}")
+                print(f"tensor._local_tensor: {tensor._local_tensor}, tensor._local_tensor._base: {tensor._local_tensor._base}")
 
     # export path: ban synthetic bases for now, add later if requested.
     if requires_subclass_dispatch(flat_args, fw_metadata):
