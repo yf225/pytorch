@@ -449,9 +449,12 @@ def unsafe_free_storage(tensor: torch.Tensor) -> None:
 def unsafe_setattr_param(
     module: nn.Module, param_name: str, param: torch.Tensor
 ) -> None:
-    if getattr(module.__setattr__, "__func__", None) is nn.Module.__setattr__:
+    is_torchdynamo_compiling = torch.distributed._functional_collectives.is_torchdynamo_compiling()
+    # is_torchdynamo_compiling = False
+    if (getattr(module.__setattr__, "__func__", None) is nn.Module.__setattr__) or is_torchdynamo_compiling:
         module._parameters[param_name] = cast(nn.Parameter, param)
-        super(nn.Module, module).__setattr__(param_name, param)
+        if not is_torchdynamo_compiling:
+            super(nn.Module, module).__setattr__(param_name, param)
     else:  # slow path
         setattr(module, param_name, param)
 

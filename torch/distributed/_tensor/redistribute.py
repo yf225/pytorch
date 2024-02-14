@@ -42,7 +42,8 @@ def _replicate_then_shard(val: _TransformInfo) -> int:
         return 0
 
 
-@lru_cache(maxsize=None)
+# NOTE(yf225): when passing DTensor input into traced ppFSDP, some DTensorSpec is not hashable (has torch.SymInt inside), not sure why.
+# @lru_cache(maxsize=None)
 def _gen_transform_infos(
     src_spec: DTensorSpec,
     dst_spec: DTensorSpec,
