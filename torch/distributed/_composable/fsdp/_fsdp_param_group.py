@@ -64,6 +64,10 @@ def param_group_pre_forward(
         return args, kwargs
 
 
+def _post_backward_hook(param_group):
+    param_group._post_backward()
+
+
 def _param_group_register_post_backward_hook(
     param_group, args: Tuple[Any, ...], kwargs: Dict[str, Any]
 ) -> Tuple[Tuple[Any, ...], Dict[str, Any]]:
@@ -79,9 +83,14 @@ def _param_group_register_post_backward_hook(
             continue
         inp_tensor_indices.append(i)
         inp_tensors.append(obj)
-    if len(inp_tensors) == 0:
-        return args, kwargs  # no tensors that require gradients
-    inp_tensors = RegisterPostBackwardHook.apply(param_group, *inp_tensors)
+    # if len(inp_tensors) == 0:
+    #     return args, kwargs  # no tensors that require gradients
+    # inp_tensors = RegisterPostBackwardHook.apply(param_group, *inp_tensors)
+
+    # TODO(yf225): unsure whether custom autograd function is supported, so use post acc grad hook instead
+    for inp_tensor in inp_tensors:
+        inp_tensor.register_post_accumulate_grad_hook(functools.partial(_post_backward_hook, param_group))
+
     for inp_tensor_idx, inp_tensor in zip(inp_tensor_indices, inp_tensors):
         args_kwargs_list[inp_tensor_idx] = inp_tensor
     args_list = args_kwargs_list[: len(args_list)]
@@ -300,6 +309,8 @@ class FSDPParamGroup:
             self._prefetch_unshard()
 
     def _post_backward(self, *unused: Any):
+        if self._training_state == TrainingState.POST_BACKWARD:
+            return
         self._training_state = TrainingState.POST_BACKWARD
         with torch.profiler.record_function("FSDP::post_backward_reshard"):
             if not self.reduce_scatter_grads:
@@ -310,6 +321,7 @@ class FSDPParamGroup:
             fsdp_params_with_grad: List[FSDPParam] = []
             unsharded_grads: List[torch.Tensor] = []
             for fsdp_param in self.fsdp_params:
+                # TODO(yf225): this is always None, need to figure out why
                 if fsdp_param.unsharded_param.grad is not None:
                     fsdp_params_with_grad.append(fsdp_param)
                     unsharded_grads.append(fsdp_param.unsharded_grad_data)
@@ -479,14 +491,14 @@ def _get_param_module_infos(
     return [param_to_module_info[param] for param in params]
 
 
-class RegisterPostBackwardHook(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, param_group: FSDPParamGroup, *inputs: torch.Tensor):
-        # All tensors in `inputs` should require gradient
-        ctx.param_group = param_group
-        return inputs
+# class RegisterPostBackwardHook(torch.autograd.Function):
+#     @staticmethod
+#     def forward(ctx, param_group: FSDPParamGroup, *inputs: torch.Tensor):
+#         # All tensors in `inputs` should require gradient
+#         ctx.param_group = param_group
+#         return inputs
 
-    @staticmethod
-    def backward(ctx, *grads: torch.Tensor):
-        ctx.param_group._post_backward()
-        return (None,) + grads
+#     @staticmethod
+#     def backward(ctx, *grads: torch.Tensor):
+#         ctx.param_group._post_backward()
+#         return (None,) + grads

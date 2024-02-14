@@ -85,9 +85,26 @@ def _fsdp_state_post_forward(fsdp_state, module: nn.Module, input: Any, output: 
 
 def _fsdp_state_pre_backward(fsdp_state, *unused: Any) -> None:
     fsdp_state._training_state = TrainingState.PRE_BACKWARD
-    fsdp_state._register_root_post_backward_final_callback()
+    # fsdp_state._register_root_post_backward_final_callback()
     if fsdp_state._fsdp_param_group:
         fsdp_state._fsdp_param_group.pre_backward(*unused)
+
+
+def _fsdp_state_root_post_backward_final_callback(fsdp_state, *unused) -> None:
+    with torch.profiler.record_function("FSDP::root_post_backward_callback"):
+        if fsdp_state._training_state == TrainingState.IDLE:
+            return
+        fsdp_state._training_state = TrainingState.IDLE
+        for state in fsdp_state._state_ctx.all_states:
+            state._training_state = TrainingState.IDLE
+            if state._fsdp_param_group:
+                state._fsdp_param_group.finalize_backward()
+        fsdp_state._state_ctx.post_backward_final_callback_queued = False
+        if not torch.distributed._functional_collectives.is_torchdynamo_compiling():
+            for handle in fsdp_state._pre_backward_hook_handles:
+                handle.remove()
+        fsdp_state._pre_backward_hook_handles.clear()
+        fsdp_state._comm_ctx.post_forward_order.clear()
 
 
 class FSDPState(_State):
@@ -197,21 +214,6 @@ class FSDPState(_State):
             if module in module_to_fsdp_param_group:
                 module_to_fsdp_param_group[module]._module_fqn = module_name
 
-    def _root_post_backward_final_callback(self) -> None:
-        with torch.profiler.record_function("FSDP::root_post_backward_callback"):
-            if self._training_state == TrainingState.IDLE:
-                return
-            self._training_state = TrainingState.IDLE
-            for state in self._state_ctx.all_states:
-                state._training_state = TrainingState.IDLE
-                if state._fsdp_param_group:
-                    state._fsdp_param_group.finalize_backward()
-            self._state_ctx.post_backward_final_callback_queued = False
-            for handle in self._pre_backward_hook_handles:
-                handle.remove()
-            self._pre_backward_hook_handles.clear()
-            self._comm_ctx.post_forward_order.clear()
-
     def _register_pre_backward_hook(self, output: Any) -> Any:
         if not torch.is_grad_enabled():
             return output
@@ -227,23 +229,25 @@ class FSDPState(_State):
                 self._pre_backward_hook_handles.append(handle)
             if self._fsdp_param_group:
                 self._fsdp_param_group.expected_backward_unshard_count += 1
+        # TODO(yf225): original code tries to register post_backward callback within the forward hook `_fsdp_state_pre_backward`,
+        # which compiled autograd doesn't seem to support yet. So moving post_backward callback registration here since it shouldn't affect the actual logic.
+        self._register_root_post_backward_final_callback()
         return output
 
     def _register_root_post_backward_final_callback(self):
-        if not torch.distributed._functional_collectives.is_torchdynamo_compiling():
-            if self._state_ctx.post_backward_final_callback_queued:
-                return
-            self._state_ctx.post_backward_final_callback_queued = True
-            Variable._execution_engine.queue_callback(
-                self._root_post_backward_final_callback
-            )
-        else:
-            for state in self._state_ctx.all_states:
-                for fsdp_param in state._fsdp_param_group.fsdp_params:
-                    # NOTE(yf225): the hook operates on the global state, so putting the hook on any fsdp_param works.
-                    # assert fsdp_param.sharded_param.grad_fn is None
-                    fsdp_param.sharded_param.register_post_accumulate_grad_hook(self._root_post_backward_final_callback)
-                    # fsdp_param._unsharded_param.register_post_accumulate_grad_hook(self._root_post_backward_final_callback)
+        # if not torch.distributed._functional_collectives.is_torchdynamo_compiling():
+        #     if self._state_ctx.post_backward_final_callback_queued:
+        #         return
+        #     self._state_ctx.post_backward_final_callback_queued = True
+        #     Variable._execution_engine.queue_callback(
+        #         self._root_post_backward_final_callback
+        #     )
+        # else:
+        for state in self._state_ctx.all_states:
+            for fsdp_param in state._fsdp_param_group.fsdp_params:
+                # NOTE(yf225): the hook operates on the global state, so putting the hook on any fsdp_param works.
+                # assert fsdp_param.sharded_param.grad_fn is None
+                fsdp_param.all_gather_output.register_post_accumulate_grad_hook(functools.partial(_fsdp_state_root_post_backward_final_callback, self))
 
 
 def _get_module_fsdp_state(module: nn.Module) -> Optional[FSDPState]:
