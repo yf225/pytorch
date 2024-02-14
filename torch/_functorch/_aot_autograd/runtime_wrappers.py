@@ -1027,5 +1027,4 @@ remove the aliasing yourself as a workaround, or otherwise file an issue on gith
         # Quick assert: every argument in the inner calling convention should be accounted for.
         for x in post_processed_calling_convention_meta:
             assert x != -1
-        print(f"args_to_functionalization: {args_to_functionalization}")
         return args_to_functionalization, post_processed_calling_convention_meta
