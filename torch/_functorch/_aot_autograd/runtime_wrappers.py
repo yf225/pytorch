@@ -7,7 +7,6 @@ This module defines runtime wrappers, which, based on previous analysis attempts
 """
 
 import collections
-import pprint
 from functools import wraps
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
@@ -17,6 +16,7 @@ from torch import Tensor
 from torch._guards import DuplicateInputs, TracingContext
 from torch._prims_common import CUDARngStateHelper
 from torch.multiprocessing.reductions import StorageWeakRef
+from torch.utils._python_dispatch import is_traceable_wrapper_subclass
 from .. import config
 from .collect_metadata_analysis import run_functionalized_fw_and_collect_metadata
 
@@ -41,12 +41,7 @@ from .subclass_utils import (
     wrap_tensor_subclasses,
 )
 
-from .utils import (
-    call_func_at_runtime_with_args,
-    make_boxed_func,
-    partial_flatten_asdict,
-    strict_zip,
-)
+from .utils import call_func_at_runtime_with_args, make_boxed_func, strict_zip
 
 
 zip = strict_zip
@@ -638,27 +633,7 @@ def aot_wrapper_synthetic_base(
     if synthetic_base_info is None:
         return compiler_fn(flat_fn, flat_args, aot_config, fw_metadata=fw_metadata)
 
-    for i, tensor in enumerate(flat_args):
-        if isinstance(tensor, torch.Tensor):
-            print(f"i: {i}, tensor: {tensor}, tensor._base: {tensor._base}")
-            if isinstance(tensor, torch.distributed._tensor.DTensor):
-                print(f"id(tensor): {id(tensor)}, tensor._local_tensor: {tensor._local_tensor}, tensor._local_tensor._base: {tensor._local_tensor._base}")
-                print(f"tensor._local_tensor.untyped_storage(): {tensor._local_tensor.untyped_storage()}, tensor._local_tensor.untyped_storage()._cdata: {tensor._local_tensor.untyped_storage()._cdata}")
-            else:
-                print(f"tensor.untyped_storage(): {tensor.untyped_storage()}, tensor.untyped_storage()._cdata: {tensor.untyped_storage()._cdata}")
-
     # export path: ban synthetic bases for now, add later if requested.
-    # TODO(yf225): can we check "example_value" storage pointer to know if DTensor has overlap with other input tensors? And if none found, we let this DTensor through?
-    # `storage() + storage()._cdata`
-    # e.g. `self.proxy.node.meta.get("example_value")` ?
-    if requires_subclass_dispatch(flat_args, fw_metadata):
-        raise RuntimeError(
-            """\
-Encountered aliased inputs that are mutated in the graph, but at least one input/output
-to the graph is a tensor subclass. This is not supported today. You can try to
-remove the aliasing yourself as a workaround, or otherwise file an issue on github."""
-        )
-
     if aot_config.is_export:
         raise RuntimeError(
             f"""\
@@ -675,7 +650,7 @@ fw_metadata={str(fw_metadata)}
 
     # Update our forward metadata to take synthetic bases into account
     (
-        fw_metadata_updated,
+        _,
         aliased_arg_idx_with_metadata_mutations,
     ) = create_synthetic_base_metadata(
         fw_metadata, synthetic_base_info, flat_args, flat_args_with_synthetic_bases
@@ -725,16 +700,11 @@ fw_metadata={str(fw_metadata)}
         else:
             return flat_fn(*unpacked_args)
 
-    if config.debug_assert:
-        ref_fw_metadata = run_functionalized_fw_and_collect_metadata(
-            wrapped_flat_fn,
-            keep_input_mutations=fw_metadata.keep_input_mutations,
-            is_train=fw_metadata.is_train,
-        )(*flat_args_with_synthetic_bases)
-        assert ref_fw_metadata == fw_metadata_updated, (
-            f"ref_metadata={pprint.pformat(partial_flatten_asdict(ref_fw_metadata))}, "
-            f"\nactual_metadata={pprint.pformat(partial_flatten_asdict(fw_metadata_updated))}"
-        )
+    fw_metadata_updated = run_functionalized_fw_and_collect_metadata(
+        wrapped_flat_fn,
+        keep_input_mutations=fw_metadata.keep_input_mutations,
+        is_train=fw_metadata.is_train,
+    )(*flat_args_with_synthetic_bases)
 
     compiled_fn = compiler_fn(
         wrapped_flat_fn,
@@ -874,7 +844,6 @@ def merge_view_inputs(
             return False
         return True
 
-    print(f"len(fwd_inputs): {len(fwd_inputs)}, len(mutated_input_info): {len(mutated_input_info)}")
     assert len(fwd_inputs) == len(mutated_input_info)
     storage_ref_to_idx: Dict[StorageWeakRef, List[int]] = collections.defaultdict(list)
     base_args = []
@@ -892,9 +861,6 @@ def merge_view_inputs(
     # - idx, view_tensor, where we can generate the new output with view_tensor._view_func(old_args[idx])
     #   idx corresponds to which synthetic base from the outer calling context to view
     inner_calling_convention_meta: Dict[int, Union[int, Tuple[int, torch.Tensor]]] = {}
-    print("storage_ref_to_idx:")
-    for k, v in storage_ref_to_idx.items():
-        print(f"k: {k}, v: {v}")
     for aliased_input_indices in storage_ref_to_idx.values():
         if len(aliased_input_indices) <= 1 or not any(
             # We only care about mutations that affect all aliases,
@@ -925,6 +891,15 @@ def merge_view_inputs(
         # For now, I'm banning a bunch of cases. We expect dynamo to properly detect these cases
         # and error out. We can fix them later.
         # These checks are transitive, so we don't need to check every pair.
+        for idx in aliased_input_indices:
+            curr_inp = fwd_inputs[idx]
+            if is_traceable_wrapper_subclass(curr_inp):
+                raise RuntimeError(
+                    """\
+Encountered duplicate inputs that are mutated in the graph, but at least one of these
+inputs is a tensor subclass. This is not supported today. You can try to
+remove the aliasing yourself as a workaround, or otherwise file an issue on github."""
+                )
         for idx1, idx2 in zip(
             aliased_input_indices, aliased_input_indices[1:], strict=False
         ):
@@ -933,7 +908,6 @@ def merge_view_inputs(
             # The "inputs that are aliased but have different differentiable bases" case
             # is more complicated and hopefully pretty rare. Not currently handled.
             if not is_inference:
-                # TODO(yf225): Error "aot_autograd() does not yet handle non-differentiable view input mutations" due to `torch._foreach_copy_` usage
                 assert _are_differentiable_views(
                     view1, view2
                 ), "aot_autograd() does not yet handle non-differentiable view input mutations."
@@ -942,27 +916,14 @@ def merge_view_inputs(
             assert _same_dtype_views(
                 view1, view2
             ), "aot_autograd() does not yet handle input mutations on views with different dtypes."
-        print(f"aliased_input_indices: {aliased_input_indices}")
-        non_none_bases = []
-        for i in aliased_input_indices:
-            if fwd_inputs[i]._base is not None:
-                print(f"non_none_base: index: {i}")
-                non_none_bases.append(fwd_inputs[i]._base)
-        print(f"non_none_bases: {non_none_bases}")
-        # non_none_bases = [
-        #     fwd_inputs[i]._base
-        #     for i in aliased_input_indices
-        #     if fwd_inputs[i]._base is not None
-        # ]
-        aliases_with_none_bases = []
-        for i in aliased_input_indices:
-            if fwd_inputs[i]._base is None:
-                print(f"aliases_with_none_bases: index: {i}")
-                aliases_with_none_bases.append(fwd_inputs[i])
-        print(f"aliases_with_none_bases: {aliases_with_none_bases}")
-        # aliases_with_none_bases = [
-        #     fwd_inputs[i] for i in aliased_input_indices if fwd_inputs[i]._base is None
-        # ]
+        non_none_bases = [
+            fwd_inputs[i]._base
+            for i in aliased_input_indices
+            if fwd_inputs[i]._base is not None
+        ]
+        aliases_with_none_bases = [
+            fwd_inputs[i] for i in aliased_input_indices if fwd_inputs[i]._base is None
+        ]
         if len(non_none_bases) == 0:
             # Case where none of the aliases have a ._base
             # we generate a synthetic base without gradients, and generate views off of it
@@ -1007,7 +968,7 @@ def merge_view_inputs(
             for alias in aliases_with_none_bases:
                 assert (
                     alias is synthetic_base
-                ), f"aot_autograd() does not yet handle non-differentiable view input mutations. But got: alias: {alias}, base: {synthetic_base}"
+                ), "aot_autograd() does not yet handle non-differentiable view input mutations."
         base_args.append(synthetic_base)
         for curr_view_idx in aliased_input_indices:
             curr_view = fwd_inputs[curr_view_idx]
@@ -1025,37 +986,18 @@ def merge_view_inputs(
         # (2) Metadata telling functionalization how to generate the inner argument list given the outer calling convention.
         #     We post-process it into a list, where meta[i] tells you info about the i'th argument in the inner calling convention.
         args_to_functionalization = base_args + other_args
-        arg_to_old_idx_map = {}
-        for i, arg in enumerate(fwd_inputs):
-            # NOTE(yf225): it's interesting - we have SymInts with the same underlying int value as inputs, and we need to use id(arg) to indicate their difference
-            if isinstance(arg, torch.SymInt):
-                arg = id(arg)
-            if arg in arg_to_old_idx_map:
-                print(f"already in arg_to_old_idx_map: arg: {arg}: type(arg): {type(arg)}, old_idx: {i}, idx_in_map: {arg_to_old_idx_map[arg]}")
-            arg_to_old_idx_map[arg] = i
-        # arg_to_old_idx_map = {arg: i for (i, arg) in enumerate(fwd_inputs)}
-        print(f"arg_to_old_idx_map:")
-        for k, v in arg_to_old_idx_map.items():
-            print(f"k: {k}, v: {v}")
+        arg_to_old_idx_map = {arg: i for (i, arg) in enumerate(fwd_inputs)}
         for i, other_arg in enumerate(other_args):
             new_idx = len(base_args) + i
-            if isinstance(other_arg, torch.SymInt):
-                other_arg = id(other_arg)
             old_idx = arg_to_old_idx_map[other_arg]
             inner_calling_convention_meta[old_idx] = new_idx
-        # NOTE(yf225): I added this assert to make sure the length of post_processed_calling_convention_meta is correct
         # post process into a list
         post_processed_calling_convention_meta: List[
             Union[int, Tuple[int, torch.Tensor]]
         ] = [-1 for _ in range(len(inner_calling_convention_meta))]
-        print(f"len(post_processed_calling_convention_meta): {len(post_processed_calling_convention_meta)}")
-        for k, v in inner_calling_convention_meta.items():
-            print(f"inner_calling_convention_meta: k: {k}, v: {v}")
-        assert len(post_processed_calling_convention_meta) == len(fwd_inputs)
         for k, v in inner_calling_convention_meta.items():
             post_processed_calling_convention_meta[k] = v
         # Quick assert: every argument in the inner calling convention should be accounted for.
-        print(f"post_processed_calling_convention_meta: {post_processed_calling_convention_meta}")
         for x in post_processed_calling_convention_meta:
             assert x != -1
         return args_to_functionalization, post_processed_calling_convention_meta
