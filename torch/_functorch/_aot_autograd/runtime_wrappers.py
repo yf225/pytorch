@@ -848,18 +848,24 @@ def merge_view_inputs(
     storage_ref_to_idx: Dict[StorageWeakRef, List[int]] = collections.defaultdict(list)
     base_args = []
     other_args = []
+    # NOTE(yf225): same as fwd_inputs, but with `int` wrapped with `torch.SymInt()`
     fwd_inputs_with_wrapped_ints = []
+    # NOTE(yf225): same as other_args, but with `int` wrapped with `torch.SymInt()`
+    other_args_with_wrapped_ints = []
     for inpt in fwd_inputs:
         if isinstance(inpt, int):
             fwd_inputs_with_wrapped_ints.append(torch.SymInt(inpt))
         else:
             fwd_inputs_with_wrapped_ints.append(inpt)
-    for i, inpt in enumerate(fwd_inputs_with_wrapped_ints):
+    for i in range(len(fwd_inputs)):
+        inpt = fwd_inputs[i]
+        inpt_with_wrapped_int = fwd_inputs_with_wrapped_ints[i]
         if isinstance(inpt, Tensor):
             storage_ref = StorageWeakRef(inpt.untyped_storage())
             storage_ref_to_idx[storage_ref].append(i)
         else:
             other_args.append(inpt)
+            other_args_with_wrapped_ints.append(inpt_with_wrapped_int)
     # Note [Synthetic Base Info Metadata]
     # This list contains metadata that tells you what the i'th argument in the inner calling convention should be.
     # It's either:
@@ -876,6 +882,7 @@ def merge_view_inputs(
         ):
             for curr_idx in aliased_input_indices:
                 other_args.append(fwd_inputs[curr_idx])
+                other_args_with_wrapped_ints.append(fwd_inputs[curr_idx])
             continue
 
         # Here, we attempt to do a more complicated check to detect false aliasing
@@ -890,6 +897,7 @@ def merge_view_inputs(
         if len(aliased_input_indices_no_false_sharing) <= 1:
             for curr_idx in aliased_input_indices:
                 other_args.append(fwd_inputs[curr_idx])
+                other_args_with_wrapped_ints.append(fwd_inputs[curr_idx])
             continue
 
         # We detected an input that was mutated, AND aliases with another input.
@@ -1001,22 +1009,23 @@ remove the aliasing yourself as a workaround, or otherwise file an issue on gith
             assert arg not in arg_to_old_idx_map, f"Arg already in arg_to_old_idx_map: arg: {arg}, type(arg): {type(arg)}"
             arg_to_old_idx_map[arg] = i
 
-        for i, other_arg in enumerate(other_args):
+        for i, other_arg_with_wrapped_int in enumerate(other_args_with_wrapped_ints):
             new_idx = len(base_args) + i
-            if isinstance(other_arg, torch.SymInt):
-                other_arg = id(other_arg)
-            old_idx = arg_to_old_idx_map[other_arg]
+            if isinstance(other_arg_with_wrapped_int, torch.SymInt):
+                other_arg_with_wrapped_int = id(other_arg_with_wrapped_int)
+            old_idx = arg_to_old_idx_map[other_arg_with_wrapped_int]
             inner_calling_convention_meta[old_idx] = new_idx
         # post process into a list
         post_processed_calling_convention_meta: List[
             Union[int, Tuple[int, torch.Tensor]]
         ] = [-1 for _ in range(len(inner_calling_convention_meta))]
 
-        assert len(post_processed_calling_convention_meta) == len(fwd_inputs_with_wrapped_ints)
+        assert len(post_processed_calling_convention_meta) == len(fwd_inputs_with_wrapped_ints), f"{len(post_processed_calling_convention_meta)} vs. {len(fwd_inputs_with_wrapped_ints)}"
 
         for k, v in inner_calling_convention_meta.items():
             post_processed_calling_convention_meta[k] = v
         # Quick assert: every argument in the inner calling convention should be accounted for.
         for x in post_processed_calling_convention_meta:
             assert x != -1
+        print(f"args_to_functionalization: {args_to_functionalization}")
         return args_to_functionalization, post_processed_calling_convention_meta
