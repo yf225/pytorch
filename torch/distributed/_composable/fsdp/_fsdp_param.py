@@ -449,8 +449,11 @@ def unsafe_free_storage(tensor: torch.Tensor) -> None:
 def unsafe_setattr_param(
     module: nn.Module, param_name: str, param: torch.Tensor
 ) -> None:
-    is_torchdynamo_compiling = torch.distributed._functional_collectives.is_torchdynamo_compiling()
-    # is_torchdynamo_compiling = False
+    # TODO(yf225): we want compile to just take the fast path, but it seems that compile assumes that we use the slow path
+    # and has special handling for it. We need to change this.
+    # Maybe look at "# Dynamic Path 2 - module is dynamic, and is fsdp" in code.
+    # is_torchdynamo_compiling = torch.distributed._functional_collectives.is_torchdynamo_compiling()
+    is_torchdynamo_compiling = False
     if (getattr(module.__setattr__, "__func__", None) is nn.Module.__setattr__) or is_torchdynamo_compiling:
         module._parameters[param_name] = cast(nn.Parameter, param)
         if not is_torchdynamo_compiling:
