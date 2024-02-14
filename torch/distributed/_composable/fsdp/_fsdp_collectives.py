@@ -126,17 +126,6 @@ def foreach_all_gather_copy_out(
             # TODO(yf225): this is the culprit, but what is this code trying to do?
             # If we can pass the original (instead of the view) as-is into the hook, it will help AOTAutograd resolve this
             torch._foreach_copy_(out, splits)  # one `copy_` per parameter
-    # # TODO(yf255): dumb hack to see if it can work
-    # out_list = []
-    # tmp_list = []
-    # for fsdp_param in fsdp_params:
-    #     out_list.append(fsdp_param.all_gather_output)
-    #     tmp_list.append(torch.empty_like(fsdp_param.all_gather_output))
-    # ctx = contextlib.nullcontext()
-    # if not torch.distributed._functional_collectives.is_torchdynamo_compiling():
-    #     ctx = _unsafe_preserve_version_counters(out_list)
-    # with ctx:
-    #     torch._foreach_copy_(out_list, tmp_list)
 
 
 @torch.no_grad()

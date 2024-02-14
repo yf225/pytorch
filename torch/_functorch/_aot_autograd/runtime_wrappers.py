@@ -848,7 +848,13 @@ def merge_view_inputs(
     storage_ref_to_idx: Dict[StorageWeakRef, List[int]] = collections.defaultdict(list)
     base_args = []
     other_args = []
-    for i, inpt in enumerate(fwd_inputs):
+    fwd_inputs_with_wrapped_ints = []
+    for inpt in fwd_inputs:
+        if isinstance(inpt, int):
+            fwd_inputs_with_wrapped_ints.append(torch.SymInt(inpt))
+        else:
+            fwd_inputs_with_wrapped_ints.append(inpt)
+    for i, inpt in enumerate(fwd_inputs_with_wrapped_ints):
         if isinstance(inpt, Tensor):
             storage_ref = StorageWeakRef(inpt.untyped_storage())
             storage_ref_to_idx[storage_ref].append(i)
@@ -986,15 +992,28 @@ remove the aliasing yourself as a workaround, or otherwise file an issue on gith
         # (2) Metadata telling functionalization how to generate the inner argument list given the outer calling convention.
         #     We post-process it into a list, where meta[i] tells you info about the i'th argument in the inner calling convention.
         args_to_functionalization = base_args + other_args
-        arg_to_old_idx_map = {arg: i for (i, arg) in enumerate(fwd_inputs)}
+        # arg_to_old_idx_map = {arg: i for (i, arg) in enumerate(fwd_inputs)}
+        arg_to_old_idx_map = {}
+        for i, arg in enumerate(fwd_inputs_with_wrapped_ints):
+            # NOTE(yf225): it's interesting - we can have SymInts or int with the same underlying int value as graph inputs, and we need to use id(arg) to differentiate them
+            if isinstance(arg, torch.SymInt):
+                arg = id(arg)
+            assert arg not in arg_to_old_idx_map, f"Arg already in arg_to_old_idx_map: arg: {arg}, type(arg): {type(arg)}"
+            arg_to_old_idx_map[arg] = i
+
         for i, other_arg in enumerate(other_args):
             new_idx = len(base_args) + i
+            if isinstance(other_arg, torch.SymInt):
+                other_arg = id(other_arg)
             old_idx = arg_to_old_idx_map[other_arg]
             inner_calling_convention_meta[old_idx] = new_idx
         # post process into a list
         post_processed_calling_convention_meta: List[
             Union[int, Tuple[int, torch.Tensor]]
         ] = [-1 for _ in range(len(inner_calling_convention_meta))]
+
+        assert len(post_processed_calling_convention_meta) == len(fwd_inputs_with_wrapped_ints)
+
         for k, v in inner_calling_convention_meta.items():
             post_processed_calling_convention_meta[k] = v
         # Quick assert: every argument in the inner calling convention should be accounted for.
