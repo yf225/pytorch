@@ -222,6 +222,7 @@ class FSDPParam:
         if sharded_param.numel() > 0:
             padded_sharded_param[: sharded_param.size(0)].copy_(sharded_param)
         self._sharded_param_data = padded_sharded_param.view(-1)
+        # NOTE(yf255): leaf tensor
         self.sharded_param = nn.Parameter(
             self.to_sharded_dtensor(padded_sharded_param[: sharded_param.size(0)])
         )
@@ -255,6 +256,7 @@ class FSDPParam:
         if self.all_gather_output.numel() > 0:
             return  # already initialized
         all_gather_output_size = torch.Size([all_gather_input_numel * world_size])
+        # NOTE(yf225): here we explicitly make fsdp_param.all_gather_output the leaf tensor (instead of unsharded_param being leaf tensor)
         self.all_gather_output = torch.nn.Parameter(torch.empty(
             all_gather_output_size, dtype=dtype, device=device
         ), requires_grad=True)
@@ -266,17 +268,21 @@ class FSDPParam:
             return  # already initialized
         # For the default path (no post-all-gather), the all-gather output
         # gives the unsharded parameter data directly
+        unsharded_param = self._create_view_into_all_gather_output(self.all_gather_output)
+        # self._unsharded_param = nn.Parameter(unsharded_param)  # TODO(yf225): this is where the view relationship happens
+        # NOTE(yf225): make unsharded_param NOT a leaf tensor (instead make fsdp_param.all_gather_output a leaf tensor)
+        self._unsharded_param = unsharded_param
+        self._unsharded_param.requires_grad_(self.sharded_param.requires_grad)
+    
+    def _create_view_into_all_gather_output(self, tensor_or_grad, is_grad=False):
         world_size = self.mesh_info.shard_mesh_size
         padded_unsharded_param_size = _get_dim0_padded_size(self._orig_size, world_size)
-        # TODO(yf225): this is where the view relationship happens
-        # print(f"here21: self.all_gather_output.shape: {self.all_gather_output.shape}")
-        padded_unsharded_param = self.all_gather_output.view(
+        padded_unsharded_param = tensor_or_grad.view(
             padded_unsharded_param_size
         )
-        # print(f"here22: padded_unsharded_param.shape: {padded_unsharded_param.shape}")
         unsharded_param = padded_unsharded_param[: self._orig_size[0]]
-        # print(f"here23: unsharded_param.shape: {unsharded_param.shape}")
         if self.is_dtensor:
+            assert not is_grad, "TODO(yf225): not supported yet"
             unsharded_param = DTensor.from_local(
                 unsharded_param,
                 self._tp_spec.mesh,
@@ -284,10 +290,7 @@ class FSDPParam:
                 shape=self._global_size,
                 stride=self._global_stride,
             )
-        # TODO(yf225): this is where the view relationship happens
-        # self._unsharded_param = nn.Parameter(unsharded_param)
-        self._unsharded_param = unsharded_param
-        self._unsharded_param.requires_grad_(self.sharded_param.requires_grad)
+        return unsharded_param
 
     def to_sharded(self) -> None:
         self._setattr_on_modules(self.sharded_param)
@@ -317,9 +320,10 @@ class FSDPParam:
             size=self.sharded_post_forward_size,
             stride=self.contiguous_sharded_post_forward_stride,
             storage_offset=0,
-            requires_grad=True,  # TODO(yf225): is this change okay for making grad flow through and tracking view relationship? where does it show up in compile log?
         )
-        self._sharded_post_forward_param = nn.Parameter(  # TODO(yf225): how do we let view relationship preserve through nn.Parameter wrapping?
+        # NOTE(yf225): this is for `reshard_after_forward: int` path, not the main path and not important for now.
+        # TODO(yf225): in future: how do we let view relationship preserve through nn.Parameter wrapping?
+        self._sharded_post_forward_param = nn.Parameter(
             self.to_sharded_post_forward_dtensor(sharded_post_forward_tensor)
         )
         self._setattr_on_modules(self._sharded_post_forward_param)
@@ -409,7 +413,8 @@ class FSDPParam:
 
     @property
     def unsharded_grad_data(self) -> torch.Tensor:
-        grad = self.unsharded_param.grad
+        # grad = self.unsharded_param.grad
+        grad = self._create_view_into_all_gather_output(self.all_gather_output.grad, is_grad=True)
         assert grad is not None, "Expects unsharded_param.grad to not be None"
         return self._get_grad_inner_tensor(grad)
 

@@ -128,11 +128,20 @@ def foreach_all_gather_copy_out(
             torch._foreach_copy_(out, splits)  # one `copy_` per parameter
 
 
+def _compute_numel(s):
+    if isinstance(s, torch.Size):
+        return s.numel()
+    else:
+        # TODO(yf225): unsure if optimal...
+        return torch.prod(torch.tensor(s))
+
+
 @torch.no_grad()
 def foreach_reduce_scatter(
     fsdp_params: List[FSDPParam],
     unsharded_grads: List[torch.Tensor],
     group: dist.ProcessGroup,
+    world_size: int,
     reduce_scatter_stream: torch.cuda.Stream,
     orig_dtype: torch.dtype,
     reduce_dtype: Optional[torch.dtype],
@@ -157,11 +166,16 @@ def foreach_reduce_scatter(
     padded_unsharded_sizes = tuple(
         _get_dim0_padded_size(grad.size(), world_size) for grad in unsharded_grads
     )
-    reduce_scatter_input_numel = sum(s.numel() for s in padded_unsharded_sizes)
+    reduce_scatter_input_numel = sum(_compute_numel(s) for s in padded_unsharded_sizes)
     reduce_scatter_output_numel = reduce_scatter_input_numel // world_size
-    current_stream = torch.cuda.current_stream()
-    reduce_scatter_stream.wait_stream(current_stream)
-    with torch.cuda.stream(reduce_scatter_stream):
+    if not torch.distributed._functional_collectives.is_torchdynamo_compiling():
+        current_stream = torch.cuda.current_stream()
+        reduce_scatter_stream.wait_stream(current_stream)
+
+    ctx = contextlib.nullcontext()
+    if not torch.distributed._functional_collectives.is_torchdynamo_compiling():
+        ctx = torch.cuda.stream(reduce_scatter_stream)
+    with ctx:
         reduce_scatter_input = torch.empty(
             (reduce_scatter_input_numel,), dtype=reduce_dtype, device=device
         )
@@ -169,9 +183,10 @@ def foreach_reduce_scatter(
             unsharded_grads, reduce_scatter_input, world_size
         )
         _div_if_needed(reduce_scatter_input, predivide_factor)
-        # Record to mark the end of the reduce-scatter copy-in in the RS stream
-        copy_in_event = torch.cuda.Event()
-        copy_in_event.record()
+        if not torch.distributed._functional_collectives.is_torchdynamo_compiling():
+            # Record to mark the end of the reduce-scatter copy-in in the RS stream
+            copy_in_event = torch.cuda.Event()
+            copy_in_event.record()
         reduce_scatter_output = reduce_scatter_input.new_empty(
             (reduce_scatter_output_numel,)
         )
@@ -197,19 +212,24 @@ def foreach_reduce_scatter(
                 fsdp_param.sharded_param.grad += new_sharded_dtensor_grad
             else:
                 fsdp_param.sharded_param.grad = new_sharded_dtensor_grad
-            padded_sharded_numel = padded_unsharded_size.numel() // world_size
+            padded_sharded_numel = _compute_numel(padded_unsharded_size) // world_size
             flat_grad_offset += padded_sharded_numel
-        reduce_scatter_view_out_event = torch.cuda.Event()
-        reduce_scatter_view_out_event.record()
-    # Only after the copy-in finishes can we free the gradients, which were
-    # computed in the default stream
-    current_stream.wait_event(copy_in_event)
+        if not torch.distributed._functional_collectives.is_torchdynamo_compiling():
+            reduce_scatter_view_out_event = torch.cuda.Event()
+            reduce_scatter_view_out_event.record()
+    if not torch.distributed._functional_collectives.is_torchdynamo_compiling():
+        # Only after the copy-in finishes can we free the gradients, which were
+        # computed in the default stream
+        current_stream.wait_event(copy_in_event)
     unsharded_grads.clear()
     # The RS output is allocated in the RS stream and used in the default
     # stream (for optimizer). To ensure its memory is not reused for later
     # RSs, we do not need extra synchronization since the sharded parameters
     # hold refs through the end of backward.
-    return reduce_scatter_view_out_event
+    if not torch.distributed._functional_collectives.is_torchdynamo_compiling():
+        return reduce_scatter_view_out_event
+    else:
+        return None
 
 
 def foreach_reduce_scatter_copy_in(
@@ -223,7 +243,7 @@ def foreach_reduce_scatter_copy_in(
     for grad in unsharded_grads:
         grad_size = grad.size()
         dim0_padded_size = _get_dim0_padded_size(grad_size, world_size)
-        if dim0_padded_size != grad_size:
+        if list(dim0_padded_size) != list(grad_size):
             padded_grad = grad.new_empty(dim0_padded_size)
             padded_grad_slices.append(padded_grad[: grad.size(0)])
             grads_to_copy.append(grad)

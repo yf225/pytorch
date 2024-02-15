@@ -130,6 +130,7 @@ class FSDPParamGroup:
         self.inp_split_sizes = [inp.numel() for inp in self.param_all_gather_inputs]
         self.all_gather_input_numel = sum(self.inp_split_sizes)
         self.mesh_info = mesh_info
+        self.shard_process_group_world_size: int = self.mesh_info.shard_process_group.size()
         self.post_forward_mesh_info = post_forward_mesh_info
         self.device = device
         self._training_state = TrainingState.IDLE
@@ -321,11 +322,13 @@ class FSDPParamGroup:
             fsdp_params_with_grad: List[FSDPParam] = []
             unsharded_grads: List[torch.Tensor] = []
             for fsdp_param in self.fsdp_params:
-                # TODO(yf225): this is always None, need to figure out why
-                if fsdp_param.unsharded_param.grad is not None:
+                # NOTE(yf225): .unsharded_param is no longer the leaf tensor (instead, .all_gather_output is the leaf tensor)
+                # if fsdp_param.unsharded_param.grad is not None:
+                if fsdp_param.all_gather_output.grad is not None:
                     fsdp_params_with_grad.append(fsdp_param)
                     unsharded_grads.append(fsdp_param.unsharded_grad_data)
-                    fsdp_param.unsharded_param.grad = None
+                    # fsdp_param.unsharded_param.grad = None
+                    fsdp_param.all_gather_output.grad = None
             self.reshard()
         if len(fsdp_params_with_grad) == 0:
             return
@@ -334,6 +337,7 @@ class FSDPParamGroup:
                 fsdp_params_with_grad,
                 unsharded_grads,
                 self._reduce_scatter_process_group,
+                self.shard_process_group_world_size,
                 self.comm_ctx.reduce_scatter_stream,
                 self._orig_dtype,
                 self._reduce_dtype,
@@ -444,6 +448,10 @@ class FSDPParamGroup:
         mesh_info = self.mesh_info
         assert isinstance(mesh_info, FSDPMeshInfo)
         return mesh_info.shard_process_group
+
+    @property
+    def _reduce_scatter_process_group_world_size(self) -> int:
+        return self.shard_process_group_world_size
 
     @property
     def _use_all_gather_stream(self) -> bool:
