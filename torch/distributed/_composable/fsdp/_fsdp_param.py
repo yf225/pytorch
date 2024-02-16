@@ -197,7 +197,7 @@ class FSDPParam:
             global_placements[global_dp_mesh_dim] = Shard(0)
             global_placements[global_tp_mesh_dim] = self._tp_spec.placements[0]
             self._global_placements = tuple(global_placements)
-            self._global_size = param.size()
+            self._global_size = tuple(param.size())
             self._global_stride = param.stride()
             param_data = cast(DTensor, param)._local_tensor
         else:
@@ -207,7 +207,7 @@ class FSDPParam:
                 )
             self._global_mesh = self.mesh_info.mesh
             self._global_placements = (Shard(0),)
-            self._global_size = param.size()
+            self._global_size = tuple(param.size())
             self._global_stride = param.stride()
             param_data = param
         self._orig_size = param_data.size()

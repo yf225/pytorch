@@ -16,8 +16,10 @@ from ._fsdp_collectives import (
     foreach_all_gather,
     foreach_all_gather_copy_out,
     foreach_reduce_scatter,
+    _compute_numel,
 )
 from ._fsdp_common import (
+    _get_dim0_padded_size,
     _raise_assert_with_print,
     FSDPMeshInfo,
     HSDPMeshInfo,
@@ -131,6 +133,7 @@ class FSDPParamGroup:
         self.all_gather_input_numel = sum(self.inp_split_sizes)
         self.mesh_info = mesh_info
         self.shard_process_group_world_size: int = self.mesh_info.shard_process_group.size()
+        self.reduce_scatter_input_numel = None
         self.post_forward_mesh_info = post_forward_mesh_info
         self.device = device
         self._training_state = TrainingState.IDLE
@@ -332,12 +335,21 @@ class FSDPParamGroup:
             self.reshard()
         if len(fsdp_params_with_grad) == 0:
             return
+        # NOTE(yf225): rely on 1st eager run to populate the `self.reduce_scatter_input_numel` field
+        if not torch.distributed._functional_collectives.is_torchdynamo_compiling():
+            if self.reduce_scatter_input_numel is None:
+                padded_unsharded_sizes = tuple(
+                    _get_dim0_padded_size(grad.size(), self.shard_process_group_world_size) for grad in unsharded_grads
+                )
+                self.reduce_scatter_input_numel = sum(_compute_numel(s) for s in padded_unsharded_sizes)
+                print(f"self.reduce_scatter_input_numel: {self.reduce_scatter_input_numel}")
         with torch.profiler.record_function("FSDP::post_backward_reduce"):
             self._reduce_scatter_view_out_event = foreach_reduce_scatter(
                 fsdp_params_with_grad,
                 unsharded_grads,
                 self._reduce_scatter_process_group,
                 self.shard_process_group_world_size,
+                self.reduce_scatter_input_numel,
                 self.comm_ctx.reduce_scatter_stream,
                 self._orig_dtype,
                 self._reduce_dtype,

@@ -129,11 +129,18 @@ def foreach_all_gather_copy_out(
 
 
 def _compute_numel(s):
+    ret = 0
     if isinstance(s, torch.Size):
-        return s.numel()
+        ret = s.numel()
     else:
+        numel = 1
+        for dim_s in s:
+            numel *= dim_s
+        ret = numel
         # TODO(yf225): unsure if optimal...
-        return torch.prod(torch.tensor(s))
+        # NOTE(yf225): hack because numel is guaranteed to be divisible by world_size
+        # ret = torch.prod(torch.tensor(s)).item()
+    return ret
 
 
 @torch.no_grad()
@@ -142,6 +149,7 @@ def foreach_reduce_scatter(
     unsharded_grads: List[torch.Tensor],
     group: dist.ProcessGroup,
     world_size: int,
+    reduce_scatter_input_numel: int,
     reduce_scatter_stream: torch.cuda.Stream,
     orig_dtype: torch.dtype,
     reduce_dtype: Optional[torch.dtype],
@@ -162,11 +170,12 @@ def foreach_reduce_scatter(
         )
     grad_dtype = unsharded_grads[0].dtype
     reduce_dtype = reduce_dtype or grad_dtype
-    world_size = group.size()
+    # world_size = group.size()
     padded_unsharded_sizes = tuple(
         _get_dim0_padded_size(grad.size(), world_size) for grad in unsharded_grads
     )
-    reduce_scatter_input_numel = sum(_compute_numel(s) for s in padded_unsharded_sizes)
+    # TODO(yf225): can we compute this at init time (not during runtime?)
+    # reduce_scatter_input_numel = sum(_compute_numel(s) for s in padded_unsharded_sizes)
     reduce_scatter_output_numel = reduce_scatter_input_numel // world_size
     if not torch.distributed._functional_collectives.is_torchdynamo_compiling():
         current_stream = torch.cuda.current_stream()
