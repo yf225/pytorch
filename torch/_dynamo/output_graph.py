@@ -767,7 +767,6 @@ class OutputGraph(Checkpointable[OutputGraphState]):
             install_guard(source.make_guard(GuardBuilder.NN_MODULE))
 
             def wrap_name(module_key):
-                raise Exception()
                 return NNModuleVariable(type(target), module_key, target, **options)
 
         elif isinstance(target, (torch.SymInt, torch.SymFloat)):

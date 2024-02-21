@@ -157,6 +157,8 @@ class FSDPParam:
 
     @torch.no_grad()
     def _init_sharded_param(self, param: nn.Parameter, device: torch.device):
+        if torch.distributed._functional_collectives.is_torchdynamo_compiling():
+            raise Exception()
         if param.device != device:
             raise AssertionError(
                 f"Expects the parameter to already be moved to device {device} but got {param.device}"
@@ -197,7 +199,7 @@ class FSDPParam:
             global_placements[global_dp_mesh_dim] = Shard(0)
             global_placements[global_tp_mesh_dim] = self._tp_spec.placements[0]
             self._global_placements = tuple(global_placements)
-            self._global_size = tuple(param.size())
+            self._global_size = param.size()
             self._global_stride = param.stride()
             param_data = cast(DTensor, param)._local_tensor
         else:
@@ -207,7 +209,7 @@ class FSDPParam:
                 )
             self._global_mesh = self.mesh_info.mesh
             self._global_placements = (Shard(0),)
-            self._global_size = tuple(param.size())
+            self._global_size = param.size()
             self._global_stride = param.stride()
             param_data = param
         self._orig_size = param_data.size()
@@ -273,24 +275,24 @@ class FSDPParam:
         # NOTE(yf225): make unsharded_param NOT a leaf tensor (instead make fsdp_param.all_gather_output a leaf tensor)
         self._unsharded_param = unsharded_param
         self._unsharded_param.requires_grad_(self.sharded_param.requires_grad)
-    
-    def _create_view_into_all_gather_output(self, tensor_or_grad, is_grad=False):
+
+    def _create_view_into_all_gather_output(self, param_or_grad, is_grad=False):
         world_size = self.mesh_info.shard_mesh_size
-        padded_unsharded_param_size = _get_dim0_padded_size(self._orig_size, world_size)
-        padded_unsharded_param = tensor_or_grad.view(
-            padded_unsharded_param_size
+        padded_unsharded_param_or_grad_size = _get_dim0_padded_size(self._orig_size, world_size)
+        padded_unsharded_param_or_grad = param_or_grad.view(
+            padded_unsharded_param_or_grad_size
         )
-        unsharded_param = padded_unsharded_param[: self._orig_size[0]]
+        unsharded_param_or_grad = padded_unsharded_param_or_grad[: self._orig_size[0]]
         if self.is_dtensor:
             assert not is_grad, "TODO(yf225): not supported yet"
-            unsharded_param = DTensor.from_local(
-                unsharded_param,
+            unsharded_param_or_grad = DTensor.from_local(
+                unsharded_param_or_grad,
                 self._tp_spec.mesh,
                 self._tp_spec.placements,
                 shape=self._global_size,
                 stride=self._global_stride,
             )
-        return unsharded_param
+        return unsharded_param_or_grad
 
     def to_sharded(self) -> None:
         self._setattr_on_modules(self.sharded_param)
@@ -364,6 +366,7 @@ class FSDPParam:
             _raise_assert_with_print(
                 f"Expects size {self.sharded_size} but got {tensor.shape}"
             )
+
         ret = DTensor.from_local(
             tensor,
             self._global_mesh,
@@ -371,7 +374,6 @@ class FSDPParam:
             shape=self._global_size,
             stride=self._global_stride,
         )
-        print(f"to_sharded_dtensor: id(ret): {id(ret)}")
         return ret
 
     def to_sharded_post_forward_dtensor(self, tensor: torch.Tensor) -> DTensor:

@@ -88,11 +88,12 @@ def _is_composable_with_fsdp(module: nn.Module) -> bool:
 
 def _get_dim0_padded_size(tensor_size: torch.Size, dim0_factor: int) -> torch.Size:
     padded_dim0 = math.ceil(tensor_size[0] / dim0_factor) * dim0_factor
-    # TODO(yf225): we should just add torch.Size(list) compile support
-    if not torch.distributed._functional_collectives.is_torchdynamo_compiling():
-        return cast(torch.Size, torch.Size([padded_dim0]) + tensor_size[1:])
-    else:
-        return [padded_dim0] + tensor_size[1:]
+    return cast(torch.Size, torch.Size([padded_dim0]) + tensor_size[1:])
+    # # TODO(yf225): we should just add torch.Size(list) compile support
+    # if not torch.distributed._functional_collectives.is_torchdynamo_compiling():
+    #     return cast(torch.Size, torch.Size([padded_dim0]) + tensor_size[1:])
+    # else:
+    #     return [padded_dim0] + tensor_size[1:]
 
 
 def _chunk_with_empty(
