@@ -967,6 +967,34 @@ class TestCollectivesInductor(DynamoDistributedSingleProcTestCase):
         assert counter.op_count == 3
         assert same(outputs, correct_outputs)
 
+    # @run_with_both_funcol_impls
+    # def test_dynamo_support_collective_op_wait_with_async_op_False(self):
+
+    #     def func(inp, out, *, pg):
+    #         # user explicitly set the attribute `async_op` to False,
+    #         # there should be no graph break
+    #         res = torch.distributed.reduce_scatter_tensor(
+    #             out,
+    #             inp,
+    #             group=pg,
+    #             async_op=False
+    #         )
+    #         res.wait()
+    #     local_size = [4, 4]
+    #     # single-proc test
+    #     global_size = local_size
+
+    #     inputs = torch.ones(local_size, device=self.device)
+    #     outputs = torch.empty(global_size, device=self.device)
+    #     correct_outputs = torch.empty(global_size, device=self.device)
+    #     counter = CompileCounter()
+    #     compiled = torch.compile(func, backend=counter)
+    #     compiled(inputs, outputs, pg=GroupMember.WORLD)
+    #     func(inputs, correct_outputs, pg=GroupMember.WORLD)
+    #     assert counter.frame_count == 1
+    #     assert counter.op_count == 3
+    #     assert same(outputs, correct_outputs)
+
     @run_with_both_funcol_impls
     def test_dynamo_graphbreaks_unsupported_async_op(self):
 
@@ -992,6 +1020,25 @@ class TestCollectivesInductor(DynamoDistributedSingleProcTestCase):
         assert counter.frame_count == 0
         assert counter.op_count == 0
         assert same(outputs, correct_outputs)
+        raise Exception()
+
+    # @run_with_both_funcol_impls
+    # def test_dynamo_async_collective_tensor_wait_in_compile(self):
+    #     def func(input: torch.Tensor) -> torch.Tensor:
+    #         output = all_reduce(
+    #             input,
+    #             "avg",
+    #             "default",
+    #         )
+    #         output.wait()
+    #         return output
+
+    #     self._init_process_group()
+    #     arg = torch.rand(4, 4, device="cuda")
+    #     compiled = torch.compile(func, fullgraph=True)
+
+    #     code = run_and_get_triton_code(compiled, arg)
+    #     (FileCheck().check("all_reduce_.default(buf0, 'avg', '0')").run(code))
 
     @run_with_both_funcol_impls
     def test_dynamo_pg_var(self):

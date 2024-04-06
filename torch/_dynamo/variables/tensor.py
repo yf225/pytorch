@@ -907,6 +907,13 @@ class TensorVariable(VariableTracker):
             self, self.as_proxy().node.meta["example_value"].untyped_storage()
         )
 
+    # def method_wait(self):
+    #     # This happens when we trace the `.wait()` call on the AsyncCollectiveTensor returned from collective op.
+    #     # Under compile, we treat it as a no-op, because we don't rely on it to issue the `wait_tensor` op
+    #     # (instead we always immediately issue the `wait_tensor` op).
+    #     # For more details, please see [Note: User facing APIs for functional collectives].
+    #     return ConstantVariable.create(None)
+
     def set_name_hint(self, name: str):
         # Only rename at the top-level scope, this is to avoid the confusion between
         # mutating a variable vs renaming it (e.g. a = b) during speculating a higher order op,
