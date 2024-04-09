@@ -8,6 +8,7 @@ import itertools
 import sys
 import types
 from typing import Dict, List
+import logging
 
 import torch._C
 import torch._numpy as tnp
@@ -26,6 +27,8 @@ from ..utils import (
 from .base import VariableTracker
 from .functions import NestedUserFunctionVariable, UserFunctionVariable
 from .user_defined import UserDefinedObjectVariable
+
+torch_log = logging.getLogger("torch")
 
 
 class SuperVariable(VariableTracker):
@@ -529,6 +532,32 @@ class AutogradFunctionContextVariable(UserDefinedObjectVariable):
         if name == "saved_tensors" and self.saved_tensors is not None:
             return variables.TupleVariable(list(self.saved_tensors.tensors))
         return super().var_getattr(tx, name)
+
+
+class AutogradGraphNodeVariable(VariableTracker):
+    # var_cache = {}
+    @classmethod
+    def create(cls, proxy, value, **kwargs):
+        # if value in cls.var_cache:
+        #     return cls.var_cache[value]
+        # else:
+        torch_log.warning(f"AutogradGraphNodeVariable: id(value): {id(value)}, value.name: {value.name}")
+        torch_log.warning(f"dir(value): {dir(value)}")
+        var = cls(proxy, value, **kwargs)
+        # cls.var_cache[value] = var
+        return var
+
+    def __init__(self, proxy, value, **kwargs):
+        super().__init__(**kwargs)
+        self.value = value
+        # dir(value): [..., '_raw_saved_mat2', '_raw_saved_self', '_register_hook_dict', '_saved_mat2', '_saved_mat2_sym_sizes',
+        # '_saved_mat2_sym_strides', '_saved_self', '_saved_self_sym_sizes', '_saved_self_sym_strides', '_sequence_nr', '_set_sequence_nr',
+        # 'metadata', 'name', 'next_functions', 'register_hook', 'register_prehook', 'requires_grad']
+
+    def call_function(
+        self, tx, args: "List[VariableTracker]", kwargs: "Dict[str, VariableTracker]"
+    ) -> "VariableTracker":
+        raise NotImplementedError()
 
 
 class LambdaVariable(VariableTracker):

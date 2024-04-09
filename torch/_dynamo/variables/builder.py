@@ -141,6 +141,7 @@ from .misc import (
     PythonModuleVariable,
     SavedTensorBox,
     TypingVariable,
+    AutogradGraphNodeVariable,
 )
 from .nn_module import FSDPManagedNNModuleVariable, UnspecializedNNModuleVariable
 from .optimizer import OptimizerVariable
@@ -841,6 +842,9 @@ class VariableBuilder:
                     user_cls_source=AttrSource(self.source, "__class__"),
                 ),
             )
+        elif isinstance(value, torch.autograd.graph.Node):
+            self.install_guards(GuardBuilder.ID_MATCH)
+            return AutogradGraphNodeVariable.create(None, value, source=self.source)
         else:
             self.install_guards(GuardBuilder.TYPE_MATCH)
             result = UserDefinedObjectVariable(value, source=self.source)
@@ -1614,10 +1618,16 @@ def wrap_fx_proxy_cls(
     ]:
         proxy.node.meta["example_value"] = example_value
         return ConstantVariable.create(example_value, **options)
+    elif proxy.node.target is getattr and proxy.node.args[1] == "grad_fn":
+        # print(f"proxy.node.args: {proxy.node.args}")
+        # print(f"proxy.node.args[0]: {proxy.node.args[0]}")
+        proxy.node.meta["example_value"] = example_value
+        return AutogradGraphNodeVariable.create(proxy, example_value, **options)
     else:
         unimplemented(
             "torch.* op returned non-Tensor "
-            + f"{typestr(example_value)} {proxy.node.op} {proxy.node.target}"
+            + f"{typestr(example_value)} {proxy.node.op} {proxy.node.target} "
+            + f"{type(example_value)} {proxy.node.args} {proxy.node.kwargs}"
         )
 
 

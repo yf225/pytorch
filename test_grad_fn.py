@@ -53,6 +53,8 @@ def post_forward_hook(module, args, output):
     if not torch.distributed._functional_collectives.is_torchdynamo_compiling():
         assert output.grad_fn is not None
         print(f"output.grad_fn: {output.grad_fn}")
+    # NOTE(yf225): output.grad_fn under compile might return a different grad_fn (e.g. CloneBackward) instead of MmBackward as in eager mode.
+    # User should not assume output.grad_fn to be a specific grad function in their code.
     grad_fns.append(output.grad_fn)
 
 x = torch.randn(4, 4)

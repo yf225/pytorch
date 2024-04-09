@@ -796,6 +796,10 @@ Either create the tensor outside the compiled region, or do not set the tensor t
                 else:
                     unimplemented(f"out variant of {type(kwargs['out'])}")
 
+            # print(f"tensor_variable.proxy.node: {tensor_variable.proxy.node}")
+            # print(f"tensor_variable.proxy.node.target: {tensor_variable.proxy.node.target}")
+            # print(f"tensor_variable.proxy.node.meta: {tensor_variable.proxy.node.meta}")
+            # print(f"id(tensor_variable.proxy.node.meta['example_value']): {id(tensor_variable.proxy.node.meta['example_value'])}")
             return tensor_variable
 
     def _call_ntuple(self, tx, args, kwargs):
