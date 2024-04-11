@@ -484,7 +484,7 @@ class MetaConverter:
     def set_storage_memo(self, s: MetaStorageDesc, v):
         # If we are fakeifying a tensor that has a secretly-zero-sized storage,
         # Need to make sure to resize the meta storage too.
-        if s.size() == 0:
+        if s.size == 0:
             v.resize_(0)
         self.storage_memo[s.id] = v
 

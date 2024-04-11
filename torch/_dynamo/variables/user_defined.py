@@ -795,6 +795,7 @@ class UserDefinedObjectVariable(UserDefinedVariable):
         try:
             subobj = self._getattr_static(name)
         except AttributeError:
+            print(f"self.value: {self.value}, name: {name}")
             subobj = NO_SUCH_SUBOBJ
             if isinstance(getattr_fn, types.FunctionType):
                 return variables.UserMethodVariable(
