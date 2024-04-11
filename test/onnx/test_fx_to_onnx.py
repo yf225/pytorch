@@ -1,6 +1,8 @@
 # Owner(s): ["module: onnx"]
 from __future__ import annotations
 
+import logging
+
 import tempfile
 
 from typing import Mapping, Tuple
@@ -478,6 +480,11 @@ class TestFxToOnnx(pytorch_test_common.ExportTestCase):
                 assert (
                     len(onnx.load(tmp_onnx_file.name).graph.initializer) == 2
                 ), "Initializers must be present after loading it from model_state_dict"
+                # Let's make sure consecutive `save` calls don't create dupes
+                onnx_program.save(tmp_onnx_file.name, model_state=model_state_dict)
+                assert (
+                    len(onnx.load(tmp_onnx_file.name).graph.initializer) == 2
+                ), "Initializers must be present after loading it from model_state_dict"
         elif checkpoint_type == "checkpoint_file":
             # Variant 2: Save ONNX proto using Model checkpoint file
             with tempfile.NamedTemporaryFile(
@@ -488,6 +495,13 @@ class TestFxToOnnx(pytorch_test_common.ExportTestCase):
                 torch.save(
                     Model().state_dict(), tmp_checkpoint_file.name
                 )  # Create checkpoint file for testing
+                onnx_program.save(
+                    tmp_onnx_file.name, model_state=tmp_checkpoint_file.name
+                )
+                assert (
+                    len(onnx.load(tmp_onnx_file.name).graph.initializer) == 2
+                ), "Initializers must be present after loading it from model_state_dict"
+                # Let's make sure consecutive `save` calls don't create dupes
                 onnx_program.save(
                     tmp_onnx_file.name, model_state=tmp_checkpoint_file.name
                 )
@@ -695,6 +709,18 @@ class TestFxToOnnx(pytorch_test_common.ExportTestCase):
 
         _ = torch.onnx.dynamo_export(Float8Module(), torch.randn(1, 2, 3, 4))
 
+    def test_export_with_logging_logger(self):
+        logger = logging.getLogger(__name__)
+
+        class LoggingLoggerModule(torch.nn.Module):
+            def forward(self, x):
+                logger.log("abc")
+                return x + 1
+
+        input = torch.randn(2, 3)
+        model = LoggingLoggerModule()
+        _ = torch.onnx.dynamo_export(model, input)
+
     def test_checkpoint_cast(self):
         model_id = "openai/whisper-large-v3"
         feature_extractor = transformers.WhisperFeatureExtractor(feature_size=128)
@@ -723,6 +749,16 @@ class TestFxToOnnx(pytorch_test_common.ExportTestCase):
         with tempfile.NamedTemporaryFile(suffix=".onnx") as tmp_onnx_file:
             onnx_program.save(tmp_onnx_file.name)
             onnx.checker.check_model(tmp_onnx_file.name, full_check=True)
+
+    def test_export_with_print(self):
+        class PrintModule(torch.nn.Module):
+            def forward(self, x):
+                print("abc")
+                return x + 1
+
+        input = torch.randn(2, 3)
+        model = PrintModule()
+        _ = torch.onnx.dynamo_export(model, input)
 
 
 if __name__ == "__main__":

@@ -317,7 +317,8 @@ def meta_randperm_default(
     )
 
 
-@register_meta(aten.randint.default)
+@register_meta([aten.randint.default, aten.randint.out])
+@out_wrapper()
 def meta_randint(
     high, size, *, dtype=torch.long, layout=None, device=None, pin_memory=None
 ):
@@ -326,7 +327,8 @@ def meta_randint(
     )
 
 
-@register_meta(aten.randint.low)
+@register_meta([aten.randint.low, aten.randint.low_out])
+@out_wrapper()
 def meta_randint_low(
     low,
     high,
@@ -342,7 +344,8 @@ def meta_randint_low(
     )
 
 
-@register_meta(aten.rand.default)
+@register_meta([aten.rand.default, aten.rand.out])
+@out_wrapper()
 def meta_rand_default(size, *, dtype=None, layout=None, device=None, pin_memory=None):
     return torch.empty(
         size, dtype=dtype, layout=layout, device=device, pin_memory=pin_memory
@@ -611,7 +614,7 @@ def make_dep_token(
     pin_memory=None,
     memory_format=None,
 ):
-    return torch.empty([], device="meta")
+    return torch.empty(0, device="meta")
 
 
 @register_meta(aten.sym_constrain_range.default)
@@ -3330,6 +3333,29 @@ def meta__foreach_addcop__scalar(self, tensor1, tensor2, scalar=1):
     torch._check(len(self) > 0, lambda: "input tensor list must not be empty.")
     torch._check(
         len(self) == len(tensor1) and len(self) == len(tensor2),
+        lambda: "All input tensor lists must have the same length",
+    )
+
+
+@register_meta(
+    [
+        aten._foreach_addcdiv_.ScalarList,
+        aten._foreach_addcmul_.ScalarList,
+    ]
+)
+def meta__foreach_addcop__scalarlist(self, tensor1, tensor2, scalars):
+    torch._check(
+        all(isinstance(l, List) for l in [self, tensor1, tensor2, scalars]),
+        lambda: (
+            "_foreach_addc*_ op expects arguments of type: List[Tensor], List[Tensor], List[Tensor], List[Scalar], "
+            f"but got {type(self)}, {type(tensor1)}, {type(tensor2)}, and {type(scalars)}"
+        ),
+    )
+    torch._check(len(self) > 0, lambda: "input tensor list must not be empty.")
+    torch._check(
+        len(self) == len(tensor1)
+        and len(self) == len(tensor2)
+        and len(self) == len(scalars),
         lambda: "All input tensor lists must have the same length",
     )
 
