@@ -7715,6 +7715,7 @@ class Wait(ExternKernelAlloc):
         inputs,
         constant_args=(),
     ):
+        raise Exception("DEBUG: we don't expect this to be used from full-graph compiled FSDP")
         super().__init__(layout, inputs, constant_args)
 
     def should_allocate(self):
@@ -8247,17 +8248,25 @@ class _CollectiveKernel(FallbackKernel):
     # mutation of the input buffers.
     @classmethod
     def create_inplace(
-        cls, kernel, inputs: Union[TensorBox, List[TensorBox]], *args, **kwargs
+        cls, kernel, mutated_inputs: Union[TensorBox, List[TensorBox]], *args, **kwargs
     ) -> None:
         cpp_kernel_name = kernel._name
         python_kernel_name = cpp_kernel_name.replace("::", ".")
         with V.graph.fake_mode:
-            (
-                example_output,
-                tensor_args,
-                non_tensor_args,
-                unflatten_args,
-            ) = cls.process_kernel(kernel, inputs, *args, **kwargs)
+            if kernel is torch.ops._c10d_functional.all_gather_into_tensor_.default:
+                (
+                    example_output,
+                    tensor_args,
+                    non_tensor_args,
+                    unflatten_args,
+                ) = cls.process_kernel(kernel, *mutated_inputs, *args, **kwargs)
+            else:
+                (
+                    example_output,
+                    tensor_args,
+                    non_tensor_args,
+                    unflatten_args,
+                ) = cls.process_kernel(kernel, mutated_inputs, *args, **kwargs)
         for tensor_arg in tensor_args:
             tensor_arg.realize()
 
@@ -8276,7 +8285,7 @@ class _CollectiveKernel(FallbackKernel):
                 x = x.data.unwrap_view()
             MutationOutput(x.layout, x, packed)
 
-        pytree.tree_map(lambda inp: mark_mutation(inp), inputs)
+        pytree.tree_map(lambda inp: mark_mutation(inp), mutated_inputs)
 
     # NOTE: [Out-of-Place Collective Safety]
     # Between the initiation and completion of an out-of-place collective:
@@ -8348,6 +8357,15 @@ class _CollectiveKernel(FallbackKernel):
             packed.python_kernel_name = python_kernel_name
             packed.outputs = [packed]
             return packed
+
+    def codegen(self, wrapper):
+        super().codegen(wrapper)
+        # NOTE(yf225): It should always be safe to attempt to free the output of inplace-collective/wait_tensor right after the op,
+        # because downstream should depend on the input (instead of the output) of the inplace-collective/wait_tensor.
+        # This is important for being able to release collective memory as soon as possible by decreasing the collective output's refcount.
+        if isinstance(self.layout, NoneLayout):
+            from .codegen.wrapper import FreeIfNotReusedLine
+            wrapper.writeline(FreeIfNotReusedLine(wrapper, self))
 
 
 class _WaitKernel(_CollectiveKernel):

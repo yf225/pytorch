@@ -1,14 +1,19 @@
+import contextlib
 from typing import List, NamedTuple, Optional, Tuple, Union
 
 import torch
 import torch.distributed as dist
 from torch.distributed.distributed_c10d import ReduceOp
+from torch.distributed._functional_collectives import AsyncCollectiveTensor
 from ._fsdp_common import (
     _get_dim0_padded_size,
     _raise_assert_with_print,
     _to_dtype_if_needed,
 )
 from ._fsdp_param import FSDPParam
+from torch._inductor import config as inductor_config
+
+lib = torch.library.Library("fsdp", "DEF")
 
 
 class AllGatherResult(NamedTuple):
@@ -16,6 +21,79 @@ class AllGatherResult(NamedTuple):
     all_gather_event: Optional[torch.cuda.Event]
     all_gather_work: Optional[dist.distributed_c10d.Work]
     all_gather_input_numels: List[int]
+
+
+lib.define("all_gather_copy_in(SymInt all_gather_input_numel, SymInt world_size, SymInt rank, ScalarType dtype, Device device, SymInt[] inp_split_sizes, Tensor[] param_all_gather_inputs) -> (Tensor, Tensor)")
+
+@torch.library.impl(lib, "all_gather_copy_in", "Meta")
+def all_gather_copy_in(all_gather_input_numel, world_size, rank, dtype, device, inp_split_sizes, param_all_gather_inputs):
+    all_gather_output = torch.empty(
+        (all_gather_input_numel * world_size,), dtype=dtype, device="meta"
+    )
+    all_gather_input = all_gather_output.narrow(
+        0, all_gather_input_numel * rank, all_gather_input_numel
+    )
+    foreach_copy_dsts = torch.split(all_gather_input, inp_split_sizes)
+    with torch.no_grad():
+        torch._foreach_copy_(foreach_copy_dsts, param_all_gather_inputs)
+    return all_gather_input, all_gather_output
+
+def all_gather_copy_in_impl(
+    all_gather_input_numel, world_size, rank, dtype, device, inp_split_sizes, param_all_gather_inputs
+):
+    all_gather_output = torch.empty(
+        (all_gather_input_numel * world_size,), dtype=dtype, device=device
+    )
+    all_gather_input = all_gather_output.narrow(
+        0, all_gather_input_numel * rank, all_gather_input_numel
+    )
+    foreach_copy_dsts = torch.split(all_gather_input, inp_split_sizes)
+    with torch.no_grad():
+        torch._foreach_copy_(foreach_copy_dsts, param_all_gather_inputs)
+    return all_gather_input, all_gather_output
+
+@torch.library.impl(lib, "all_gather_copy_in", "CUDA")
+def all_gather_copy_in(all_gather_input_numel, world_size, rank, dtype, device, inp_split_sizes, param_all_gather_inputs):
+    return all_gather_copy_in_impl(all_gather_input_numel, world_size, rank, dtype, device, inp_split_sizes, param_all_gather_inputs)
+
+
+lib.define("split_contiguous_view_as_strided(Tensor all_gather_output, SymInt[] all_gather_input_numels, SymInt[][] orig_sizes, SymInt[][] contiguous_orig_strides) -> Tensor[]")
+
+@torch.library.impl(lib, "split_contiguous_view_as_strided", "Meta")
+def split_contiguous_view_as_strided(all_gather_output, all_gather_input_numels, orig_sizes, contiguous_orig_strides):
+    splits = torch.split(all_gather_output, all_gather_input_numels, dim=1)
+    out = []
+    for i in range(len(orig_sizes)):
+        split = splits[i]
+        orig_size = orig_sizes[i]
+        contiguous_orig_stride = contiguous_orig_strides[i]
+        split_flattened = split.contiguous().view(split.numel())
+        split_unpadded = torch.as_strided(
+            split_flattened,
+            orig_size,
+            contiguous_orig_stride,
+            storage_offset=0,
+        )
+        out.append(split_unpadded)
+    return out
+
+@torch.library.impl(lib, "split_contiguous_view_as_strided", "CUDA")
+def split_contiguous_view_as_strided(all_gather_output, all_gather_input_numels, orig_sizes, contiguous_orig_strides):
+    splits = torch.split(all_gather_output, all_gather_input_numels, dim=1)
+    out = []
+    for i in range(len(orig_sizes)):
+        split = splits[i]
+        orig_size = orig_sizes[i]
+        contiguous_orig_stride = contiguous_orig_strides[i]
+        split_flattened = split.contiguous().view(split.numel())
+        split_unpadded = torch.as_strided(
+            split_flattened,
+            orig_size,
+            contiguous_orig_stride,
+            storage_offset=0,
+        )
+        out.append(split_unpadded)
+    return out
 
 
 @torch.no_grad()
@@ -40,14 +118,10 @@ def foreach_all_gather(
             )
         inp_split_sizes = [inp.numel() for inp in param_all_gather_inputs]
         all_gather_input_numel = sum(inp_split_sizes)
-        all_gather_output = torch.empty(
-            (all_gather_input_numel * world_size,), dtype=dtype, device=device
-        )
-        all_gather_input = all_gather_output.narrow(
-            0, all_gather_input_numel * rank, all_gather_input_numel
-        )
-        foreach_copy_dsts = torch.split(all_gather_input, inp_split_sizes)
-        torch._foreach_copy_(foreach_copy_dsts, param_all_gather_inputs)
+        if inductor_config.use_fsdp_custom_op:
+            all_gather_input, all_gather_output = torch.ops.fsdp.all_gather_copy_in(all_gather_input_numel, world_size, rank, dtype, device, inp_split_sizes, param_all_gather_inputs)
+        else:
+            all_gather_input, all_gather_output = all_gather_copy_in_impl(all_gather_input_numel, world_size, rank, dtype, device, inp_split_sizes, param_all_gather_inputs)
         del param_all_gather_inputs
     all_gather_stream.wait_stream(all_gather_copy_in_stream)
     with torch.cuda.stream(all_gather_stream):
@@ -78,7 +152,7 @@ def foreach_all_gather_copy_out(
     ) = all_gather_result
     if all_gather_event is not None:  # sync op
         torch.cuda.current_stream().wait_event(all_gather_event)
-    if all_gather_work is not None:  # async op
+    if isinstance(all_gather_work, dist.distributed_c10d.Work):  # async op
         all_gather_work.wait()
     world_size = group.size()
     dtype, device = all_gather_output.dtype, all_gather_output.device
@@ -87,13 +161,37 @@ def foreach_all_gather_copy_out(
             all_gather_input_numel, world_size, dtype, device
         )  # no-op after 1st call
         fsdp_param.alloc_all_gather_output()
+        fsdp_param.init_unsharded_param()  # no-op after 1st call. Need to call here so that ._unsharded_param access below doesn't fail.
     all_gather_output = all_gather_output.view(world_size, -1)
-    out = [
-        fsdp_param.all_gather_output.view(world_size, -1) for fsdp_param in fsdp_params
-    ]
-    torch.split_with_sizes_copy(
-        all_gather_output, all_gather_input_numels, dim=1, out=out
-    )
+    # NOTE: This is the biggest difference between eager and compile code path.
+    # In eager, we directly copy from `all_gather_output` into `fsdp_param.all_gather_output` (`fsdp_param._unsharded_param` will be updated because of shared storage),
+    # but in compile path we copy from `as_strided(all_gather_output)` into `fsdp_param._unsharded_param` to avoid having `fsdp_param.all_gather_output` as graph input.
+    # They are equivalent and must produce the same result.
+    if not torch.distributed._functional_collectives.is_torchdynamo_compiling():
+        out = [
+            fsdp_param.all_gather_output.view(world_size, -1) for fsdp_param in fsdp_params
+        ]
+        torch.split_with_sizes_copy(
+            all_gather_output, all_gather_input_numels, dim=1, out=out
+        )
+    else:
+        unsharded_params = []
+        orig_sizes = []
+        contiguous_orig_strides = []
+        for i, fsdp_param in enumerate(fsdp_params):
+            unsharded_param = fsdp_param._unsharded_param
+            if fsdp_param.is_dtensor:
+                unsharded_param = unsharded_param.to_local()
+            unsharded_params.append(unsharded_param)
+            orig_sizes.append(fsdp_param._orig_size)
+            contiguous_orig_strides.append(fsdp_param._contiguous_orig_stride)
+        out = torch.ops.fsdp.split_contiguous_view_as_strided(all_gather_output, all_gather_input_numels, orig_sizes, contiguous_orig_strides)
+        for i, unsharded_param in enumerate(unsharded_params):
+            ctx = contextlib.nullcontext()
+            if not torch.distributed._functional_collectives.is_torchdynamo_compiling():
+                ctx = torch.autograd._unsafe_preserve_version_counter(unsharded_param)
+            with torch.no_grad(), ctx:
+                unsharded_param.copy_(out[i])
 
 
 @torch.no_grad()

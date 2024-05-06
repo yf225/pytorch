@@ -301,7 +301,8 @@ class FSDPParamGroup:
             self.unshard()  # no-op if prefetched
             self.wait_for_unshard()
             # Can be already removed if running multiple `backward`s
-            self.all_forward_output_grad_fns.discard(forward_grad_fns)
+            if not torch.distributed._functional_collectives.is_torchdynamo_compiling():
+                self.all_forward_output_grad_fns.discard(forward_grad_fns)
             self._prefetch_unshard()
 
     def post_backward(self, *unused: Any):
@@ -344,7 +345,8 @@ class FSDPParamGroup:
             self._post_reduce_view_out_event = None
         self._training_state = TrainingState.IDLE
         self._post_forward_indices.clear()
-        self.all_forward_output_grad_fns.clear()
+        if not torch.distributed._functional_collectives.is_torchdynamo_compiling():
+            self.all_forward_output_grad_fns.clear()
 
     def _prefetch_unshard(self):
         if self._training_state == TrainingState.PRE_BACKWARD:
@@ -355,17 +357,22 @@ class FSDPParamGroup:
             if (target_index := curr_index - 1) < 0:
                 return
             target_fsdp_param_group = self.comm_ctx.post_forward_order[target_index]
-            if any(
+            # NOTE(yf225): since compile doesn't support `t.grad_fn` access or `torch._C._will_engine_execute_node()` yet,
+            # when compile, we always do unshard and rely on Inductor DCE to remove the unnecessary ops
+            # NOTE(yf225): unfortunately we can't use `.use_training_state()` ctx manager because Dynamo doesn't support it yet.
+            if torch.distributed._functional_collectives.is_torchdynamo_compiling() or \
+            any(
                 torch._C._will_engine_execute_node(grad_fn)  # type: ignore[attr-defined]
                 for grad_fns in target_fsdp_param_group.all_forward_output_grad_fns
                 for grad_fn in grad_fns
             ):
+                old_training_state = target_fsdp_param_group._training_state
+                target_fsdp_param_group._training_state = TrainingState.PRE_BACKWARD
                 with torch.profiler.record_function(
                     "FSDP::backward_prefetch"
-                ), target_fsdp_param_group.use_training_state(
-                    TrainingState.PRE_BACKWARD
                 ):
                     target_fsdp_param_group.unshard()
+                target_fsdp_param_group._training_state = old_training_state
 
     # Utilities #
     def _to_sharded(self):
@@ -411,6 +418,8 @@ class FSDPParamGroup:
     def _register_post_backward_hook(
         self, args: Tuple[Any, ...], kwargs: Dict[str, Any]
     ) -> Tuple[Tuple[Any, ...], Dict[str, Any]]:
+        if torch.distributed._functional_collectives.is_torchdynamo_compiling():
+            return args, kwargs
         if not torch.is_grad_enabled():
             return args, kwargs
         args_list, args_spec = tree_flatten(args)

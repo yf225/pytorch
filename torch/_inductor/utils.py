@@ -54,9 +54,12 @@ from torch.utils._sympy.functions import CeilDiv, CleanDiv, FloorDiv, ModularInd
 from . import config
 
 log = logging.getLogger(__name__)
+torch_log = logging.getLogger("torch")
 
 _T = TypeVar("_T")
 VarRanges = Dict[sympy.Expr, sympy.Expr]
+
+yf225_debug_comment_count = 0
 
 
 def do_bench_using_profiling(fn: Callable[[], Any], warmup=25, rep=100) -> float:
@@ -505,8 +508,15 @@ def get_fused_kernel_name(node_schedule, descriptive_names):
     sources = sources
     return "_".join(["fused"] + sources)
 
+def cuda_sync_and_print(msg):
+    torch.cuda.synchronize()
+    import time
+    time.sleep(0.5)
+    torch_log.warning(msg)
 
 def get_kernel_metadata(node_schedule, wrapper):
+    global yf225_debug_comment_count
+
     all_origins = aggregate_origins(node_schedule)
     inductor_nodes = [origin for origin in all_origins if origin.op == "call_function"]
 
@@ -519,6 +529,8 @@ def get_kernel_metadata(node_schedule, wrapper):
         if "from_node" in node.meta:
             key = node.meta["from_node"][0][0]
             from_node_dict[key].append(node.name)
+    # metadata = f"cuda_sync_and_print('yf225_here{yf225_debug_comment_count}')"
+    # yf225_debug_comment_count += 1
     metadata = (
         f"{wrapper.comment} Source Nodes: [{', '.join(sorted(from_node_dict.keys()))}], "
         f"Original ATen: [{', '.join(sorted(original_aten_dict.keys()))}]"
@@ -814,7 +826,17 @@ class IndentedBuffer:
             buf.write(line)
             buf.write("\n")
             p += 1 + line.count("\n")
-        return buf.getvalue(), linemap
+        code = buf.getvalue()
+        # DEBUG yf225
+        modify_code = False
+        if modify_code and "cuda:1" not in code:
+            if "torch.ops._c10d_functional.reduce_scatter_tensor.default" in code:  # BWD graph
+                code = """
+
+"""
+
+        # END DEBUG yf225
+        return code, linemap
 
     def getvalue(self) -> str:
         v, _ = self.getvaluewithlinemap()
@@ -1434,6 +1456,22 @@ def is_wait(node):
     from . import ir
 
     return isinstance(node, ir.Wait) or type(node) == ir._WaitKernel
+
+
+def contains_collective(snode):
+    from torch._inductor.scheduler import GroupedSchedulerNode
+    if isinstance(snode, GroupedSchedulerNode):
+        return any(contains_collective(subnode) for subnode in snode.snodes)
+    else:
+        return is_collective(snode.node)
+
+
+def contains_wait(snode):
+    from torch._inductor.scheduler import GroupedSchedulerNode
+    if isinstance(snode, GroupedSchedulerNode):
+        return any(contains_wait(subnode) for subnode in snode.snodes)
+    else:
+        return is_wait(snode.node)
 
 
 def num_fw_fixed_arguments(dynamo_gm_num_inputs: int, aot_fw_gm_num_inputs: int):

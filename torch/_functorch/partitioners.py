@@ -22,7 +22,9 @@ from typing import List, Optional, Set, Tuple, Union
 from .compile_utils import fx_graph_cse, get_aten_target
 from . import config
 import functools
+from torch._dynamo.utils import lazy_format_graph_code
 import logging
+import torch.distributed as dist
 
 
 AOT_PARTITIONER_DEBUG = config.debug_partitioner
@@ -840,182 +842,249 @@ def min_cut_rematerialization_partition(
         else:
             return mem_sz * 2
 
-    nx_graph = nx.DiGraph()
-    banned_nodes = set()
+    def min_cut():
+        nx_graph = nx.DiGraph()
+        banned_nodes = set()
 
-    def ban_recomputation_if_allowed(node):
-        # This bans recomputation of the node unless we've been forced not to by
-        # user annotation
-        # NB: "recompute" > 0 means that user annotation has asked us to
-        # recompute it
-        if node.meta.get("recompute", 0) > 0:
-            return False
+        def ban_recomputation_if_allowed(node):
+            # This bans recomputation of the node unless we've been forced not to by
+            # user annotation
+            # NB: "recompute" > 0 means that user annotation has asked us to
+            # recompute it
+            if node.meta.get("recompute", 0) > 0:
+                return False
 
-        if 'val' in node.meta and isinstance(node.meta['val'], torch.SymFloat):
-            return False
+            if 'val' in node.meta and isinstance(node.meta['val'], torch.SymFloat):
+                return False
 
-        banned_nodes.add(node)
-        # A node will only ever be recomputed if there is a path from an
-        # ancestor of this node to the backwards path through this node that
-        # doesn't go through any saved value. If this node is saved, then that
-        # condition is not possible.
-        nx_graph.add_edge("source", node.name + "_in", capacity=math.inf)
-        return True
+            banned_nodes.add(node)
+            # A node will only ever be recomputed if there is a path from an
+            # ancestor of this node to the backwards path through this node that
+            # doesn't go through any saved value. If this node is saved, then that
+            # condition is not possible.
+            nx_graph.add_edge("source", node.name + "_in", capacity=math.inf)
+            return True
 
-    for node in joint_graph.nodes:
-        if node.op == 'output':
-            continue
-
-        if node in required_bw_nodes:
-            if node not in inputs:
-                nx_graph.add_edge(node.name + "_in", "sink", capacity=math.inf)
+        for node in joint_graph.nodes:
+            if node.op == 'output':
                 continue
-            # If someone saves a input for backward as-is and backward
-            # returns that tensor as-is as a grad input, then the node x would
-            # be both a required_bw_node and an input. In this case we
-            # (1) connect x_in to to the source, (2) x_out to the sink, and
-            # (3) assign the proper weight to the x_in-x_out edge, so that
-            # x would be part of cut nodes. A case where this happens is if
-            # NestedTensor saves a offset tensor as part of the singleton int
-            # in sizes.
-            nx_graph.add_edge(node.name + "_out", "sink", capacity=math.inf)
 
-        if _is_primal(node) or _is_fwd_seed_offset(node):
-            ban_recomputation_if_allowed(node)
-
-        # If a node can't be recomputed (too expensive or involves randomness),
-        # we prevent it from being recomputed by adding an inf edge to the source
-        # We only need to ban nodes in the fw pass, as those are the only ones that would be recomputed.
-        if node in required_fw_nodes and should_ban_recomputation(node):
-            ban_recomputation_if_allowed(node)
-
-        # Checks if a node is actually a tuple. Can be simplified to just an isinstance check if we always use faketensors.
-        is_non_tensor_node = (('val' not in node.meta and 'tensor_meta' not in node.meta) or
-                              ('val' in node.meta and not isinstance(node.meta['val'], torch.Tensor)))
-
-        if is_sym_node(node):
-            weight = sym_node_size(node)
-        elif is_non_tensor_node:
-            weight = 0 if isinstance(node.meta.get("val"), BackwardState) else math.inf
-        else:
-            weight = get_node_weight(node)
-
-        # Creates the weights on the "node" edge
-        nx_graph.add_edge(node.name + "_in", node.name + "_out", capacity=weight)
-        for user in node.users:
-            nx_graph.add_edge(node.name + "_out", user.name + "_in", capacity=math.inf)
-
-    # todo(chilli): This is the most questionable of the 3 heuristics for banning recompute.
-    # Some example models to look at where this helps perf: poolformer_m36,
-    # mixer_b16_224, cait_m36_384
-
-    # The "rough" idea here is that if you have some node that is used by both a
-    # node nearby downstream as well as a node far downstream, if we recompute
-    # both of the downstream nodes, we're unlikely to be able to fuse both
-    # downstream nodes together.
-
-    # Thus, we shouldn't aim to recompute far downstream nodes that depend on
-    # this node. That intuition of "far downstream" is captured by whether
-    # there's an unfusible op along the chain somewhere
-
-    # It could probably be improved by properly analyzing what's going on in the
-    # backwards pass instead of only relying on whether it's unfusible in the
-    # forwards.
-
-    def find_first_unfusible(start_nodes: List[fx.Node], max_range: int) -> int:
-        """
-        Finds the first unfusible node in the chain of nodes starting from
-        `start_nodes` and returns its position.
-        """
-        sorted_nodes = []
-        for n in start_nodes:
-            heapq.heappush(sorted_nodes, (n.fw_order, n, True))
-
-        while len(sorted_nodes) > 0:
-            _, node, node_is_fusible = heapq.heappop(sorted_nodes)
-            if not node_is_fusible:
-                return node.fw_order
-            for user in node.users:
-                if user in required_fw_nodes:
-                    if user.fw_order > max_range:
-                        continue
-                    heapq.heappush(sorted_nodes, (user.fw_order, user, is_fusible(node, user)))
-        return max_range
-
-    if BAN_IF_USED_FAR_APART:
-        for used_node in required_fw_nodes:
-            orders = [user.fw_order for user in used_node.users if user in required_fw_nodes]
-            fw_users = [user for user in used_node.users if user in required_fw_nodes]
-            if len(orders) > 0:
-                first_unfusible_use = find_first_unfusible(fw_users, max(orders))
-                for user in tuple(used_node.users):
-                    if user in required_fw_nodes and user.fw_order > first_unfusible_use and is_fusible(used_node, user):
-                        if user in banned_nodes:
-                            continue
-                        log.info(
-                            "used above/below fusible %s:(%s) -> %s -> %s:(%s)",
-                            used_node, used_node.fw_order, first_unfusible_use, user, user.fw_order
-                        )
-                        ban_recomputation_if_allowed(user)
-
-
-    # This heuristic is fairly straightforward. The idea is that although it is
-    # cheap to recompute bandwidth-bound ops, we don't want to end up in a situation
-    # where we have a long chain of pointwise ops from the beginning to the end
-    # of the model (like say, residual connections)
-
-    # todo: I'm not totally sure why this heuristic matters. It's possible that this is
-    # working around Inductor fusion decisions, or that it's a patch over
-    # suboptimal partitioning decisions
-
-    # Some models it improves perf on are cait_m36_384, mixer_b16_224, poolformer_m36
-
-    if BAN_IF_LONG_FUSIBLE_CHAINS:
-        visited = set()
-        for start_node in joint_graph.nodes:
-            if start_node not in required_fw_nodes:
-                continue
-            fusible = [(start_node.fw_order, start_node)]
-            start_order = start_node.fw_order
-            while len(fusible) > 0:
-                _, cur = heapq.heappop(fusible)
-                if cur in visited:
+            if node in required_bw_nodes:
+                if node not in inputs:
+                    nx_graph.add_edge(node.name + "_in", "sink", capacity=math.inf)
                     continue
-                visited.add(cur)
-                # 100 is arbitrary choice to try and prevent degenerate cases
-                if cur.fw_order > start_order + 100 and len(fusible) == 0:
-                    log.info("too long %s %s %s %s", cur, start_node, cur.fw_order, start_node.fw_order)
-                    ban_recomputation_if_allowed(cur)
-                    break
+                # If someone saves a input for backward as-is and backward
+                # returns that tensor as-is as a grad input, then the node x would
+                # be both a required_bw_node and an input. In this case we
+                # (1) connect x_in to to the source, (2) x_out to the sink, and
+                # (3) assign the proper weight to the x_in-x_out edge, so that
+                # x would be part of cut nodes. A case where this happens is if
+                # NestedTensor saves a offset tensor as part of the singleton int
+                # in sizes.
+                nx_graph.add_edge(node.name + "_out", "sink", capacity=math.inf)
 
-                for user in cur.users:
-                    if user in required_fw_nodes and is_fusible(cur, user) and user not in banned_nodes:
-                        heapq.heappush(fusible, (user.fw_order, user))
+            if _is_primal(node) or _is_fwd_seed_offset(node):
+                ban_recomputation_if_allowed(node)
 
-    try:
-        cut_value, partition = nx.minimum_cut(nx_graph, "source", "sink")
-    except Exception:
-        print('Failed to compute min-cut on following graph:')
-        print('\n'.join(nx.readwrite.edgelist.generate_edgelist(nx_graph)))
-        raise
+            # If a node can't be recomputed (too expensive or involves randomness),
+            # we prevent it from being recomputed by adding an inf edge to the source
+            # We only need to ban nodes in the fw pass, as those are the only ones that would be recomputed.
+            if node in required_fw_nodes and should_ban_recomputation(node):
+                ban_recomputation_if_allowed(node)
 
-    reachable, non_reachable = partition
-    cutset = set()
-    for u, nbrs in ((n, nx_graph[n]) for n in reachable):
-        cutset.update((u, v) for v in nbrs if v in non_reachable)
+            # Checks if a node is actually a tuple. Can be simplified to just an isinstance check if we always use faketensors.
+            is_non_tensor_node = (('val' not in node.meta and 'tensor_meta' not in node.meta) or
+                                ('val' in node.meta and not isinstance(node.meta['val'], torch.Tensor)))
 
-    cut_nodes = set()
-    for node_in, node_out in cutset:
-        assert node_in[:-3] == node_out[:-4]
-        node_name = node_in[:-3]
-        cut_nodes.add(node_name)
+            if is_sym_node(node):
+                weight = sym_node_size(node)
+            elif is_non_tensor_node:
+                weight = 0 if isinstance(node.meta.get("val"), BackwardState) else math.inf
+            else:
+                weight = get_node_weight(node)
 
-    # To make this stuff deterministic
-    node_idx = {node: idx for idx, node in enumerate(joint_module.graph.nodes)}
-    saved_values = sorted((name_to_node[node] for node in cut_nodes), key=lambda x: node_idx[x])
-    # save_for_backward on tensors and stashes symints in autograd .ctx
-    saved_sym_nodes = list(filter(is_sym_node, saved_values))
-    saved_values = list(filter(lambda n: not is_sym_node(n), saved_values))
+            # Creates the weights on the "node" edge
+            nx_graph.add_edge(node.name + "_in", node.name + "_out", capacity=weight)
+            for user in node.users:
+                nx_graph.add_edge(node.name + "_out", user.name + "_in", capacity=math.inf)
+
+        # todo(chilli): This is the most questionable of the 3 heuristics for banning recompute.
+        # Some example models to look at where this helps perf: poolformer_m36,
+        # mixer_b16_224, cait_m36_384
+
+        # The "rough" idea here is that if you have some node that is used by both a
+        # node nearby downstream as well as a node far downstream, if we recompute
+        # both of the downstream nodes, we're unlikely to be able to fuse both
+        # downstream nodes together.
+
+        # Thus, we shouldn't aim to recompute far downstream nodes that depend on
+        # this node. That intuition of "far downstream" is captured by whether
+        # there's an unfusible op along the chain somewhere
+
+        # It could probably be improved by properly analyzing what's going on in the
+        # backwards pass instead of only relying on whether it's unfusible in the
+        # forwards.
+
+        def find_first_unfusible(start_nodes: List[fx.Node], max_range: int) -> int:
+            """
+            Finds the first unfusible node in the chain of nodes starting from
+            `start_nodes` and returns its position.
+            """
+            sorted_nodes = []
+            for n in start_nodes:
+                heapq.heappush(sorted_nodes, (n.fw_order, n, True))
+
+            while len(sorted_nodes) > 0:
+                _, node, node_is_fusible = heapq.heappop(sorted_nodes)
+                if not node_is_fusible:
+                    return node.fw_order
+                for user in node.users:
+                    if user in required_fw_nodes:
+                        if user.fw_order > max_range:
+                            continue
+                        heapq.heappush(sorted_nodes, (user.fw_order, user, is_fusible(node, user)))
+            return max_range
+
+        if BAN_IF_USED_FAR_APART:
+            for used_node in required_fw_nodes:
+                orders = [user.fw_order for user in used_node.users if user in required_fw_nodes]
+                fw_users = [user for user in used_node.users if user in required_fw_nodes]
+                if len(orders) > 0:
+                    first_unfusible_use = find_first_unfusible(fw_users, max(orders))
+                    for user in tuple(used_node.users):
+                        if user in required_fw_nodes and user.fw_order > first_unfusible_use and is_fusible(used_node, user):
+                            if user in banned_nodes:
+                                continue
+                            log.info(
+                                "used above/below fusible %s:(%s) -> %s -> %s:(%s)",
+                                used_node, used_node.fw_order, first_unfusible_use, user, user.fw_order
+                            )
+                            ban_recomputation_if_allowed(user)
+
+
+        # This heuristic is fairly straightforward. The idea is that although it is
+        # cheap to recompute bandwidth-bound ops, we don't want to end up in a situation
+        # where we have a long chain of pointwise ops from the beginning to the end
+        # of the model (like say, residual connections)
+
+        # todo: I'm not totally sure why this heuristic matters. It's possible that this is
+        # working around Inductor fusion decisions, or that it's a patch over
+        # suboptimal partitioning decisions
+
+        # Some models it improves perf on are cait_m36_384, mixer_b16_224, poolformer_m36
+
+        if BAN_IF_LONG_FUSIBLE_CHAINS:
+            visited = set()
+            for start_node in joint_graph.nodes:
+                if start_node not in required_fw_nodes:
+                    continue
+                fusible = [(start_node.fw_order, start_node)]
+                start_order = start_node.fw_order
+                while len(fusible) > 0:
+                    _, cur = heapq.heappop(fusible)
+                    if cur in visited:
+                        continue
+                    visited.add(cur)
+                    # 100 is arbitrary choice to try and prevent degenerate cases
+                    if cur.fw_order > start_order + 100 and len(fusible) == 0:
+                        log.info("too long %s %s %s %s", cur, start_node, cur.fw_order, start_node.fw_order)
+                        ban_recomputation_if_allowed(cur)
+                        break
+
+                    for user in cur.users:
+                        if user in required_fw_nodes and is_fusible(cur, user) and user not in banned_nodes:
+                            heapq.heappush(fusible, (user.fw_order, user))
+
+        try:
+            cut_value, partition = nx.minimum_cut(nx_graph, "source", "sink")
+        except Exception:
+            print('Failed to compute min-cut on following graph:')
+            print('\n'.join(nx.readwrite.edgelist.generate_edgelist(nx_graph)))
+            raise
+
+        reachable, non_reachable = partition
+        cutset = set()
+        for u, nbrs in ((n, nx_graph[n]) for n in reachable):
+            cutset.update((u, v) for v in nbrs if v in non_reachable)
+
+        # if dist.get_rank() == 0:
+        #     print(f"reachable: {sorted(list(reachable))}")
+        #     print(f"non_reachable: {sorted(list(non_reachable))}")
+        #     print(f"cutset: {sorted(list(cutset))}")
+
+        cut_nodes = set()
+        for node_in, node_out in cutset:
+            assert node_in[:-3] == node_out[:-4]
+            node_name = node_in[:-3]
+            cut_nodes.add(node_name)
+
+        # To make this stuff deterministic
+        node_idx = {node: idx for idx, node in enumerate(joint_module.graph.nodes)}
+        saved_values = sorted((name_to_node[node] for node in cut_nodes), key=lambda x: node_idx[x])
+        # save_for_backward on tensors and stashes symints in autograd .ctx
+        saved_sym_nodes = list(filter(is_sym_node, saved_values))
+        saved_values = list(filter(lambda n: not is_sym_node(n), saved_values))
+
+        # if dist.get_rank() == 0:
+        #     # print(f"cut_value: {cut_value}")
+        #     # print(f"cut_nodes: {cut_nodes}")
+        #     import pickle
+        #     filename = "nx_graph.pkl"
+        #     try:
+        #         os.remove(filename)
+        #     except OSError:
+        #         pass
+        #     with open(filename, "wb") as file:
+        #         pickle.dump(nx_graph, file)
+
+        return saved_sym_nodes, saved_values
+
+    saved_sym_nodes, saved_values = min_cut()
+
+    def flatten_arg_list(args):
+        flat_args = []
+        for arg in args:
+            if isinstance(arg, (list, tuple)):
+                flat_args.extend(flatten_arg_list(arg))
+            else:
+                flat_args.append(arg)
+        return flat_args
+
+    def is_alias_of_primal_input(primal_inputs, node):
+        if hasattr(node, "target") and node.target in [
+            # List of view ops. TODO add more
+            torch.ops.aten.t.default,
+            torch.ops.aten.as_strided.default,
+            torch.ops.aten.permute.default,
+        ]:
+            view_chain = [node]
+            flattened_arg_list = flatten_arg_list(node.args)
+            for arg in flattened_arg_list:
+                if arg in primal_inputs:
+                    return True, view_chain
+                else:
+                    upstream_is_alias, upstream_view_chain = is_alias_of_primal_input(primal_inputs, arg)
+                    if upstream_is_alias:
+                        view_chain.extend(upstream_view_chain)
+                        return True, view_chain
+        return False, []
+
+    # TODO: rename
+    def if_primal_input_alias_is_saved_then_move_the_view_chain_to_bwd_graph(saved_values):
+        # Trace lineage of saved nodes that are aliases of primals. Move the entire view chain to BWD graph
+        # so that only primals (along with non-view op output intermediates) are saved as FWD graph output.
+        primal_inputs = list(filter(_is_primal, joint_module.graph.nodes))
+        for saved_value in saved_values:
+            is_alias, view_chain = is_alias_of_primal_input(primal_inputs, saved_value)
+            if is_alias:
+                required_bw_nodes.update(set(view_chain))
+
+    if config.move_view_chain_to_bwd_graph:
+        # TODO(yf225): if any saved nodes is an alias of primal input, save the primal input instead of the alias.
+        # We do this by updating `required_bw_nodes` and then redo min-cut algorithm.
+        if_primal_input_alias_is_saved_then_move_the_view_chain_to_bwd_graph(saved_values)
+        saved_sym_nodes, saved_values = min_cut()
+
     # NB: saved_sym_nodes will be mutated to reflect the actual saved symbols
     fw_module, bw_module = _extract_fwd_bwd_modules(
         joint_module, saved_values, saved_sym_nodes=saved_sym_nodes, num_fwd_outputs=num_fwd_outputs)

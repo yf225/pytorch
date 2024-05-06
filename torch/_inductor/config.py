@@ -8,6 +8,7 @@ import torch
 def is_fbcode():
     return not hasattr(torch.version, "git_version")
 
+use_fsdp_custom_op = True
 
 # add some debug printouts
 debug = False
@@ -187,6 +188,9 @@ reorder_for_compute_comm_overlap_passes = [
     "sink_waits",
     "raise_comms",
 ]
+
+# TODO: add doc
+raise_last_usage = False
 
 # runtime estimation function for ops
 # for built-in estimation function, pass in "default"; for user-defined estimation function, pass in the function handle
