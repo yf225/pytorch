@@ -19,6 +19,9 @@ from ..utils import check_constant_args, get_first_attr, identity, istype, make_
 from .base import MutableLocal, typestr, VariableTracker
 from .constant import ConstantVariable
 
+import logging
+torch_log = logging.getLogger("torch")
+
 if TYPE_CHECKING:
     from torch._guards import Source
 
@@ -117,6 +120,7 @@ class UserFunctionVariable(BaseUserFunctionVariable):
 
     @classmethod
     def create_with_source(cls, value, source):
+        torch_log.warning(f"source: {source}")
         install_guard(source.make_guard(GuardBuilder.CLOSURE_MATCH))
         return cls(
             value,

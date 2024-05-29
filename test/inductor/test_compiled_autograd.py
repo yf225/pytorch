@@ -7,6 +7,9 @@ from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from unittest import mock
 
+import logging
+torch_log = logging.getLogger("torch")
+
 import torch
 import torch.nn as nn
 from torch import _inductor as inductor
@@ -22,6 +25,8 @@ from torch.testing._internal.logging_utils import logs_to_string
 def make_compiler_fn(fullgraph=True, dynamic=True):
     def _compiler_fn(gm):
         """Same as torch.compile() but counts number of compiles"""
+
+        torch_log.warning("Compiling autograd?")
 
         def _inner_compiler(gm_, example_inputs_):
             counters["compiled_autograd"]["compiles"] += 1

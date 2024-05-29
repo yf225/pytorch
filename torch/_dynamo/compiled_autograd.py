@@ -1,6 +1,6 @@
 import contextlib
 import functools
-from typing import List, Optional, TYPE_CHECKING
+from typing import List, Optional, TYPE_CHECKING, Callable
 
 import torch
 from torch._dynamo.external_utils import call_backward, call_hook, FakeCompiledAutogradEngine
@@ -44,7 +44,7 @@ def maybe_clone(x):
 
 
 class AutogradCompilerInstance:
-    def __init__(self, compiler_fn) -> None:
+    def __init__(self, compiler_fn, fake_engine) -> None:
         self.compiler_fn = compiler_fn
         self.stack = contextlib.ExitStack()
         self.close = self.stack.close
@@ -57,6 +57,7 @@ class AutogradCompilerInstance:
         self.fx_tracer = PythonKeyTracer()
         self.proxy_mode = ProxyTorchDispatchMode(self.fx_tracer, "symbolic")
         self.hooks_proxy: Optional[Proxy] = None
+        self.fake_engine = fake_engine
 
     def wrap_fake(self, x, source):
         assert isinstance(x, torch.Tensor)
@@ -202,7 +203,7 @@ class AutogradCompilerInstance:
     def end_capture(self, outputs):
         self.fx_tracer.create_proxy(
             "call_function",
-            FakeCompiledAutogradEngine()._exec_final_callbacks_stub,
+            self.fake_engine._exec_final_callbacks_stub,
             (),
             {},
         )
@@ -276,6 +277,7 @@ class AutogradCompilerInstance:
 
 
 compiled_autograd_enabled = False
+compiled_autograd_fake_engine = None
 
 # We may have code like:
 # with enable(compiler_fn):
@@ -295,15 +297,17 @@ compiled_autograd_enabled_count = 0
 
 @contextlib.contextmanager
 def enable(compiler_fn):
+    fake_engine = FakeCompiledAutogradEngine()
     prior = torch._C._dynamo.compiled_autograd.set_autograd_compiler(
-        functools.partial(AutogradCompilerInstance, compiler_fn)
+        functools.partial(AutogradCompilerInstance, compiler_fn, fake_engine)
     )
     torch._C._dynamo.compiled_autograd.set_verbose_logging(
         snapshot_verbose_logging_enabled()
     )
-    global compiled_autograd_enabled, compiled_autograd_enabled_count
+    global compiled_autograd_enabled, compiled_autograd_enabled_count, compiled_autograd_fake_engine
     compiled_autograd_enabled = True
     compiled_autograd_enabled_count += 1
+    compiled_autograd_fake_engine = fake_engine
     try:
         with torch.autograd.set_multithreading_enabled(False):
             yield
@@ -311,6 +315,7 @@ def enable(compiler_fn):
         compiled_autograd_enabled_count -= 1
         if not prior:
             compiled_autograd_enabled = False
+            compiled_autograd_fake_engine = None
         torch._C._dynamo.compiled_autograd.set_autograd_compiler(prior)
 
 

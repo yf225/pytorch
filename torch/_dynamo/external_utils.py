@@ -98,6 +98,18 @@ def untyped_storage_size(x: torch.Tensor):
 
 
 class FakeCompiledAutogradEngine:
+    def __init__(self):
+        self.final_callbacks_var = None
+
+    def get_final_callbacks_var(self):
+        from .variables import ListVariable
+        from .variables.base import MutableLocal
+        if self.final_callbacks_var is None:
+            self.final_callbacks_var = ListVariable(
+                [], mutable_local=MutableLocal()
+            )
+        return self.final_callbacks_var
+
     @staticmethod
     def queue_callback(final_callbacks, cb):
         final_callbacks.append(cb)

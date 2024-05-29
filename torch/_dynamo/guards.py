@@ -115,6 +115,7 @@ recompiles_verbose_log = torch._logging.getArtifactLogger(
     __name__, "recompiles_verbose"
 )
 verbose_guards_log = torch._logging.getArtifactLogger(__name__, "verbose_guards")
+torch_log = logging.getLogger("torch")
 
 TensorGuards = torch._C._dynamo.guards.TensorGuards
 check_obj_id = torch._C._dynamo.guards.check_obj_id
@@ -1038,7 +1039,12 @@ class GuardBuilder(GuardBuilderBase):
     # (like its type) which is what you permanently install into the
     # guard code.
     def get(self, name: str) -> Any:
-        return eval(name, self.scope, CLOSURE_VARS)
+        try:
+            return eval(name, self.scope, CLOSURE_VARS)
+        except:
+            for k, v in self.scope.items():
+                torch_log.warning(f"self.scope: k: {k}, v: {v}")
+            raise
 
     # Registers the usage of the source name referenced by the
     # string (or stored in the Guard) as being guarded upon.  It's important
