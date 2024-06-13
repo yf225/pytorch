@@ -1,6 +1,7 @@
 import contextlib
 import functools
 from typing import List, Optional, TYPE_CHECKING
+import logging
 
 import torch
 from torch._dynamo.external_utils import call_backward, call_hook, FakeCompiledAutogradEngine
@@ -29,6 +30,7 @@ if TYPE_CHECKING:
 
 compiled_autograd_log = getArtifactLogger(__name__, "compiled_autograd")
 verbose_log = getArtifactLogger(__name__, "compiled_autograd_verbose")
+torch_log = logging.getLogger("torch")
 
 
 def snapshot_verbose_logging_enabled():
@@ -71,6 +73,7 @@ class AutogradCompilerInstance:
         return GetItemSource(LocalSource(name), idx)
 
     def begin_capture(self, inputs: List[torch.Tensor], sizes: List[int]):
+        torch_log.warning(f"begin_capture: self.hooks_proxy: {self.hooks_proxy}")
         counters["compiled_autograd"]["captures"] += 1
         self.fx_tracer.root = torch.nn.Module()
         self.fx_tracer.graph = torch.fx.Graph(tracer_cls=PythonKeyTracer)

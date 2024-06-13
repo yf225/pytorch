@@ -650,6 +650,38 @@ class AutogradEngineVariable(UserDefinedObjectVariable):
                 torch._dynamo.external_utils.FakeCompiledAutogradEngine.queue_callback,
                 source=self.source,
             ).call_function(tx, (tx.output.side_effects.get_ca_final_callbacks_var(), *args), kwargs)
+
+            assert len(args) == 1
+            hook = args[0]
+            hook_name, bw_state_proxy = tx.output.add_backward_state_hook(hook)
+            # How does this hook get recorded in hooks_proxy in CA instance? need to figure out. `backward_state` is worth looking into.
+
+            # def _register_hook_trampoline(tensor, bw_state):
+            #     register_hook = getattr(tensor, name)
+            #     register_hook(
+            #         functools.partial(
+            #             trace_wrapped,
+            #             fn=call_hook_from_backward_state,
+            #             bw_state=bw_state,
+            #             hook_name=hook_name,
+            #         )
+            #     )
+            #     # TODO(jansel): returning None here is wrong, it should be
+            #     # RemovableHandle, but we need some extra work to support
+            #     # this properly.
+            #     return None
+
+            # from .builder import wrap_fx_proxy
+
+            # return wrap_fx_proxy(
+            #     tx,
+            #     tx.output.create_proxy(
+            #         "call_function",
+            #         _register_hook_trampoline,
+            #         (self.as_proxy(), bw_state_proxy),
+            #         {},
+            #     ),
+            # )
         else:
             unimplemented(f"torch._C._ImperativeEngine method: {name}")
 
