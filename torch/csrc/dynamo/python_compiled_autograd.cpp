@@ -596,6 +596,61 @@ CacheNode* _compiled_autograd_impl(
       }
     }
 
+    /*
+    OK, we need to call the same logic somewhere during the compiled autograd path, in C++:
+    (maybe look at how `tensor_pre_hooks` and `PyFunctionPostHook` does it)
+
+    void Engine::queue_callback(std::function<void()> callback) {
+      TORCH_CHECK(
+          current_graph_task,
+          "Final callbacks can only be installed during backward pass.");
+
+      std::lock_guard<std::mutex> lock(current_graph_task->final_callbacks_lock_);
+      current_graph_task->final_callbacks_.emplace_back(std::move(callback));
+    }
+
+    PyObject* THPEngine_queue_callback(PyObject* self, PyObject* _callback) {
+      HANDLE_TH_ERRORS
+      auto& engine = python::PythonEngine::get_python_engine();
+      std::shared_ptr<PyObject> callback(_callback, [](PyObject* obj) {
+        pybind11::gil_scoped_acquire gil;
+        Py_DECREF(obj);
+      });
+      Py_INCREF(_callback);
+      engine.queue_callback([callback]() {
+        pybind11::gil_scoped_acquire gil;
+        THPObjectPtr result{PyObject_CallFunctionObjArgs(callback.get(), nullptr)};
+        if (!result) {
+          // Note [ Persisting PyErr state across autograd engine threads ]
+          //
+          // Since the autograd engine is multi-threaded, and Python error state is
+          // local to each thread, it must preserve the python error from the worker
+          // thread and rethrow it as-is in the calling thread. This is done via
+          // persisting the error in the two places that can encounter Python
+          // errors: (1) evaluate function and (2) queued callbacks.
+          //
+          // TODO: the engine is not actually responsible for persisting the error
+          // in the custom autograd Function case today! See the note above
+          // `raise_python_error()` function in python_function.cpp and
+          // python_hooks.cpp for more details. Persisting an extra time in the
+          // engine is fine because doing so is a no-op when the python_error has
+          // already been persisted.
+          python_error err;
+          err.persist();
+          throw std::move(err);
+        }
+      });
+      Py_RETURN_NONE;
+      END_HANDLE_TH_ERRORS
+    }
+
+    {(char*)"queue_callback", THPEngine_queue_callback, METH_O, nullptr},
+
+    note that we do have the graph_task ref in this function.
+    */
+
+    check(PyObject_CallMethod(py_compiler.get(), "exec_final_callbacks"));
+
     PyObject* res = check(call_end_capture(py_compiler, state.outputs));
     TORCH_CHECK(PyTuple_Check(res), "Expected end_capture to return tuple");
     TORCH_CHECK(

@@ -1263,6 +1263,7 @@ auto Engine::execute(
     TORCH_CHECK(
         !AnomalyMode::is_enabled(),
         "compiled_autograd does not support AnomalyMode")
+    GraphTaskGuard guard(graph_task);  // NOTE(yf225): we do this to make sure both ImperativeEngine and Compiled Autograd see the same current_graph_task
     return (*compiled_autograd)(
         graph_root, *graph_task, accumulate_grad, outputs);
   }
@@ -1409,6 +1410,7 @@ void Engine::set_compiled_autograd(Engine::compiled_autograd_fn fn) {
   the_compiled_autograd.store(fn);
 }
 
+// TODO(yf225): change this to take the new FinalCallback class that we will be creating.
 void Engine::queue_callback(std::function<void()> callback) {
   TORCH_CHECK(
       current_graph_task,

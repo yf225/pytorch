@@ -68,6 +68,7 @@ class AutogradCompilerInstance:
         self.fx_tracer = PythonKeyTracer()
         self.proxy_mode = ProxyTorchDispatchMode(self.fx_tracer, "symbolic")
         self.hooks_proxy: Optional[Proxy] = None
+        self.final_callback_queue = List[int] = []
 
     def wrap_fake(self, x, source):
         assert isinstance(x, torch.Tensor)
@@ -211,6 +212,15 @@ class AutogradCompilerInstance:
             self.bind_tensors_to_proxies(input, proxies)
         return input
 
+    def exec_final_callback(self):
+        assert self.hooks_proxy is not None
+        while len(self.final_callback_queue) > 0:
+            hook_id = self.final_callback_queue.pop()
+            hook = self.hooks_proxy[hook_id]  # type: ignore[index]
+            self.proxy_call_hook(
+                hook,
+            )
+
     # Note: [Compiled autograd and cudagraphs]
     # Eager autograd backward implements scalars as 0-dim tensors, see DivBackward0::other_.
     # When compiled autograd traces those nodes, it lifts the scalar tensors, resulting in a graph
@@ -258,12 +268,12 @@ class AutogradCompilerInstance:
         return []
 
     def end_capture(self, outputs):
-        self.fx_tracer.create_proxy(
-            "call_function",
-            FakeCompiledAutogradEngine()._exec_final_callbacks_stub,
-            (),
-            {},
-        )
+        # self.fx_tracer.create_proxy(
+        #     "call_function",
+        #     FakeCompiledAutogradEngine()._exec_final_callbacks_stub,
+        #     (),
+        #     {},
+        # )
         self.stack.close()
         self.fx_tracer.create_node(
             "output",

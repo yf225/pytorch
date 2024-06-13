@@ -28,6 +28,7 @@ using namespace torch::autograd;
 
 struct THPEngine {
   PyObject_HEAD
+  PyObject *final_callbacks;
 };
 
 static bool _reinitialize_engine = false;
@@ -385,7 +386,71 @@ PyObject* THPEngine_run_backward(
   END_HANDLE_TH_ERRORS
 }
 
-PyObject* THPEngine_queue_callback(PyObject* self, PyObject* _callback) {
+static PyObject* import_removable_handle() {
+  PyObject* hooks_module = PyImport_ImportModule("torch.utils.hooks");
+  TORCH_INTERNAL_ASSERT(hooks_module && PyModule_Check(hooks_module));
+
+  PyObject* removable_handle_class = PyObject_GetAttrString(hooks_module, "RemovableHandle");
+  Py_DECREF(hooks_module);
+  return removable_handle_class;
+}
+
+
+static PyObject *THPEngine__register_final_callback(THPEngine *self, PyObject *args) {
+  
+  Py_RETURN_NONE;
+}
+
+/*
+PyObject* callRegisterFn(PyObject* dict, PyObject* hook) {
+  THPObjectPtr register_fn(
+      PyObject_GetAttrString(THPFunctionClass, "_register_hook"));
+  if (!register_fn) {
+    return nullptr;
+  }
+  THPObjectPtr res(
+      PyObject_CallFunctionObjArgs(register_fn.get(), dict, hook, nullptr));
+  if (!res) {
+    return nullptr;
+  }
+  return res.release();
+}
+
+
+PyObject* registerFunctionHook(Node& fn, PyObject* hook) {
+  PyObject* dict = Py_None;
+  for (const auto& hook : fn.pre_hooks()) {
+    if (auto pyhook = dynamic_cast<PyFunctionPostHook*>(hook.get())) {
+      dict = pyhook->dict;
+      break;
+    }
+  }
+  THPObjectPtr res{callRegisterFn(dict, hook)};
+  if (!res) {
+    return nullptr;
+  }
+  if (dict == Py_None) {
+    dict = PyTuple_GET_ITEM(res.get(), 0);
+    // NOTE(yf225): this is the connection point with Compiled Autograd (i.e. CA overrides this function)
+    // This might mean that we need to change use sites of `engine.queue_callback` to this `engine.add_final_callbacks` function.
+    fn.add_post_hook(std::make_unique<PyFunctionPostHook>(dict));
+  }
+
+  PyObject* handle = PyTuple_GET_ITEM(res.get(), 1);
+  Py_INCREF(handle);
+  return handle;
+}
+
+OK, we don't need to use RemovableHandle. We just need this THPEngine_queue_callback function to call a connection point that we can override on CA side.
+We can do this because CA doesn't actually use the hook_id from RemovableHandle (it creates its own handle id).
+
+Milestone 1: do this and make Eager final_callback working again
+Milestone 2: hook this into CA and make Compiled final_callback working
+*/
+
+
+// TODO(yf225): maybe look at `registerFunctionPreHook` and `THPFunction_register_prehook` and `PyFunctionTensorPostAccGradHooks`
+PyObject* THPEngine_queue_callback(THPEngine* self, PyObject* _callback) {
   HANDLE_TH_ERRORS
   auto& engine = python::PythonEngine::get_python_engine();
   std::shared_ptr<PyObject> callback(_callback, [](PyObject* obj) {
@@ -393,7 +458,7 @@ PyObject* THPEngine_queue_callback(PyObject* self, PyObject* _callback) {
     Py_DECREF(obj);
   });
   Py_INCREF(_callback);
-  engine.queue_callback([callback]() {
+  std::function<void()> callback_with_err_handling = [callback]() {
     pybind11::gil_scoped_acquire gil;
     THPObjectPtr result{PyObject_CallFunctionObjArgs(callback.get(), nullptr)};
     if (!result) {
@@ -415,7 +480,21 @@ PyObject* THPEngine_queue_callback(PyObject* self, PyObject* _callback) {
       err.persist();
       throw std::move(err);
     }
-  });
+  };
+
+  // PyObject* callback_capsule = PyCapsule_New(new std::function<void()>(std::move(callback_with_err_handling)), "callback_function", [](PyObject* capsule) {
+  //   delete reinterpret_cast<std::function<void()>*>(PyCapsule_GetPointer(capsule, "callback_function"));
+  // });
+
+  // auto compiled_autograd = the_compiled_autograd.load();
+
+  // TODO(yf225): should we pass in the PyObject here, or should we pass in std::function<void()>? Where do we do the conversion to PyObject so that we can connect to CA?
+  // What are the cons of changing engine.queue_callback API? What are the cons of checking CA in this file?
+  // How do we pass into CA? what entrypoint do we have this file? what info does engine have about CA? can we hook into AutogradCompilerCall? is that a "per-call" construct?
+  // *** Or, can we follow the eager path to enqueue, and just let _compiled_autograd_impl() read into the current_graph_task final_callbacks list to know what final_callbacks are there and emplace them (PyObject wrap them first) into the current AutogradCompilerCall?
+  //   - Where should we add the handle_id -> callback mapping?
+  // Look at `add_post_hook` to know how post_hook is currently connected.
+  engine.queue_callback(callback_with_err_handling);
   Py_RETURN_NONE;
   END_HANDLE_TH_ERRORS
 }
@@ -432,7 +511,21 @@ PyObject* THPEngine_is_checkpoint_valid(PyObject* self, PyObject* noargs) {
 }
 
 PyObject* THPEngine_new(PyTypeObject* type, PyObject* args, PyObject* kwargs) {
-  return type->tp_alloc(type, 0);
+  THPEngine *self;
+  self = (THPEngine *)type->tp_alloc(type, 0);
+  if (self != nullptr) {
+    self->final_callbacks = PyDict_New();
+    if (self->final_callbacks == nullptr) {
+      Py_DECREF(self);
+      return nullptr;
+    }
+  }
+  return (PyObject *)self;
+}
+
+static void THPEngine_dealloc(THPEngine *self) {
+  Py_XDECREF(self->final_callbacks);
+  Py_TYPE(self)->tp_free((PyObject *)self);
 }
 
 // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays,cppcoreguidelines-avoid-non-const-global-variables)
@@ -452,7 +545,7 @@ PyTypeObject THPEngineType = {
     PyVarObject_HEAD_INIT(nullptr, 0) "torch._C._EngineBase", /* tp_name */
     sizeof(THPEngine), /* tp_basicsize */
     0, /* tp_itemsize */
-    nullptr, /* tp_dealloc */
+    (destructor)THPEngine_dealloc, /* tp_dealloc */
     0, /* tp_vectorcall_offset */
     nullptr, /* tp_getattr */
     nullptr, /* tp_setattr */

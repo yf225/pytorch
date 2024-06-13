@@ -664,15 +664,22 @@ class AutogradEngineVariable(UserDefinedObjectVariable):
         kwargs: "Dict[str, VariableTracker]",
     ) -> "VariableTracker":
         if name == "queue_callback":
-            return variables.UserFunctionVariable(
-                torch._dynamo.external_utils.FakeCompiledAutogradEngine.queue_callback,
-                source=self.source,
-            ).call_function(tx, (tx.output.side_effects.get_ca_final_callbacks_var(), *args), kwargs)
-
             assert len(args) == 1
             hook = args[0]
-            hook_name, bw_state_proxy = tx.output.add_backward_state_hook(hook)
-            # How does this hook get recorded in hooks_proxy in CA instance? need to figure out. `backward_state` is worth looking into.
+            hook_name, bw_state_proxy = tx.output.add_backward_state_hook(hook)  # Does this persist across graph-breaks? my guess is no.
+
+            """
+            The flow should look like:
+            1. Whenever CA Dynamo encounters Engine.queue_callback, we record it to the current graph's backward state hooks and keep track of the hook's name
+                - Or, should we directly record it to the CA instance?
+            2. When CA Dynamo graph breaks, we copy the recorded-but-not-executed hooks from the graph to the CA instance (to one of its attributes)
+            3. When CA Dynamo starts a new graph, we pass the previously-recorded-but-not-executed hooks from the CA instance back to the graph via the BackwardState graph input arg
+            4. We always have execute_final_callbacks() at end of any graph, to execute any final_callback hooks that are passed in from the BackwardState graph input arg
+
+            """
+
+            # TODO: How does this hook get recorded in hooks_proxy in CA instance? need to figure out. `backward_state` is worth looking into. `call_hook_from_backward_state`, `codegen_hooks`, `_in_graph_bw_hooks`, `add_backward_state_hook`
+            # module hook is a better inspiration.
 
             # def _register_hook_trampoline(tensor, bw_state):
             #     register_hook = getattr(tensor, name)
@@ -700,6 +707,12 @@ class AutogradEngineVariable(UserDefinedObjectVariable):
             #         {},
             #     ),
             # )
+
+            # return variables.UserFunctionVariable(
+            #     torch._dynamo.external_utils.FakeCompiledAutogradEngine.queue_callback,
+            #     source=self.source,
+            # ).call_function(tx, (tx.output.side_effects.get_ca_final_callbacks_var(), *args), kwargs)
+            return variables.ConstantVariable.create(None)
         else:
             unimplemented(f"torch._C._ImperativeEngine method: {name}")
 

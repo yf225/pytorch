@@ -52,4 +52,15 @@ struct PyFunctionTensorPostAccGradHooks : public PostAccumulateGradHook {
   PyObject* dict;
 };
 
+struct PyFunctionTensorPostAccGradHooks : public PostAccumulateGradHook {
+  PyFunctionTensorPostAccGradHooks(PyObject* dict);
+  ~PyFunctionTensorPostAccGradHooks() override;
+  void operator()(const Variable& tensor) override;
+  void compiled_args(torch::dynamo::autograd::CompiledNodeArgs& args) override;
+  void apply_with_saved(
+      Variable& tensor,
+      torch::dynamo::autograd::SwapSavedVariables& saved) override;
+  PyObject* dict;
+};
+
 } // namespace torch::autograd
