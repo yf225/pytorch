@@ -729,7 +729,13 @@ def _optimize(
     # There is some prior art around this, w/r/t nesting backend calls are enforced to be the same
     # compiler, however, this feels onerous for callback and hooks, and it feels better to give our users an
     # easier to understand UX at the cost of a little more plumbing on our end.
-    hooks = Hooks(guard_export_fn=guard_export_fn, guard_fail_fn=guard_fail_fn)
+    hooks = Hooks(
+        guard_export_fn=guard_export_fn,
+        guard_fail_fn=guard_fail_fn,
+        ca_final_callbacks_var=torch._dynamo.variables.ListVariable(
+            [], mutable_local=torch._dynamo.variables.base.MutableLocal()
+        )
+    )
     torch._C._log_api_usage_once("torch._dynamo.optimize")
     if disable or os.environ.get("TORCHDYNAMO_DISABLE", "") == "1":
         return _NullDecorator()

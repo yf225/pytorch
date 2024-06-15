@@ -668,6 +668,7 @@ class InstructionTranslatorBase(
     exn_vt_stack: List[VariableTracker]
     exec_recorder: Optional[ExecutionRecorder]
     strict_checks_fn: Optional[Callable[[VariableTracker], bool]]
+    ca_final_callbacks_var: VariableTracker
 
     def mark_inconsistent_side_effects(self):
         """
@@ -2261,9 +2262,11 @@ class InstructionTranslatorBase(
         export: bool,
         inline_depth: int,
         speculation_log: SpeculationLog,
+        ca_final_callbacks_var: VariableTracker,
     ):
         super().__init__()
         self.speculation_log = speculation_log
+        self.ca_final_callbacks_var = ca_final_callbacks_var
 
         # Mutable state checkpointed by copy_graphstate()
         self.output = output
@@ -2362,6 +2365,7 @@ class InstructionTranslator(InstructionTranslatorBase):
         mutated_closure_cell_contents: Set[str],
         frame_state,
         speculation_log: SpeculationLog,
+        ca_final_callbacks_var,
     ):
         _step_logger()(
             logging.INFO,
@@ -2391,6 +2395,7 @@ class InstructionTranslator(InstructionTranslatorBase):
             export=export,
             inline_depth=0,
             speculation_log=speculation_log,
+            ca_final_callbacks_var=ca_final_callbacks_var,
         )
 
         self._throw_if_in_functorch()
@@ -2855,6 +2860,7 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
             export=parent.export,
             inline_depth=parent.inline_depth + 1,
             speculation_log=parent.speculation_log,
+            ca_final_callbacks_var=parent.ca_final_callbacks_var,
         )
         self.parent = parent
         self.symbolic_result = None

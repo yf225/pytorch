@@ -247,6 +247,9 @@ class OutputGraph:
         global_scope: Scope,
         f_code,
     ):
+        import logging
+        torch_log = logging.getLogger("torch")
+        torch_log.warning(f"A new OutputGraph is created!")
         super().__init__()
         self.tracers = [SubgraphTracer(self, export_root=export)]
         # Map from graph input's `Source` to its `VariableTracker` to

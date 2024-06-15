@@ -546,6 +546,12 @@ def _compile(
         ValidationException,
     )
 
+    # import traceback
+    # traceback.print_stack()
+    # import logging
+    # torch_log = logging.getLogger("torch")
+    # torch_log.warning(f"_compile is called!")
+
     # Time spent compiling this frame before restarting or failing analysis
     dynamo_time_before_restart: float = 0.0
     restart_reasons: set[str] = set()
@@ -575,6 +581,7 @@ def _compile(
             mutated_closure_cell_contents,
             frame_state=frame_state,
             speculation_log=speculation_log,
+            ca_final_callbacks_var=hooks.ca_final_callbacks_var,
         )
 
         try:

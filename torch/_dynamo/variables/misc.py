@@ -667,7 +667,7 @@ class AutogradEngineVariable(UserDefinedObjectVariable):
             return variables.UserFunctionVariable(
                 torch._dynamo.external_utils.FakeCompiledAutogradEngine.queue_callback,
                 source=self.source,
-            ).call_function(tx, (tx.output.side_effects.get_ca_final_callbacks_var(), *args), kwargs)
+            ).call_function(tx, (tx.ca_final_callbacks_var, *args), kwargs)
         else:
             unimplemented(f"torch._C._ImperativeEngine method: {name}")
 
@@ -696,7 +696,7 @@ class FakeCompiledAutogradEngineVariable(UserDefinedObjectVariable):
             return variables.UserFunctionVariable(
                 torch._dynamo.external_utils.FakeCompiledAutogradEngine.exec_final_callbacks,
                 source=self.source,
-            ).call_function(tx, (tx.output.side_effects.get_ca_final_callbacks_var(), *args), kwargs)
+            ).call_function(tx, (tx.ca_final_callbacks_var, *args), kwargs)
         else:
             unimplemented(
                 f"torch._dynamo.external_utils.FakeCompiledAutogradEngine method: {name}"

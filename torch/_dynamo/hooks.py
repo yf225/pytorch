@@ -10,3 +10,4 @@ from .types import GuardFail
 class Hooks:
     guard_export_fn: Optional[Callable[[GuardsSet], None]] = None
     guard_fail_fn: Optional[Callable[[GuardFail], None]] = None
+    ca_final_callbacks_var: Optional["VariableTracker"] = None
