@@ -2815,7 +2815,8 @@ def is_multi_outputs_template(input_buf: Optional[Union[Buffer, Operation]]) -> 
     """
     from . import ir
 
-    return isinstance(input_buf, ir.CppTemplateBuffer) and isinstance(
+    # Support both CppTemplateBuffer and any TemplateBuffer subclass (including HelionKernelBuffer)
+    return isinstance(input_buf, ir.TemplateBuffer) and isinstance(
         input_buf.layout, ir.MultiOutputLayout
     )
 

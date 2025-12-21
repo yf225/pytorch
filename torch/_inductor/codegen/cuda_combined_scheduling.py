@@ -89,6 +89,13 @@ class CUDACombinedScheduling(BaseScheduling):
                 )  # always False at the moment
         return self._triton_scheduling.can_fuse_horizontal(node1, node2)
 
+    def can_fuse_multi_outputs_template(
+        self, node1: BaseSchedulerNode, node2: BaseSchedulerNode
+    ) -> bool:
+        # Delegate to triton scheduling for multi-output template fusion
+        # (Helion templates and other Triton-based templates)
+        return self._triton_scheduling.can_fuse_multi_outputs_template(node1, node2)
+
     def group_fn(
         self, sizes: Sequence[Sequence[_IntLike]]
     ) -> tuple[tuple[_IntLike, ...], ...]:

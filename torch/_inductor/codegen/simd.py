@@ -1281,6 +1281,17 @@ class SIMDScheduling(BaseScheduling):
     def group_fn(self, sizes):
         return tuple(V.graph.sizevars.simplify(sympy_product(s)) for s in sizes)
 
+    def can_fuse_multi_outputs_template(
+        self, node1: "scheduler.BaseSchedulerNode", node2: "scheduler.BaseSchedulerNode"
+    ) -> bool:
+        """Check if node1 is a multi-output template and node2 is one of its outputs."""
+        template_buf = node1.get_template_node()
+        if template_buf is not None:
+            result = template_buf.can_fuse_multi_output(node2)
+            if result is not None:
+                return result
+        return False
+
     def can_fuse(self, node1, node2):
         """
         Hook called by Scheduler to determine if the Triton backend
@@ -2019,6 +2030,17 @@ class SIMDScheduling(BaseScheduling):
         # all prologue groups should have finalized with use in template
         assert len(prologue_group) == 0
 
+        # External template handlers (e.g. Helion) can override codegen
+        template_buffer = getattr(kernel, 'template_buffer', None)
+        if template_buffer is not None:
+            result = template_buffer.codegen_template(
+                self, kernel, template_node, epilogue_nodes, prologue_nodes,
+                buf_name_to_prologue_group, prologue_preserves_zero_mask,
+                render, only_gen_src_code,
+            )
+            if result is not None:
+                return result
+
         with kernel:
             if not only_gen_src_code:
                 # prologue nodes can only be fused if their only use is in the template,
@@ -2273,6 +2295,10 @@ class SIMDScheduling(BaseScheduling):
                 node_schedule = [*prologue_nodes, template_node, *epilogue_nodes]
                 self.codegen_comment(node_schedule, kernel.kernel_name)
                 kernel.call_kernel(kernel.kernel_name, template_node.node)
+
+                # Generate unfusable epilogues as separate kernels (for Helion templates)
+                for node in getattr(kernel, '_unfusable_epilogues', set()):
+                    self.codegen_node(node)
 
                 V.graph.removed_buffers |= kernel.removed_buffers
                 V.graph.inplaced_to_remove |= kernel.inplaced_to_remove

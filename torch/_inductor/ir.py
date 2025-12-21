@@ -5104,6 +5104,24 @@ class TemplateBuffer(OperationBuffer):
             None,
         )
 
+    # Optional hooks for external template handlers (e.g. Helion).
+    # Override in subclasses. Return None/False to use default behavior.
+
+    def codegen_template(self, scheduling, kernel, template_node, epilogue_nodes,
+                         prologue_nodes, buf_name_to_prologue_group,
+                         prologue_preserves_zero_mask_fn, render, only_gen_src_code):
+        return None  # Use default codegen
+
+    def emit_kernel(self, wrapper, src_code, kernel_name, node_schedule,
+                    kernel_path, get_kernel_metadata_fn) -> bool:
+        return False  # Use default emission
+
+    def can_fuse_epilogue(self, node1, node2, why):
+        return None  # Use default fusion rules
+
+    def can_fuse_multi_output(self, node2):
+        return None  # Use default behavior
+
 
 class TritonTemplateBuffer(TemplateBuffer):
     def __init__(

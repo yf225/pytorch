@@ -5137,6 +5137,14 @@ class Scheduler:
             why("template epilogue not satisfied")
             return False
 
+        # Check for circular dependencies in multi-output templates
+        if node1.is_template():
+            template_node = node1.get_template_node()
+            if template_node is not None:
+                result = template_node.can_fuse_epilogue(node1, node2, why)
+                if result is False:
+                    return False
+
         if (node1.get_buffer_names() & V.graph.no_fuse_buffer_names) or (
             node2.get_buffer_names() & V.graph.no_fuse_buffer_names
         ):
@@ -6319,10 +6327,57 @@ class Scheduler:
                 prologue, template_node, epilogue = node.get_prologue_template_epilogue(
                     list(node.get_nodes())
                 )
+
+                # Check if template supports pre-codegen prologue separation
+                # (e.g., Helion templates). This allows us to generate non-fusable
+                # prologues BEFORE codegen_template, avoiding buffer lifecycle issues.
+                template_ir = template_node.node
+                if hasattr(template_ir, "separate_fusable_prologues"):
+                    fusable_prologues, non_fusable_prologues = (
+                        template_ir.separate_fusable_prologues(prologue)
+                    )
+
+                    # Generate non-fusable prologues as separate kernels
+                    # BEFORE calling codegen_template
+                    for p_node in non_fusable_prologues:
+                        # Update buffer_names_to_free for prologue, but exclude
+                        # buffers that the template still needs
+                        template_input_names = OrderedSet(
+                            inp.get_name()
+                            for inp in template_ir.inputs
+                            if hasattr(inp, "get_name")
+                        )
+                        prologue_last_usage = p_node.last_usage - template_input_names
+                        self.buffer_names_to_free.update(prologue_last_usage)
+                        # pyrefly: ignore [unbound-name]
+                        self.get_backend(device).codegen_node(p_node)
+
+                    prologue = fusable_prologues
+
+                # Check if template supports pre-codegen epilogue separation
+                # (e.g., Helion templates). This allows us to filter out non-fusable
+                # epilogues (like those with circular dependencies in multi-output).
+                non_fusable_epilogues: list[BaseSchedulerNode] = []
+                if hasattr(template_ir, "separate_fusable_epilogues"):
+                    fusable_epilogues, non_fusable_epilogues = (
+                        template_ir.separate_fusable_epilogues(epilogue)
+                    )
+                    epilogue = fusable_epilogues
+
                 # pyrefly: ignore [unbound-name]
                 self.get_backend(device).codegen_template(
                     template_node, epilogue, prologue
                 )
+
+                # Generate non-fusable epilogues as separate kernels
+                # AFTER codegen_template (they read from template outputs)
+                # Note: can_fuse checks are comprehensive - if something is in
+                # non_fusable_epilogues, it was determined upfront to not be fusable.
+                # No runtime fallback is needed.
+                for e_node in non_fusable_epilogues:
+                    self.buffer_names_to_free.update(e_node.last_usage)
+                    # pyrefly: ignore [unbound-name]
+                    self.get_backend(device).codegen_node(e_node)
             elif node.is_extern():
                 node = typing.cast(ExternKernelSchedulerNode, node)
                 self.codegen_extern_call(node)
