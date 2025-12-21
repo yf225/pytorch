@@ -5104,6 +5104,16 @@ class TemplateBuffer(OperationBuffer):
             None,
         )
 
+    # Optional hooks for external template handlers (e.g. Helion) at scheduling time.
+    # Override in subclasses. Return False to use default behavior.
+
+    def can_fuse_multi_output(self, node2) -> bool:
+        return False  # Don't fuse by default
+
+    def supports_multi_outputs(self) -> bool:
+        """Check if this template buffer supports multi-output fusion."""
+        return False  # Override in subclasses that support multi-outputs
+
 
 class TritonTemplateBuffer(TemplateBuffer):
     def __init__(
@@ -5402,6 +5412,9 @@ class CppTemplateBuffer(TemplateBuffer):
             return layout
         else:
             return super().get_layout()
+
+    def supports_multi_outputs(self) -> bool:
+        return isinstance(self.layout, MultiOutputLayout)
 
 
 class CuteDSLTemplateBuffer(TemplateBuffer):

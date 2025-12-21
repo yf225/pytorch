@@ -6319,6 +6319,7 @@ class Scheduler:
                 prologue, template_node, epilogue = node.get_prologue_template_epilogue(
                     list(node.get_nodes())
                 )
+
                 # pyrefly: ignore [unbound-name]
                 self.get_backend(device).codegen_template(
                     template_node, epilogue, prologue
@@ -6527,6 +6528,8 @@ class BaseScheduling:  # noqa: docstring_linter
         and node2 corresponds to one of its outputs. If so, we further check if
         backend supports this fusion.
         """
+        if template_buf := node1.get_template_node():
+            return template_buf.can_fuse_multi_output(node2)
         return False
 
     def fuse(
