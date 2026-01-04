@@ -1853,9 +1853,11 @@ class FusedSchedulerNode(BaseSchedulerNode):
             template_nodes = [node for node in node1.get_nodes() if node.is_template()]
             assert len(template_nodes) == 1
             template_node = template_nodes[0]
-            assert len(template_node.read_writes.writes) == 1
-            write = next(iter(template_node.read_writes.writes))
-            assert isinstance(write, MemoryDep)
+            # Get the write dependency for this output. Multi-output templates can
+            # override get_multi_output_write_dep() to return per-output dependencies.
+            template_writes = template_node.read_writes.writes
+            template_buffer = template_node.node
+            write = template_buffer.get_multi_output_write_dep(name, template_writes)
             node2.read_writes.writes = OrderedSet(
                 [
                     MemoryDep(
@@ -6319,6 +6321,7 @@ class Scheduler:
                 prologue, template_node, epilogue = node.get_prologue_template_epilogue(
                     list(node.get_nodes())
                 )
+
                 # pyrefly: ignore [unbound-name]
                 self.get_backend(device).codegen_template(
                     template_node, epilogue, prologue
@@ -6527,6 +6530,8 @@ class BaseScheduling:  # noqa: docstring_linter
         and node2 corresponds to one of its outputs. If so, we further check if
         backend supports this fusion.
         """
+        if template_buf := node1.get_template_node():
+            return template_buf.can_fuse_multi_output(node2)
         return False
 
     def fuse(
