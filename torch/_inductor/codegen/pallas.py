@@ -201,6 +201,16 @@ class PallasKernelOverrides(OpOverrides):
         return f"jnp.abs({x})"
 
     @staticmethod
+    def truediv(a: str, b: str) -> str:
+        return (
+            f"(lambda _a, _b: ("
+            f"(_a.astype(jnp.float32) / _b.astype(jnp.float32)).astype(jnp.bfloat16) "
+            f"if (_a.dtype == jnp.bfloat16 and _b.dtype == jnp.bfloat16) "
+            f"else (_a / _b)"
+            f"))(jnp.asarray({a}), jnp.asarray({b}))"
+        )
+
+    @staticmethod
     def neg(x: str) -> str:
         return f"(-{x})"
 
@@ -271,7 +281,14 @@ class PallasKernelOverrides(OpOverrides):
         src_dtype: Optional[torch.dtype] = None,
         use_compute_types: bool = True,
     ) -> str:
-        jax_dtype = torch_dtype_to_jax(dtype)
+        if (
+            use_compute_types
+            and torch._inductor.config.triton.codegen_upcast_to_fp32
+            and dtype in (torch.float16, torch.bfloat16)
+        ):
+            jax_dtype = "jnp.float32"
+        else:
+            jax_dtype = torch_dtype_to_jax(dtype)
         # Wrap in jnp.asarray to handle scalars from integer indexing
         return f"jnp.asarray({x}).astype({jax_dtype})"
 
@@ -889,6 +906,7 @@ class PallasKernel(SIMDKernel):
         # Determine device type once at initialization
         device = V.graph.get_current_device_or_throw()
         self.is_gpu = device.type == "cuda"
+        self.upcast_fp32 = torch._inductor.config.triton.codegen_upcast_to_fp32
         self.use_masked_ops: bool | None = None
         # Enable warpgroup padding for GPU to handle non-aligned tensor sizes
         # Mosaic GPU requires tensor sizes to be multiples of 128 (WARPGROUP_SIZE)
@@ -903,6 +921,43 @@ class PallasKernel(SIMDKernel):
         # Track if any load in this kernel used transpose
         # Used to avoid double transpose (load + store)
         self.has_transposed_load = False
+        # Track axis order used for strided index arrays and loaded values
+        self._strided_index_axis_orders: dict[str, list[str]] = {}
+        self._value_axis_orders: dict[str, list[str]] = {}
+
+    def _index_key(self, index: sympy.Expr) -> str:
+        """Canonical key for indexing expressions."""
+        return str(V.graph.sizevars.simplify(self.rename_indexing(index)))
+
+    def _get_coeff_axis_order(self, index: sympy.Expr) -> list[str]:
+        """Order iteration vars by coefficient (stride) or kernel order fallback."""
+        used_vars = list(self._get_used_iter_vars(index))
+        if not used_vars:
+            return []
+        coeffs: dict[sympy.Symbol, Optional[int]] = {}
+        all_int_coeffs = True
+        for var in used_vars:
+            coeff = self._get_affine_coefficient(index, var)
+            if coeff is None:
+                all_int_coeffs = False
+            coeffs[var] = coeff
+
+        if all_int_coeffs:
+            sorted_vars = sorted(used_vars, key=lambda v: coeffs[v], reverse=True)
+        else:
+            iter_var_order = {v: i for i, v in enumerate(self.range_tree_nodes.keys())}
+            sorted_vars = sorted(
+                used_vars, key=lambda v: iter_var_order.get(v, 0), reverse=True
+            )
+
+        return [str(v) for v in sorted_vars]
+
+    def _iter_var_length_str(self, name: str) -> Optional[str]:
+        """Get the size expression string for an iteration var by name."""
+        for var, entry in self.range_tree_nodes.items():
+            if str(var) == name:
+                return self.kexpr(self.rename_indexing(entry.length))
+        return None
 
     def check_bounds(
         self, expr: sympy.Expr, size: sympy.Expr, lower: bool, upper: bool
@@ -1019,27 +1074,285 @@ class PallasKernel(SIMDKernel):
                     # Just the variable itself, unit stride
                     return "..."
         elif len(used_vars) > 1:
-            # Multi-dimensional indexing
-            # For contiguous multi-dim access, all terms should have unit stride
-            all_unit_stride = True
-            for var in used_vars:
-                var_expr = BlockPatternMatcher.get_subexpr_involving_symbol(index, var)
-                stride = BlockPatternMatcher.match_affine_block_expr(var_expr, var)
-                if stride != 1:
-                    all_unit_stride = False
-                    break
-            if all_unit_stride:
-                # Contiguous multi-dimensional access
-                return "..."
-            else:
-                # Strided multi-dimensional access
-                # For most cases, inputs are made contiguous before passing to JAX,
-                # so strided tensors become contiguous and we can use [...]
-                # The buffer size check in load() handles im2col-like patterns
-                return "..."
+            # Multi-dimensional indexing: defer to buffer-aware logic in
+            # _needs_strided_indexing to decide if a strided index is required.
+            return "..."
 
         # For complex cases, use [...] since inputs are made contiguous
         return "..."
+
+    def _is_contiguous_linear_index(
+        self, index: sympy.Expr, used_vars: Optional[OrderedSet] = None
+    ) -> bool:
+        """
+        Check if `index` matches the canonical contiguous linearization for the
+        current iteration variable order (inner -> outer).
+        """
+        if used_vars is None:
+            used_vars = self._get_used_iter_vars(index)
+        if len(used_vars) <= 1:
+            return True
+
+        ordered_vars = [
+            var for var in self.range_tree_nodes.keys() if var in used_vars
+        ]
+        if not ordered_vars:
+            return False
+
+        stride = 1
+        expected = 0
+        for var in ordered_vars:
+            length = self._safe_int(self.range_tree_nodes[var].length)
+            if length is None:
+                return False
+            expected += var * stride
+            stride *= length
+
+        diff = V.graph.sizevars.simplify(index - expected)
+        return diff == 0
+
+    def _size_hint_or_none(self, expr: Any) -> Optional[int]:
+        try:
+            return V.graph.sizevars.size_hint(expr)
+        except Exception:
+            return self._safe_int(expr)
+
+    def _get_reference_broadcast_shape(self) -> Optional[list[int]]:
+        """
+        Pick a broadcast reference shape for aligning indexed loads.
+        Prefer output shapes that match an iteration var's numel; fall back to inputs.
+        """
+        output_bufs = getattr(self.args, "output_buffers", None)
+
+        def _collect_shapes(buf_names: list[str]) -> list[list[int]]:
+            shapes: list[list[int]] = []
+            for buf_name in buf_names:
+                buf_obj = V.graph.get_buffer(buf_name)
+                if buf_obj is None:
+                    continue
+                try:
+                    buf_size_vals = buf_obj.get_size()
+                except NotImplementedError:
+                    continue
+                buf_size = [self._size_hint_or_none(s) for s in buf_size_vals]
+                if any(s is None for s in buf_size):
+                    continue
+                if len(buf_size) <= 1:
+                    continue
+                shapes.append([int(s) for s in buf_size])  # type: ignore[arg-type]
+            return shapes
+
+        iter_lengths: OrderedSet[int] = OrderedSet()
+        for entry in self.range_tree_nodes.values():
+            length = self._size_hint_or_none(entry.length)
+            if length is not None:
+                iter_lengths.add(int(length))
+        target_numel = self._size_hint_or_none(getattr(self.features, "numel", None))
+        if target_numel is None:
+            target_numel = max(iter_lengths) if iter_lengths else None
+
+        def _shape_if_numel_matches(buf_name: str) -> Optional[list[int]]:
+            buf = V.graph.try_get_buffer(buf_name)
+            if buf is None:
+                return None
+            try:
+                size_vals = buf.get_size()
+            except NotImplementedError:
+                return None
+            if len(size_vals) <= 1:
+                return None
+            shape = [self._size_hint_or_none(s) for s in size_vals]
+            if any(s is None for s in shape):
+                return None
+            numel = math.prod(int(s) for s in shape)  # type: ignore[arg-type]
+            if target_numel is not None:
+                if numel == target_numel:
+                    return [int(s) for s in shape]  # type: ignore[arg-type]
+                return None
+            if numel in iter_lengths:
+                return [int(s) for s in shape]  # type: ignore[arg-type]
+            return None
+
+        candidate_bufs: list[str] = []
+        if output_bufs:
+            candidate_bufs.extend(list(output_bufs.keys()))
+        candidate_bufs.extend(list(self.args.input_buffers))
+        # Include buffers accessed by this kernel (covers outputs when args are empty).
+        try:
+            candidate_bufs.extend(list(self.features.buf_accesses()))
+        except Exception:
+            pass
+        if not candidate_bufs:
+            for buf_name, buf in V.graph.name_to_buffer.items():
+                if isinstance(buf, ComputedBuffer):
+                    candidate_bufs.append(buf_name)
+
+        matches: list[tuple[int, int, int, int, str, list[int]]] = []
+        seen = set()
+        mutation_bufs = getattr(self, "mutations", OrderedSet())
+        write_bufs: OrderedSet[str] = OrderedSet()
+        try:
+            for node in self.features.scheduler_nodes():
+                for out in node.get_outputs():
+                    write_bufs.add(out.get_name())
+        except Exception:
+            pass
+        for buf_name in candidate_bufs:
+            if buf_name in seen:
+                continue
+            seen.add(buf_name)
+            shape = _shape_if_numel_matches(buf_name)
+            if shape is None:
+                continue
+            if (
+                (output_bufs and buf_name in output_bufs)
+                or buf_name in mutation_bufs
+                or buf_name in write_bufs
+            ):
+                priority = 0
+            elif buf_name in self.args.input_buffers:
+                priority = 1
+            else:
+                priority = 2
+            is_intermediate = 1 if buf_name.startswith("buf") else 0
+            ones = sum(1 for s in shape if s == 1)
+            rank = len(shape)
+            matches.append((-rank, priority, is_intermediate, ones, buf_name, shape))
+
+        # Optionally synthesize a shape from iter vars.
+        synth_shape = None
+        if target_numel is not None:
+            var_lengths: list[tuple[sympy.Symbol, int]] = []
+            for var_sym, entry in self.range_tree_nodes.items():
+                # pyrefly: ignore [missing-argument]
+                if entry.is_reduction:
+                    continue
+                length = self._size_hint_or_none(entry.length)
+                if length is None or int(length) == 1:
+                    continue
+                var_lengths.append((var_sym, int(length)))
+
+            best_subset: Optional[list[sympy.Symbol]] = None
+
+            def _search(idx: int, prod: int, subset: list[sympy.Symbol]) -> None:
+                nonlocal best_subset
+                if prod == target_numel:
+                    if best_subset is None or len(subset) > len(best_subset):
+                        best_subset = list(subset)
+                    return
+                if idx >= len(var_lengths) or prod > target_numel:
+                    return
+                var, length = var_lengths[idx]
+                next_prod = prod * length
+                if target_numel % next_prod == 0:
+                    subset.append(var)
+                    _search(idx + 1, next_prod, subset)
+                    subset.pop()
+                _search(idx + 1, prod, subset)
+
+            _search(0, 1, [])
+
+            if best_subset:
+                order = {v: i for i, v in enumerate(self.range_tree_nodes.keys())}
+                # Use outer->inner order for a row-major reference shape.
+                ordered_vars = sorted(
+                    best_subset, key=lambda v: order.get(v, 0), reverse=True
+                )
+                synth_shape = [
+                    int(self._size_hint_or_none(self.range_tree_nodes[v].length))
+                    for v in ordered_vars
+                ]
+
+        if matches:
+            matches.sort()
+            best_shape = matches[0][-1]
+            if (
+                synth_shape is not None
+                and len(best_shape) > 0
+                and best_shape[0] == 1
+                and synth_shape[0] != 1
+                and math.prod(synth_shape) == math.prod(best_shape)
+            ):
+                return synth_shape
+            return best_shape
+
+        output_shapes: list[list[int]] = []
+        if output_bufs:
+            output_shapes = _collect_shapes(list(output_bufs.keys()))
+        if output_shapes:
+            return max(output_shapes, key=len)
+
+        input_shapes = _collect_shapes(list(self.args.input_buffers))
+        if input_shapes:
+            return max(input_shapes, key=len)
+
+        if synth_shape is not None:
+            return synth_shape
+
+        return None
+
+    def _map_vars_to_ref_axes(
+        self,
+        sorted_vars: list[sympy.Symbol],
+        coeffs: dict[sympy.Symbol, Optional[int]],
+        ref_shape: list[int],
+    ) -> Optional[dict[sympy.Symbol, int]]:
+        # Compute contiguous row-major strides for the reference shape.
+        ref_strides: list[int] = []
+        running = 1
+        for size in reversed(ref_shape):
+            ref_strides.insert(0, running)
+            running *= size
+
+        available_axes = set(range(len(ref_shape)))
+        var_to_axis: dict[sympy.Symbol, int] = {}
+        for var in sorted_vars:
+            if not available_axes:
+                return None
+            if var not in self.range_tree_nodes:
+                return None
+            length = self._size_hint_or_none(self.range_tree_nodes[var].length)
+            if length is None:
+                candidates = list(available_axes)
+            else:
+                candidates = [i for i in available_axes if ref_shape[i] == length]
+                if not candidates:
+                    # Fall back to any available axis if sizes don't align.
+                    candidates = list(available_axes)
+            if not candidates:
+                return None
+
+            coeff = coeffs.get(var)
+            axis: Optional[int] = None
+            if coeff is not None:
+                coeff_val = abs(coeff)
+                stride_matches = [i for i in candidates if ref_strides[i] == coeff_val]
+                if len(stride_matches) == 1:
+                    axis = stride_matches[0]
+                elif len(stride_matches) > 1:
+                    axis = max(stride_matches, key=lambda i: ref_strides[i])
+            if axis is None:
+                axis = max(candidates, key=lambda i: ref_strides[i])
+
+            var_to_axis[var] = axis
+            available_axes.remove(axis)
+
+        return var_to_axis
+
+    def _get_affine_coefficient(
+        self, index: sympy.Expr, var: sympy.Symbol
+    ) -> Optional[int]:
+        """Best-effort extraction of integer coefficient for a var in an index expr."""
+        coeff = index.coeff(var)
+        if coeff == 0:
+            coeff = sympy.diff(index, var)
+        coeff_int = self._safe_int(coeff)
+        if coeff_int is not None:
+            return coeff_int
+
+        var_expr = BlockPatternMatcher.get_subexpr_involving_symbol(index, var)
+        stride = BlockPatternMatcher.match_affine_block_expr(var_expr, var)
+        return self._safe_int(stride) if stride is not None else None
 
     def _generate_strided_index(self, index: sympy.Expr) -> str:
         """
@@ -1048,8 +1361,10 @@ class PallasKernel(SIMDKernel):
         For expressions like `2 * x3 + 32 * x2 + 256 * x1 + 1024 * x0`, we generate
         code that computes the flattened index array using broadcasting.
 
-        The iteration variables (x0, x1, x2, x3) are already defined as jnp.arange arrays
-        in the kernel. We just need to convert the sympy expression to JAX code.
+        Instead of using global iteration variables (which may have shapes for the
+        output tensor), we generate fresh arange expressions with shapes appropriate
+        for this specific index expression. Variables with larger coefficients get
+        earlier axes (shape like (N, 1)) and smaller coefficients get later axes.
         """
         free_symbols = index.free_symbols
         iter_vars = self._get_iter_vars()
@@ -1061,11 +1376,82 @@ class PallasKernel(SIMDKernel):
                 f"Pallas backend does not yet support mixed index pattern: {index}"
             )
 
-        # Convert sympy expression to Python/JAX code string
-        # The iteration variables are already defined as jnp.arange arrays
-        index_str = self.kexpr(index)
+        # Sort iteration variables by coefficient (stride) when possible.
+        coeffs: dict[sympy.Symbol, Optional[int]] = {}
+        all_int_coeffs = True
+        for var in used_vars:
+            coeff = self._get_affine_coefficient(index, var)
+            if coeff is None:
+                all_int_coeffs = False
+            coeffs[var] = coeff
 
-        # Mark this as requiring flatten access
+        if all_int_coeffs:
+            sorted_vars = sorted(used_vars, key=lambda v: coeffs[v], reverse=True)
+        else:
+            iter_var_order = {v: i for i, v in enumerate(self.range_tree_nodes.keys())}
+            sorted_vars = sorted(
+                used_vars, key=lambda v: iter_var_order.get(v, 0), reverse=True
+            )
+
+        n_dims = len(sorted_vars)
+
+        # Record axis order for this strided index so stores can align values.
+        self._strided_index_axis_orders[self._index_key(index)] = [
+            str(v) for v in sorted_vars
+        ]
+
+        # Build index expression with fresh arange expressions
+        # Each variable gets a shape with 1s except at its position
+        index_str = self.kexpr(self.rename_indexing(index))
+        for i, var in enumerate(sorted_vars):
+            var_name = str(var)
+            if var in self.range_tree_nodes:
+                range_entry = self.range_tree_nodes[var]
+                renamed_size = self.rename_indexing(range_entry.length)
+                size_str = self.kexpr(renamed_size)
+
+                if n_dims == 1:
+                    # Single var - just use arange
+                    arange_expr = f"jnp.arange({size_str})"
+                else:
+                    # Multiple vars - reshape for broadcasting
+                    shape_parts = ["1"] * n_dims
+                    shape_parts[i] = size_str
+                    shape_str = ", ".join(shape_parts)
+                    arange_expr = f"jnp.arange({size_str}).reshape({shape_str})"
+
+                index_str = index_str.replace(var_name, arange_expr)
+
+        return index_str
+
+    def _generate_compact_strided_index(
+        self, index: sympy.Expr, sorted_vars: list[sympy.Symbol]
+    ) -> str:
+        """
+        Generate a compact index array using only the given sorted vars as axes.
+
+        This keeps axis order consistent with the sorted var order, which matches
+        the flatten stride order for row-major indexing.
+        """
+        index_str = self.kexpr(self.rename_indexing(index))
+        n_dims = len(sorted_vars)
+        for axis_idx, var in enumerate(sorted_vars):
+            var_name = str(var)
+            if var in self.range_tree_nodes:
+                range_entry = self.range_tree_nodes[var]
+                renamed_size = self.rename_indexing(range_entry.length)
+                size_str = self.kexpr(renamed_size)
+
+                if n_dims == 1:
+                    arange_expr = f"jnp.arange({size_str})"
+                else:
+                    shape_parts = ["1"] * n_dims
+                    shape_parts[axis_idx] = size_str
+                    shape_str = ", ".join(shape_parts)
+                    arange_expr = f"jnp.arange({size_str}).reshape({shape_str})"
+
+                index_str = index_str.replace(var_name, arange_expr)
+
         return index_str
 
     def _generate_index_array(self, index: sympy.Expr) -> str:
@@ -1199,11 +1585,6 @@ class PallasKernel(SIMDKernel):
             # Only transpose for standard row-major buffers (stride[0] = size[1], stride[1] = 1)
             is_standard_row_major = s0 == size1 and s1 == 1
             if not is_standard_row_major:
-                return False
-
-            # Only transpose if output is column-major (indicates actual transpose op)
-            output_is_column_major = self._has_column_major_output()
-            if not output_is_column_major:
                 return False
 
             # Check if coefficients indicate transposed access
@@ -1540,6 +1921,10 @@ class PallasKernel(SIMDKernel):
         has_non_unit_strides = self._check_gather_pattern(
             buf_size, actual_strides, is_contiguous, coefficients
         )
+        # For contiguous buffers, also require canonical linearization order.
+        non_canonical_order = False
+        if is_contiguous and len(used_vars) > 1:
+            non_canonical_order = not self._is_contiguous_linear_index(index, used_vars)
 
         # Check for im2col-like pattern (more iter vars used than buffer dims)
         buf_effective_dims = sum(1 for s in buf_size if self._safe_int(s) != 1)
@@ -1563,7 +1948,12 @@ class PallasKernel(SIMDKernel):
         # Determine if strided indexing is needed
         if (
             output_numel > 0
-            and (buf_numel != output_numel or not_all_vars_used or has_non_unit_strides)
+            and (
+                buf_numel != output_numel
+                or not_all_vars_used
+                or has_non_unit_strides
+                or non_canonical_order
+            )
             and len(used_vars) > 0
             and not skip_for_non_contiguous
             and not has_symbolic_coef
@@ -1635,7 +2025,10 @@ class PallasKernel(SIMDKernel):
                 # CPU: use JAX array indexing
                 has_minmax = index.has(sympy.Min) or index.has(sympy.Max)
                 idx = f"({index_str}).astype(jnp.int64)" if has_minmax else index_str
-                return f"{buf}[...].flatten()[{idx}]"
+                load_expr = f"{buf}[...].flatten()[{idx}]"
+                return self._maybe_reshape_flattened_indexed_load(
+                    name, index, load_expr, needs_flatten, buf=buf
+                )
         else:
             # Direct indexing for contiguous access
             load_expr = f"{buf}[{index_str}]"
@@ -1646,6 +2039,202 @@ class PallasKernel(SIMDKernel):
                 self.has_transposed_load = True
 
             return load_expr
+
+    def _maybe_reshape_flattened_indexed_load(
+        self,
+        name: str,
+        index: sympy.Expr,
+        load_expr: str,
+        needs_flatten: bool,
+        buf: Optional[str] = None,
+    ) -> str:
+        """Reshape flattened indexed loads to align with broadcast dimensions."""
+        if not needs_flatten or self.is_gpu:
+            return load_expr
+
+        # Avoid reshaping unrelated intermediates
+        if name.startswith("buf") and name not in self.args.input_buffers:
+            return load_expr
+
+        dtype = V.graph.get_dtype(name)
+        if dtype is not None and dtype.is_complex:
+            return load_expr
+
+        used_vars = self._get_used_iter_vars(index)
+        if len(used_vars) == 0:
+            return load_expr
+        # Skip reshaping when reduction vars are involved.
+        for var in used_vars:
+            entry = self.range_tree_nodes.get(var)
+            # pyrefly: ignore [missing-argument]
+            if entry is not None and entry.is_reduction:
+                return load_expr
+
+        def _reshape_if_numel_matches(
+            expr: str, shape: tuple[int, ...] | list[int]
+        ) -> str:
+            numel = math.prod(int(s) for s in shape)
+            shape_str = ", ".join(map(str, shape))
+            return (
+                f"(lambda _v: _v.reshape({shape_str}) if _v.size == {numel} else _v)({expr})"
+            )
+
+        # Build coeffs and a stable var order for reshape decisions.
+        coeffs: dict[sympy.Symbol, Optional[int]] = {}
+        all_int_coeffs = True
+        for var in used_vars:
+            coeff_int = self._get_affine_coefficient(index, var)
+            if coeff_int is not None:
+                coeffs[var] = coeff_int
+            else:
+                coeffs[var] = None
+                all_int_coeffs = False
+
+        if all_int_coeffs:
+            sorted_vars = sorted(used_vars, key=lambda v: coeffs[v], reverse=True)
+        else:
+            iter_var_order = {v: i for i, v in enumerate(self.range_tree_nodes.keys())}
+            sorted_vars = sorted(
+                used_vars, key=lambda v: iter_var_order.get(v, 0), reverse=True
+            )
+
+        lengths: list[int] = []
+        for var in sorted_vars:
+            length = self._size_hint_or_none(self.range_tree_nodes[var].length)
+            if length is None:
+                lengths = []
+                break
+            lengths.append(int(length))
+
+        if lengths:
+            if len(used_vars) == 1:
+                buf_obj = V.graph.get_buffer(name)
+                if buf_obj is not None:
+                    buf_shape = [self._size_hint_or_none(s) for s in buf_obj.get_size()]
+                    if all(s is not None for s in buf_shape):
+                        buf_shape_int = [int(s) for s in buf_shape]
+                        if buf_shape_int and all(s > 1 for s in buf_shape_int):
+                            return load_expr
+
+            ref_shape = None
+            output_bufs = getattr(self.args, "output_buffers", None)
+            if output_bufs:
+                output_shapes: list[list[int]] = []
+                for out_name in output_bufs:
+                    out_buf = V.graph.get_buffer(out_name)
+                    if out_buf is None:
+                        continue
+                    shape = [self._size_hint_or_none(s) for s in out_buf.get_size()]
+                    if any(s is None for s in shape):
+                        continue
+                    output_shapes.append([int(s) for s in shape])
+                if output_shapes:
+                    ref_shape = max(output_shapes, key=len)
+            if ref_shape is None:
+                ref_shape = self._get_reference_broadcast_shape()
+
+            # If the buffer has a singleton dim, preserve it for broadcasting.
+            if len(used_vars) == 1:
+                buf_obj = V.graph.get_buffer(name)
+                if buf_obj is not None and len(buf_obj.get_size()) == 2:
+                    buf_shape = [self._size_hint_or_none(s) for s in buf_obj.get_size()]
+                    if all(s is not None for s in buf_shape):
+                        if ref_shape is not None and len(ref_shape) > 1:
+                            b0, b1 = int(buf_shape[0]), int(buf_shape[1])
+                            if b0 == 1 and lengths[0] <= b1:
+                                target_shape = (1, lengths[0])
+                                if math.prod(target_shape) == math.prod(lengths):
+                                    return _reshape_if_numel_matches(
+                                        load_expr, (1, lengths[0])
+                                    )
+                            if b1 == 1 and lengths[0] <= b0:
+                                target_shape = (lengths[0], 1)
+                                if math.prod(target_shape) == math.prod(lengths):
+                                    return _reshape_if_numel_matches(
+                                        load_expr, (lengths[0], 1)
+                                    )
+
+            if ref_shape is not None:
+                var_to_axis = self._map_vars_to_ref_axes(sorted_vars, coeffs, ref_shape)
+                if var_to_axis is not None:
+                    target_shape = [1] * len(ref_shape)
+                    axis_positions: list[int] = []
+                    axis_sizes_match = True
+                    for var, length in zip(sorted_vars, lengths):
+                        axis = var_to_axis.get(var)
+                        if axis is None:
+                            target_shape = []
+                            break
+                        axis_positions.append(axis)
+                        target_shape[axis] = length
+                        if (
+                            axis < len(ref_shape)
+                            and length != 1
+                            and length != ref_shape[axis]
+                        ):
+                            axis_sizes_match = False
+                    if (
+                        target_shape
+                        and axis_positions == sorted(axis_positions)
+                        and math.prod(target_shape) == math.prod(lengths)
+                        and axis_sizes_match
+                    ):
+                        return _reshape_if_numel_matches(load_expr, tuple(target_shape))
+                    if (
+                        target_shape
+                        and axis_positions
+                        and axis_positions != sorted(axis_positions)
+                        and math.prod(target_shape) == math.prod(lengths)
+                        and axis_sizes_match
+                    ):
+                        perm = [axis_positions.index(i) for i in range(len(axis_positions))]
+                        shape_str = ", ".join(map(str, lengths))
+                        perm_str = ", ".join(map(str, perm))
+                        trans_expr = (
+                            f"jnp.transpose(jnp.reshape({load_expr}, ({shape_str})), "
+                            f"axes=({perm_str}))"
+                        )
+                        return _reshape_if_numel_matches(trans_expr, tuple(target_shape))
+                # If we can directly reshape to the reference shape (e.g., when
+                # an iteration dim represents a flattened product of ref dims),
+                # use it as a fallback.
+                if math.prod(ref_shape) == math.prod(lengths):
+                    return _reshape_if_numel_matches(load_expr, tuple(ref_shape))
+
+            # If the buffer itself matches the indexed numel, reshape to it.
+            buf_obj = V.graph.get_buffer(name)
+            if buf_obj is not None and len(buf_obj.get_size()) > 1:
+                buf_shape = [self._size_hint_or_none(s) for s in buf_obj.get_size()]
+                if all(s is not None for s in buf_shape):
+                    buf_shape_int = [int(s) for s in buf_shape]
+                    if math.prod(lengths) == math.prod(buf_shape_int):
+                        var_to_axis = self._map_vars_to_ref_axes(
+                            sorted_vars, coeffs, buf_shape_int
+                        )
+                        if var_to_axis is not None:
+                            return _reshape_if_numel_matches(
+                                load_expr, tuple(buf_shape_int)
+                            )
+
+        # Handle 1D buffers used in higher-D kernels (e.g., channel-wise params).
+        buf_obj = V.graph.get_buffer(name)
+        if buf_obj is None or len(buf_obj.get_size()) != 1:
+            return load_expr
+        buf_length = self._size_hint_or_none(buf_obj.get_size()[0])
+        if buf_length is None:
+            return load_expr
+
+        ref_shape = self._get_reference_broadcast_shape()
+        if ref_shape is None or len(ref_shape) <= 1:
+            return load_expr
+
+        matching_axes = [i for i, s in enumerate(ref_shape) if s == int(buf_length)]
+        if len(matching_axes) != 1:
+            return load_expr
+        axis = matching_axes[0]
+        target_shape = [1] * len(ref_shape)
+        target_shape[axis] = int(buf_length)
+        return _reshape_if_numel_matches(load_expr, tuple(target_shape))
 
     def _maybe_squeeze_intermediate_buffer(self, name: str, load_expr: str) -> str:
         """
@@ -1685,16 +2274,106 @@ class PallasKernel(SIMDKernel):
         if buf_length is None:
             return load_expr
 
-        # Only graph inputs, not intermediate buffers or index tensors
-        if name.startswith("buf"):
-            return load_expr
         dtype = V.graph.get_dtype(name)
         if dtype is not None and not dtype.is_floating_point:
             return load_expr
 
-        # Find a higher-dimensional reference buffer
+        # Prefer output shape when it has a unique matching axis for this 1D buffer.
+        output_shapes: list[list[int]] = []
+        max_ref_rank: Optional[int] = None
+        output_bufs = getattr(self.args, "output_buffers", None)
+        if output_bufs:
+            for out_name in output_bufs:
+                out_buf = V.graph.get_buffer(out_name)
+                if out_buf is None:
+                    continue
+                shape = [self._size_hint_or_none(s) for s in out_buf.get_size()]
+                if any(s is None for s in shape):
+                    continue
+                if len(shape) <= 1:
+                    continue
+                output_shapes.append([int(s) for s in shape])
+        if output_shapes:
+            out_shape = max(output_shapes, key=len)
+            max_ref_rank = len(out_shape)
+            matching_axes = [i for i, s in enumerate(out_shape) if s == buf_length]
+            if len(matching_axes) == 1:
+                axis_pos = matching_axes[0]
+                reshape_dims = [1] * len(out_shape)
+                reshape_dims[axis_pos] = buf_length
+                return f"{load_expr}.reshape({', '.join(map(str, reshape_dims))})"
+        elif output_bufs:
+            # Only 1D outputs present; avoid adding extra dims.
+            max_ref_rank = 1
+            return load_expr
+
+        # Fall back to any higher-rank buffer used by this kernel.
+        candidate_shapes: list[list[int]] = []
+        try:
+            buf_names = list(self.features.buf_accesses())
+        except Exception:
+            buf_names = []
+        for buf_name in buf_names:
+            if buf_name == name:
+                continue
+            other_buf = V.graph.get_buffer(buf_name)
+            if other_buf is None:
+                continue
+            shape = [self._size_hint_or_none(s) for s in other_buf.get_size()]
+            if any(s is None for s in shape) or len(shape) <= 1:
+                continue
+            shape_ints = [int(s) for s in shape]
+            if max_ref_rank is None or len(shape_ints) <= max_ref_rank:
+                candidate_shapes.append(shape_ints)
+        if candidate_shapes:
+            candidate_shapes.sort(
+                key=lambda s: (len(s), math.prod(s), -sum(1 for v in s if v == 1)),
+                reverse=True,
+            )
+            ref_shape = candidate_shapes[0]
+            matching_axes = [i for i, s in enumerate(ref_shape) if s == buf_length]
+            if len(matching_axes) == 1:
+                axis_pos = matching_axes[0]
+                reshape_dims = [1] * len(ref_shape)
+                reshape_dims[axis_pos] = buf_length
+                return f"{load_expr}.reshape({', '.join(map(str, reshape_dims))})"
+
+        # Prefer reference broadcast shape when we can infer the axis.
+        ref_shape = self._get_reference_broadcast_shape()
+        if (
+            ref_shape is not None
+            and len(ref_shape) > 1
+            and (max_ref_rank is None or len(ref_shape) <= max_ref_rank)
+        ):
+            used_vars = self._get_used_iter_vars(index)
+            if len(used_vars) == 1:
+                used_var = next(iter(used_vars))
+                entry = self.range_tree_nodes.get(used_var)
+                if entry is None or self._safe_int(entry.length) == buf_length:
+                    coeff = self._get_affine_coefficient(index, used_var)
+                    coeffs = {used_var: coeff}
+                    var_to_axis = self._map_vars_to_ref_axes(
+                        [used_var], coeffs, ref_shape
+                    )
+                    if var_to_axis and used_var in var_to_axis:
+                        axis_pos = var_to_axis[used_var]
+                        reshape_dims = [1] * len(ref_shape)
+                        reshape_dims[axis_pos] = buf_length
+                        return f"{load_expr}.reshape({', '.join(map(str, reshape_dims))})"
+
+            matching_axes = [i for i, s in enumerate(ref_shape) if s == buf_length]
+            if len(matching_axes) == 1:
+                axis_pos = matching_axes[0]
+                reshape_dims = [1] * len(ref_shape)
+                reshape_dims[axis_pos] = buf_length
+                return f"{load_expr}.reshape({', '.join(map(str, reshape_dims))})"
+
+
+        # Find a higher-dimensional reference buffer (prefer outputs, then inputs)
         ref_buf_size = None
-        for buf_name in self.args.input_buffers:
+        candidate_bufs = list(getattr(self.args, "output_buffers", {}).keys())
+        candidate_bufs.extend(self.args.input_buffers)
+        for buf_name in candidate_bufs:
             other_buf = V.graph.get_buffer(buf_name)
             if other_buf is not None and len(other_buf.get_size()) > 1:
                 ref_buf_size = [self._safe_int(s) for s in other_buf.get_size()]
@@ -1739,6 +2418,208 @@ class PallasKernel(SIMDKernel):
         reshape_dims = [1] * len(ref_buf_size)
         reshape_dims[axis_pos] = -1
         return f"{load_expr}.reshape({', '.join(map(str, reshape_dims))})"
+
+    def _maybe_broadcast_nd_buffer(
+        self, name: str, index: sympy.Expr, load_expr: str
+    ) -> str:
+        """Reshape N-D buffers to match leading dims of a higher-D reference."""
+        buf_obj = V.graph.get_buffer(name)
+        if buf_obj is None:
+            return load_expr
+
+        buf_size = [self._safe_int(s) for s in buf_obj.get_size()]
+        if any(s is None for s in buf_size):
+            return load_expr
+
+        if len(buf_size) <= 1:
+            return load_expr
+
+        # Only graph inputs, not intermediates
+        if name.startswith("buf"):
+            return load_expr
+
+        dtype = V.graph.get_dtype(name)
+        if dtype is not None and not dtype.is_floating_point:
+            return load_expr
+
+        # Find a higher-dimensional reference buffer (prefer outputs, then inputs)
+        ref_buf_size = None
+        candidate_bufs = list(getattr(self.args, "output_buffers", {}).keys())
+        candidate_bufs.extend(self.args.input_buffers)
+        for buf_name in candidate_bufs:
+            other_buf = V.graph.get_buffer(buf_name)
+            if other_buf is not None and len(other_buf.get_size()) > len(buf_size):
+                ref_buf_size = [self._safe_int(s) for s in other_buf.get_size()]
+                if all(s is not None for s in ref_buf_size):
+                    break
+                ref_buf_size = None
+        if ref_buf_size is None or len(ref_buf_size) <= len(buf_size):
+            return load_expr
+
+        # Only reshape when buffer matches the leading dims of the ref buffer.
+        if ref_buf_size[: len(buf_size)] != buf_size:
+            return load_expr
+
+        reshape_dims = list(buf_size) + [1] * (len(ref_buf_size) - len(buf_size))
+        return f"{load_expr}.reshape({', '.join(map(str, reshape_dims))})"
+
+    def _maybe_reshape_view_buffer(
+        self, name: str, index: sympy.Expr, load_expr: str
+    ) -> str:
+        """
+        Reshape buffer to target shape when input buffers have mismatched shapes.
+
+        Handles view/reshape cases where buffers have different shapes but same numel.
+        """
+        # Get this buffer's shape and numel
+        buf_obj = V.graph.get_buffer(name)
+        if buf_obj is None:
+            return load_expr
+        dtype = V.graph.get_dtype(name)
+        if dtype is not None and not dtype.is_floating_point:
+            return load_expr
+
+        try:
+            buf_size = buf_obj.get_size()
+        except NotImplementedError:
+            return load_expr
+        buf_shape = tuple(self._safe_int(s) for s in buf_size)
+        if None in buf_shape:
+            return load_expr
+        if len(buf_shape) <= 1:
+            return load_expr
+
+        buf_numel = 1
+        for s in buf_shape:
+            buf_numel *= s
+
+        # Prefer reference broadcast shape if it matches this buffer's numel
+        ref_shape = self._get_reference_broadcast_shape()
+        if ref_shape is not None:
+            ref_numel = math.prod(ref_shape)
+            if ref_numel == buf_numel and len(ref_shape) > len(buf_shape):
+                shape_str = ", ".join(str(s) for s in ref_shape)
+                return f"{load_expr}.reshape({shape_str})"
+
+        # Find if any other buffer has same numel but different shape
+        target_shape = None
+        candidates: list[tuple[int, int, tuple[int, ...]]] = []
+        for other_name in self.features.buf_accesses():
+            if other_name == name:
+                continue
+            other_buf = V.graph.get_buffer(other_name)
+            if other_buf is None:
+                continue
+            try:
+                other_size = other_buf.get_size()
+            except NotImplementedError:
+                continue
+            other_shape = tuple(self._safe_int(s) for s in other_size)
+            if None in other_shape:
+                continue
+            other_numel = 1
+            for s in other_shape:
+                other_numel *= s
+
+            if other_numel == buf_numel and other_shape != buf_shape:
+                if len(other_shape) > len(buf_shape):
+                    ones = sum(1 for s in other_shape if s == 1)
+                    candidates.append((len(other_shape), -ones, other_shape))
+
+        if candidates:
+            # Prefer higher-rank shapes with fewer singleton dims
+            candidates.sort(reverse=True)
+            target_shape = candidates[0][2]
+
+        if target_shape is None or target_shape == buf_shape:
+            return load_expr
+
+        shape_str = ", ".join(str(s) for s in target_shape)
+        return f"{load_expr}.reshape({shape_str})"
+
+    def _maybe_reshape_to_broadcast_ref(self, name: str, load_expr: str) -> str:
+        """Reshape buffers to a shape broadcastable to a reference buffer."""
+        ref_shape = self._get_reference_broadcast_shape()
+        if not ref_shape or len(ref_shape) <= 1:
+            return load_expr
+
+        buf_obj = V.graph.get_buffer(name)
+        if buf_obj is None:
+            return load_expr
+        dtype = V.graph.get_dtype(name)
+        if dtype is not None and not dtype.is_floating_point:
+            return load_expr
+
+        buf_shape = [self._size_hint_or_none(s) for s in buf_obj.get_size()]
+        if any(s is None for s in buf_shape):
+            return load_expr
+        if len(buf_shape) == 1:
+            return load_expr
+
+        buf_shape_int = [int(s) for s in buf_shape]  # type: ignore[arg-type]
+
+        if len(buf_shape) > len(ref_shape):
+            # Try merging adjacent dims when buffer rank is one higher than ref.
+            if len(buf_shape) == len(ref_shape) + 1:
+                for i in range(len(buf_shape_int) - 1):
+                    merged = (
+                        buf_shape_int[:i]
+                        + [buf_shape_int[i] * buf_shape_int[i + 1]]
+                        + buf_shape_int[i + 2 :]
+                    )
+                    if len(merged) == len(ref_shape) and all(
+                        m == r or m == 1 or r == 1
+                        for m, r in zip(merged, ref_shape)
+                    ):
+                        shape_str = ", ".join(map(str, merged))
+                        return f"{load_expr}.reshape({shape_str})"
+            return load_expr
+
+        buf_numel = math.prod(buf_shape_int)
+        ref_numel = math.prod(ref_shape)
+        if buf_numel == ref_numel:
+            return load_expr
+        if buf_numel == 0 or ref_numel == 0 or ref_numel % buf_numel != 0:
+            return load_expr
+
+        # If ref shape has a single singleton dim, expand it to fit this buffer's numel.
+        if buf_numel > ref_numel and len(ref_shape) == len(buf_shape_int) + 1:
+            singleton_axes = [i for i, s in enumerate(ref_shape) if s == 1]
+            if len(singleton_axes) == 1:
+                factor = buf_numel // ref_numel
+                if factor > 1:
+                    target_shape = list(ref_shape)
+                    target_shape[singleton_axes[0]] = factor
+                    if math.prod(target_shape) == buf_numel:
+                        shape_str = ", ".join(map(str, target_shape))
+                        return f"{load_expr}.reshape({shape_str})"
+
+        # If already broadcastable by right-alignment, do nothing.
+        aligned = [1] * (len(ref_shape) - len(buf_shape_int)) + buf_shape_int
+        if all(a == 1 or a == r for a, r in zip(aligned, ref_shape)):
+            return load_expr
+
+        # Try to align buffer dims to the trailing ref dims (skip ref singleton dims).
+        target_shape = [1] * len(ref_shape)
+        ref_idx = len(ref_shape) - 1
+        buf_idx = len(buf_shape_int) - 1
+        while buf_idx >= 0 and ref_idx >= 0:
+            buf_dim = buf_shape_int[buf_idx]
+            ref_dim = ref_shape[ref_idx]
+            if buf_dim == ref_dim:
+                target_shape[ref_idx] = ref_dim
+                buf_idx -= 1
+                ref_idx -= 1
+            elif ref_dim == 1:
+                ref_idx -= 1
+            else:
+                break
+
+        if buf_idx < 0 and math.prod(target_shape) == buf_numel:
+            shape_str = ", ".join(map(str, target_shape))
+            return f"{load_expr}.reshape({shape_str})"
+
+        return load_expr
 
     def _check_im2col_pattern(
         self, index: sympy.Expr, index_str: str, needs_flatten: bool
@@ -1912,19 +2793,23 @@ class PallasKernel(SIMDKernel):
 
         Handles scalar broadcast, shape matching, and optional transpose.
         """
+        value_expr = f"_pallas_squeeze_leading_ones(jnp.asarray({value}))"
         if needs_transpose:
             return (
-                f"{out}[...] = ("
-                f"jnp.full({out}.shape, {value}) if jnp.asarray({value}).ndim == 0 "
-                f"else jnp.transpose(jnp.asarray({value})))"
+                f"{out}[...] = (lambda _v: "
+                f"jnp.full({out}.shape, _v, dtype={out}.dtype) if _v.ndim == 0 "
+                f"else (lambda _u: jnp.reshape(jnp.transpose(jnp.reshape(_u, {out}.shape)), {out}.shape).astype({out}.dtype))"
+                f"(_v)"
+                f")({value_expr})"
             )
         else:
             return (
-                f"{out}[...] = ("
-                f"jnp.full({out}.shape, {value}) if jnp.asarray({value}).ndim == 0 "
-                f"else (jnp.broadcast_to(jnp.asarray({value}), {out}.shape) "
-                f"if jnp.asarray({value}).size != {out}.size "
-                f"else jnp.asarray({value}).reshape({out}.shape)))"
+                f"{out}[...] = (lambda _v: "
+                f"jnp.full({out}.shape, _v, dtype={out}.dtype) if _v.ndim == 0 "
+                f"else (lambda _u: _u.astype({out}.dtype))("
+                f"jnp.broadcast_to(_v, {out}.shape) "
+                f"if _v.size != {out}.size else _v.reshape({out}.shape))"
+                f")({value_expr})"
             )
 
     def _build_store_expr(
@@ -1952,17 +2837,53 @@ class PallasKernel(SIMDKernel):
         if index_str == "...":
             # Full array store with shape matching
             needs_transpose = self._check_store_needs_transpose(name)
+            if needs_transpose and not self._is_contiguous_linear_index(index):
+                needs_transpose = False
             return self._build_full_array_store_expr(out, value, needs_transpose)
 
         if needs_flatten:
             # Block variable indexing (e.g., im2col) - use flattened scatter
             scatter_op = "add" if mode == "atomic_add" else "set"
+            value_expr = f"jnp.asarray({value})"
+            value_axis_order = self._value_axis_orders.get(str(value))
+            store_axis_order = self._strided_index_axis_orders.get(
+                self._index_key(index)
+            )
+            if store_axis_order is None:
+                store_axis_order = self._get_coeff_axis_order(index)
+            if (
+                not self._is_contiguous_linear_index(index)
+                and value_axis_order
+                and store_axis_order
+                and set(value_axis_order) == set(store_axis_order)
+            ):
+                perm = [value_axis_order.index(v) for v in store_axis_order]
+                if perm != list(range(len(perm))):
+                    compact_dims = []
+                    for name in value_axis_order:
+                        dim = self._iter_var_length_str(name)
+                        if dim is None:
+                            compact_dims = []
+                            break
+                        compact_dims.append(dim)
+                    if compact_dims:
+                        shape_str = ", ".join(compact_dims)
+                        size_expr = " * ".join(compact_dims)
+                        value_expr = (
+                            f"(lambda _v: (jnp.reshape(jnp.transpose(jnp.reshape(_v, ({shape_str})), "
+                            f"axes={perm}), _v.shape) if _v.size == ({size_expr}) else _v))({value_expr})"
+                        )
+                    else:
+                        value_expr = (
+                            f"(jnp.transpose({value_expr}, axes={perm}) "
+                            f"if {value_expr}.ndim == {len(perm)} else {value_expr})"
+                        )
             if self.is_gpu:
-                return f"pltriton.store({out}.at[{index_str}], jnp.asarray({value}))"
+                return f"pltriton.store({out}.at[{index_str}], {value_expr})"
             else:
                 return (
                     f"{out}[...] = {out}[...].flatten().at[({index_str}).flatten()].{scatter_op}("
-                    f"jnp.asarray({value}).flatten()).reshape({out}.shape)"
+                    f"{value_expr}.flatten()).reshape({out}.shape)"
                 )
 
         # Direct indexed assignment
@@ -1978,9 +2899,14 @@ class PallasKernel(SIMDKernel):
         if has_indirect:
             # Indirect indexed store (scatter): use .add() for atomic_add, .set() otherwise
             scatter_op = "add" if mode == "atomic_add" else "set"
+            value_arr = f"jnp.asarray({value})"
+            reshaped_val = (
+                f"(lambda _v: _v.reshape({index_str}.shape) "
+                f"if _v.size == {index_str}.size else _v)({value_arr})"
+            )
             value_expr = (
                 f"(jnp.full({index_str}.shape, {value}) "
-                f"if jnp.asarray({value}).ndim == 0 else {value})"
+                f"if {value_arr}.ndim == 0 else {reshaped_val})"
             )
             if mode == "atomic_add":
                 # For atomic_add, mark output as needing to be readable (for aliasing)
@@ -2005,6 +2931,9 @@ class PallasKernel(SIMDKernel):
     ) -> str:
         """Build store expression for scatter operations (indirect indexing)."""
         is_point_scatter = scatter_info.get("is_point_scatter", False)
+        value_expr = (
+            f"_pallas_squeeze_leading_ones(jnp.asarray({value})).astype({out}.dtype)"
+        )
 
         # Mark this output parameter as needing to be readable (for aliasing)
         self.outputs_need_read.add(out)
@@ -2028,7 +2957,7 @@ class PallasKernel(SIMDKernel):
                     index_parts.append("0")
 
             index_tuple = ", ".join(index_parts)
-            return f"{out}[...] = {alias_param}[...].at[{index_tuple}].{scatter_op}({value})"
+            return f"{out}[...] = {alias_param}[...].at[{index_tuple}].{scatter_op}({value_expr})"
 
         # Scatter with iteration variables
         indirect_var = scatter_info["indirect_var"]
@@ -2072,7 +3001,7 @@ class PallasKernel(SIMDKernel):
 
         index_tuple = ", ".join(index_parts)
         return (
-            f"{out}[...] = {alias_param}[...].at[{index_tuple}].{scatter_op}({value})"
+            f"{out}[...] = {alias_param}[...].at[{index_tuple}].{scatter_op}({value_expr})"
         )
 
     @typing_extensions.override
@@ -2109,16 +3038,48 @@ class PallasKernel(SIMDKernel):
         )
 
         # Handle intermediate buffer squeezing for correct broadcasting
-        if not needs_flatten and index_str == "...":
-            load_expr = self._maybe_squeeze_intermediate_buffer(name, load_expr)
-            # Handle 1D buffer broadcasting for higher-dimensional kernels
-            load_expr = self._maybe_broadcast_1d_buffer(name, index, load_expr)
+        if not needs_flatten:
+            if index_str == "...":
+                skip_view_reshape = False
+                buf_obj = V.graph.get_buffer(name)
+                if buf_obj is not None and len(buf_obj.get_size()) == 1:
+                    used_vars = self._get_used_iter_vars(index)
+                    for var in used_vars:
+                        entry = self.range_tree_nodes.get(var)
+                        # pyrefly: ignore [missing-argument]
+                        if entry is not None and entry.is_reduction:
+                            skip_view_reshape = True
+                            break
 
-        return self.cse.generate(
+                load_expr = self._maybe_squeeze_intermediate_buffer(name, load_expr)
+                # Handle 1D buffer broadcasting for higher-dimensional kernels
+                load_expr = self._maybe_broadcast_1d_buffer(name, index, load_expr)
+                # Handle N-D buffer broadcasting for higher-dimensional kernels
+                load_expr = self._maybe_broadcast_nd_buffer(name, index, load_expr)
+                # Handle view/reshape case where buffer shape differs from expected shape
+                if not skip_view_reshape:
+                    load_expr = self._maybe_reshape_view_buffer(name, index, load_expr)
+                    # Reshape to a broadcastable shape for the reference buffer
+                    load_expr = self._maybe_reshape_to_broadcast_ref(name, load_expr)
+            else:
+                # Allow 1D/ND broadcast reshapes even for explicit indices.
+                load_expr = self._maybe_broadcast_1d_buffer(name, index, load_expr)
+                load_expr = self._maybe_broadcast_nd_buffer(name, index, load_expr)
+
+        if self.upcast_fp32 and dtype in (torch.float16, torch.bfloat16):
+            load_expr = f"jnp.asarray({load_expr}).astype(jnp.float32)"
+            dtype = torch.float32
+
+        cse_var = self.cse.generate(
             self.compute,
             load_expr,
             dtype=dtype,
         )
+        if needs_flatten:
+            axis_order = self._strided_index_axis_orders.get(self._index_key(index))
+            if axis_order:
+                self._value_axis_orders[str(cse_var)] = axis_order
+        return cse_var
 
     def _handle_mixed_indexing(self, index: sympy.Expr) -> str:
         """
@@ -2182,7 +3143,7 @@ class PallasKernel(SIMDKernel):
                 var in self.range_tree_nodes and self.range_tree_nodes[var].is_reduction
             )
 
-            if is_reduction_var:
+            if is_reduction_var and abs(indirect_coeffs[indirect_vars[0]]) == 1:
                 # Reduction var: simple element-wise gather
                 if var in self.range_tree_nodes:
                     range_entry = self.range_tree_nodes[var]
@@ -2193,6 +3154,38 @@ class PallasKernel(SIMDKernel):
                     index_str = index_str.replace(var_name, arange_expr)
                 return index_str
             # For pointwise vars, fall through to the complex reshape code
+
+        if len(indirect_vars) == 1:
+            # Single indirect var: place indirect dimension first, then iter vars.
+            n_output_dims = 1 + len(used_iter_vars)
+
+            indirect_var = indirect_vars[0]
+            if len(used_iter_vars) > 0:
+                ones = ", ".join(["1"] * len(used_iter_vars))
+                reshape_expr = (
+                    f"{indirect_var}.reshape({indirect_var}.shape + ({ones},))"
+                )
+            else:
+                reshape_expr = indirect_var
+            index_str = index_str.replace(indirect_var, reshape_expr)
+
+            for i, var in enumerate(used_iter_vars):
+                var_name = str(var)
+                if var in self.range_tree_nodes:
+                    range_entry = self.range_tree_nodes[var]
+                    range_size = range_entry.length
+                    renamed_size = self.rename_indexing(range_size)
+
+                    shape_parts = ["1"] * n_output_dims
+                    shape_parts[i + 1] = self.kexpr(renamed_size)
+                    shape_str = ", ".join(shape_parts)
+                    arange_expr = (
+                        f"jnp.arange({self.kexpr(renamed_size)}).reshape({shape_str})"
+                    )
+
+                    index_str = index_str.replace(var_name, arange_expr)
+
+            return index_str
 
         # Check if multiple indirect vars should be paired element-wise.
         # In PyTorch, when multiple advanced indices have the same shape, they pair up.
@@ -2285,7 +3278,7 @@ class PallasKernel(SIMDKernel):
                 # The actual reshape at store time will fix any shape mismatches
                 n_trailing_iter = sum(1 for c in iter_coeffs if c < var_coeff)
                 n_trailing_indirect = sum(
-                    2 for c in indirect_coeffs.values() if c < var_coeff
+                    1 for c in indirect_coeffs.values() if c < var_coeff
                 )
                 n_trailing = n_trailing_iter + n_trailing_indirect
 
@@ -2360,7 +3353,6 @@ class PallasKernel(SIMDKernel):
                 index_str, needs_flatten = self._check_im2col_pattern(
                     index, index_str, needs_flatten
                 )
-
                 # Determine if masked operations should be used
                 use_masked = (
                     index_str == "..."
@@ -2556,6 +3548,7 @@ class PallasKernel(SIMDKernel):
             # Unlike sum/max/min, we can't just reshape because the indices depend
             # on which axis we reduce over. We need to determine the correct axis.
             reduction_op = reduction_ops[reduction_type]
+            use_nan_handling = bool(getattr(src_dtype, "is_floating_point", False))
             # Check if this is a true partial reduction (pointwise numel > 1)
             # When pointwise_numel == 1, it's effectively a full reduction to scalar
             is_partial_reduction = (
@@ -2581,10 +3574,10 @@ class PallasKernel(SIMDKernel):
                     if reduction_vars:
                         r_var = reduction_vars[0]
                         # Get the coefficient (stride) of the reduction variable
-                        r_coeff = load_index.coeff(r_var)
-                        r_stride = self._safe_int(r_coeff) if r_coeff != 0 else 1
+                        r_stride = self._get_affine_coefficient(load_index, r_var)
                         if r_stride is None:
                             r_stride = 1
+
                         # Get pointwise variable
                         pw_vars = [
                             var
@@ -2593,17 +3586,42 @@ class PallasKernel(SIMDKernel):
                         ]
                         if pw_vars:
                             pw_var = pw_vars[0]
-                            pw_coeff = load_index.coeff(pw_var)
-                            pw_stride = self._safe_int(pw_coeff) if pw_coeff != 0 else 1
+                            pw_stride = self._get_affine_coefficient(load_index, pw_var)
                             if pw_stride is None:
                                 pw_stride = 1
                             # Higher stride = earlier (outer) axis
                             # For 2D: axis 0 has stride = dim1_size, axis 1 has stride = 1
                             reduction_axis = 0 if r_stride > pw_stride else -1
-                reduction_expr = f"{reduction_op}({value}, axis={reduction_axis})"
+
+                        # Use reference shape mapping when available to disambiguate.
+                        ref_shape = self._get_reference_broadcast_shape()
+                        if ref_shape is not None:
+                            coeffs = {r_var: self._get_affine_coefficient(load_index, r_var)}
+                            var_to_axis = self._map_vars_to_ref_axes(
+                                [r_var], coeffs, ref_shape
+                            )
+                            if var_to_axis and r_var in var_to_axis:
+                                reduction_axis = var_to_axis[r_var]
+                if use_nan_handling:
+                    nan_mask = f"jnp.isnan({value})"
+                    reduction_expr = (
+                        f"jnp.where(jnp.any({nan_mask}, axis={reduction_axis}), "
+                        f"jnp.argmax({nan_mask}, axis={reduction_axis}), "
+                        f"{reduction_op}({value}, axis={reduction_axis}))"
+                    )
+                else:
+                    reduction_expr = f"{reduction_op}({value}, axis={reduction_axis})"
             else:
                 # Full reduction to scalar
-                reduction_expr = f"{reduction_op}({value})"
+                if use_nan_handling:
+                    nan_mask = f"jnp.isnan({value})"
+                    reduction_expr = (
+                        f"jnp.where(jnp.any({nan_mask}), "
+                        f"jnp.argmax({nan_mask}), "
+                        f"{reduction_op}({value}))"
+                    )
+                else:
+                    reduction_expr = f"{reduction_op}({value})"
         elif reduction_type in reduction_ops:
             # Check for true partial reduction (pointwise_numel > 1 means we have
             # actual pointwise dimensions, not just a scalar placeholder)
@@ -2627,8 +3645,87 @@ class PallasKernel(SIMDKernel):
                 # Use a helper to find reduction axes by product matching
                 reduction_expr = f"_pallas_partial_reduce({reduction_op}, {value}, {pointwise_numel}, {reduction_numel})"
             elif is_symbolic_partial:
-                # Symbolic sizes: use axis-based reduction (axis=0 for outer reduction)
-                reduction_expr = f"{reduction_ops[reduction_type]}({value}, axis=0)"
+                # Symbolic sizes: reduce over the trailing reduction axes to preserve
+                # keepdims-style broadcasting. Multiple reduction dims must all be reduced.
+                if n_reduction_dims > 1:
+                    reduction_axes = tuple(range(-n_reduction_dims, 0))
+                    reduction_expr = (
+                        f"{reduction_ops[reduction_type]}({value}, axis={reduction_axes}, keepdims=True)"
+                    )
+                else:
+                    # Default to last axis (most common for reductions like LayerNorm).
+                    # Use load index analysis to disambiguate if possible.
+                    reduction_axis = -1
+                    if self.load_index_exprs:
+                        reduction_vars = [
+                            var
+                            for var, entry in self.range_tree_nodes.items()
+                            if entry.is_reduction  # pyrefly: ignore [missing-argument]
+                        ]
+                        pw_vars = [
+                            var
+                            for var, entry in self.range_tree_nodes.items()
+                            if not entry.is_reduction  # pyrefly: ignore [missing-argument]
+                        ]
+                        # Prefer a load index that references both pw and reduction vars.
+                        load_index = None
+                        if reduction_vars and pw_vars:
+                            for candidate in self.load_index_exprs.values():
+                                free = candidate.free_symbols
+                                if any(v in free for v in reduction_vars) and any(
+                                    v in free for v in pw_vars
+                                ):
+                                    load_index = candidate
+                                    break
+                        if load_index is None:
+                            load_index = next(iter(self.load_index_exprs.values()))
+
+                        if reduction_vars:
+                            r_var = reduction_vars[0]
+                            r_stride = self._get_affine_coefficient(load_index, r_var)
+                            if r_stride is None:
+                                r_stride = 1
+                            if pw_vars:
+                                pw_var = pw_vars[0]
+                                pw_stride = self._get_affine_coefficient(
+                                    load_index, pw_var
+                                )
+                                if pw_stride is None:
+                                    pw_stride = 1
+                                iter_var_order = {
+                                    v: i
+                                    for i, v in enumerate(self.range_tree_nodes.keys())
+                                }
+                                r_pos = iter_var_order.get(r_var)
+                                pw_pos = iter_var_order.get(pw_var)
+                                if (
+                                    r_pos is not None
+                                    and pw_pos is not None
+                                    and r_pos != pw_pos
+                                ):
+                                    # Reduction var is outer -> axis 0, inner -> axis -1.
+                                    reduction_axis = 0 if r_pos > pw_pos else -1
+                                else:
+                                    # Higher stride = outer axis (lower axis number)
+                                    # For LayerNorm on (batch, seq, dim): reduce over dim (last axis)
+                                    # r_stride=1 (inner), pw_stride=dim (outer) -> axis=-1
+                                    reduction_axis = 0 if r_stride > pw_stride else -1
+                            ref_shape = self._get_reference_broadcast_shape()
+                            if ref_shape is not None:
+                                coeffs = {
+                                    r_var: self._get_affine_coefficient(
+                                        load_index, r_var
+                                    )
+                                }
+                                var_to_axis = self._map_vars_to_ref_axes(
+                                    [r_var], coeffs, ref_shape
+                                )
+                                if var_to_axis and r_var in var_to_axis:
+                                    reduction_axis = var_to_axis[r_var]
+                    # Use keepdims=True to preserve dimensionality for proper broadcasting
+                    # This is critical for operations like LayerNorm where the reduced
+                    # values need to broadcast back to the original shape
+                    reduction_expr = f"{reduction_ops[reduction_type]}({value}, axis={reduction_axis}, keepdims=True)"
             else:
                 # Full reduction to scalar
                 reduction_expr = f"{reduction_ops[reduction_type]}({value})"
@@ -2694,7 +3791,37 @@ class PallasKernel(SIMDKernel):
         kernel_name = name or "<KERNEL_NAME>"
         interpret_is_cpu = V.graph.get_current_device_or_throw().type == "cpu"
         is_tpu = torch._inductor.config._debug_cpu_to_tpu_pallas
-        if is_tpu:
+        needs_x64 = False
+        for buf_name in list(self.args.input_buffers) + list(
+            getattr(self.args, "output_buffers", {}).keys()
+        ):
+            dtype = V.graph.get_dtype(buf_name)
+            if dtype in (torch.float64, torch.int64, torch.complex128):
+                needs_x64 = True
+                break
+        if not needs_x64:
+            try:
+                if "jnp.float64" in self.compute.getvalue():
+                    needs_x64 = True
+            except Exception:
+                pass
+        needs_precise_int = False
+        for buf_name in getattr(self.args, "output_buffers", {}).keys():
+            dtype = V.graph.get_dtype(buf_name)
+            if dtype in (torch.int8, torch.uint8):
+                needs_precise_int = True
+                break
+        if not needs_precise_int:
+            try:
+                compute_src = self.compute.getvalue()
+                if "astype(jnp.int8)" in compute_src or "astype(jnp.uint8)" in compute_src:
+                    needs_precise_int = True
+            except Exception:
+                pass
+
+        use_tpu = is_tpu and not needs_x64 and not needs_precise_int
+        force_cpu_device = is_tpu and not use_tpu
+        if use_tpu:
             if not torch._inductor.config.pallas_take_first_jax_device_only:
                 raise RuntimeError(
                     "Pallas backend currently only supports using the first JAX device."
@@ -2713,6 +3840,7 @@ import functools
 import math
 import torch
 import jax
+jax.config.update('jax_enable_x64', True)
 import jax.numpy as jnp
 from jax.experimental import pallas as pl
 from torch._inductor.runtime.runtime_utils import torch_dtype_to_jax_runtime
@@ -2740,6 +3868,17 @@ def _pallas_partial_reduce(reduce_fn, v, pw_numel, red_numel):
     reordered = jnp.moveaxis(v, pw_axes, list(range(len(pw_axes))))
     result = reduce_fn(reordered.reshape(pw_numel, red_numel), axis=-1)
     return result.reshape(out_shape)
+def _pallas_squeeze_leading_ones(v):
+    shape = tuple(v.shape)
+    n = 0
+    for d in shape:
+        if d == 1:
+            n += 1
+        else:
+            break
+    if n:
+        return v.reshape(shape[n:])
+    return v
 """ + (
             "\nfrom jax.experimental.pallas import mosaic_gpu as plgpu"
             if not interpret_is_cpu
@@ -2881,6 +4020,61 @@ def _pallas_partial_reduce(reduce_fn, v, pw_numel, red_numel):
                         broadcast_vars.append((idx, var_sym, entry, length_val))
 
                 num_broadcast_dims = len(broadcast_vars)
+                has_reduction_vars = any(
+                    str(v).startswith("r") for _, v, _, _ in broadcast_vars
+                )
+                has_pointwise_vars = any(
+                    not str(v).startswith("r") for _, v, _, _ in broadcast_vars
+                )
+                is_mixed = has_reduction_vars and has_pointwise_vars
+                axis_map: dict[sympy.Symbol, int] | None = None
+                if is_mixed and num_broadcast_dims > 1:
+                    ref_shape = self._get_reference_broadcast_shape()
+                    if ref_shape is not None and len(ref_shape) == num_broadcast_dims:
+                        available_axes = list(range(len(ref_shape)))
+                        axis_map = {}
+                        # Assign pointwise vars to earliest matching axes.
+                        for _, var_sym, _, length_val in broadcast_vars:
+                            if length_val is None:
+                                axis_map = None
+                                break
+                            if str(var_sym).startswith("r"):
+                                continue
+                            candidates = [
+                                ax
+                                for ax in available_axes
+                                if ref_shape[ax] == length_val
+                            ]
+                            if not candidates:
+                                candidates = list(available_axes)
+                            if not candidates:
+                                axis_map = None
+                                break
+                            axis = min(candidates)
+                            axis_map[var_sym] = axis
+                            available_axes.remove(axis)
+
+                        # Assign reduction vars to latest matching axes.
+                        if axis_map is not None:
+                            for _, var_sym, _, length_val in broadcast_vars:
+                                if length_val is None:
+                                    axis_map = None
+                                    break
+                                if not str(var_sym).startswith("r"):
+                                    continue
+                                candidates = [
+                                    ax
+                                    for ax in available_axes
+                                    if ref_shape[ax] == length_val
+                                ]
+                                if not candidates:
+                                    candidates = list(available_axes)
+                                if not candidates:
+                                    axis_map = None
+                                    break
+                                axis = max(candidates)
+                                axis_map[var_sym] = axis
+                                available_axes.remove(axis)
 
                 for idx, (var_sym, entry) in enumerate(var_items):
                     var_name = str(var_sym)
@@ -2890,15 +4084,13 @@ def _pallas_partial_reduce(reduce_fn, v, pw_numel, red_numel):
                     length_str = self.kexpr(renamed_length)
                     length_val = self._safe_int(length)
 
-                    # For symbolic lengths, only reshape if we have a valid target shape
-                    # Without a target, we can't determine correct dimensions
+                    # For symbolic lengths, reshape for proper broadcasting when
+                    # there are multiple broadcast dimensions
                     if length_val is None:
-                        if (
-                            reshape_target_shape
-                            and num_broadcast_dims > 1
-                            and idx != total_var_idx
-                        ):
-                            # Symbolic var in multi-broadcast case needs reshape
+                        # Check if we need to reshape for broadcasting
+                        # This is needed when we have mixed pointwise/reduction vars
+                        if num_broadcast_dims > 1 and idx != total_var_idx:
+                            # Find position of this var among broadcast vars
                             broadcast_idx = next(
                                 (
                                     i
@@ -2908,7 +4100,7 @@ def _pallas_partial_reduce(reduce_fn, v, pw_numel, red_numel):
                                 None,
                             )
                             if broadcast_idx is not None:
-                                # Same logic as concrete case
+                                # Determine axis placement based on var types
                                 has_reduction_vars = any(
                                     str(v).startswith("r")
                                     for _, v, _, _ in broadcast_vars
@@ -2919,8 +4111,10 @@ def _pallas_partial_reduce(reduce_fn, v, pw_numel, red_numel):
                                 )
                                 is_mixed = has_reduction_vars and has_pointwise_vars
                                 if is_mixed:
+                                    # Mixed kernel: pointwise vars first, reduction vars last
                                     axis_idx = broadcast_idx
                                 else:
+                                    # Same-type: reverse order (first var -> innermost)
                                     axis_idx = num_broadcast_dims - 1 - broadcast_idx
                                 shape_parts = ["1"] * num_broadcast_dims
                                 shape_parts[axis_idx] = length_str
@@ -2955,14 +4149,9 @@ def _pallas_partial_reduce(reduce_fn, v, pw_numel, red_numel):
                         # Axis placement depends on var types (reduction r* vs x*):
                         # - Mixed: pointwise first, reduction last for output reshape
                         # - Same-type: reverse order, first var innermost
-                        has_reduction_vars = any(
-                            str(v).startswith("r") for _, v, _, _ in broadcast_vars
-                        )
-                        has_pointwise_vars = any(
-                            not str(v).startswith("r") for _, v, _, _ in broadcast_vars
-                        )
-                        is_mixed = has_reduction_vars and has_pointwise_vars
-                        if is_mixed:
+                        if axis_map is not None and var_sym in axis_map:
+                            axis_idx = axis_map[var_sym]
+                        elif is_mixed:
                             # Mixed kernel: pointwise vars first, reduction vars last
                             axis_idx = broadcast_idx
                         else:
@@ -3334,41 +4523,82 @@ def _pallas_partial_reduce(reduce_fn, v, pw_numel, red_numel):
                     # that occurs with DLPack. Once TorchTPU provides a direct method for placing a
                     # `torch.Tensor` on a TPU device, this should be reverted to use the
                     #  `jax.dlpack.from_dlpack` path.
-                    if is_tpu:
-                        code.writeline(
-                            f"{alias_name}_jax = jax.device_put({alias_name}.cpu().numpy(), device=jax.devices('tpu')[0])"
-                        )
+                    if use_tpu:
+                        code.writeline(f"if {alias_name}.dtype == torch.bfloat16:")
+                        with code.indent():
+                            code.writeline(
+                                f"{alias_name}_jax = jax.device_put({alias_name}.to(torch.float32).cpu().numpy(), device=jax.devices('tpu')[0]).astype(jnp.bfloat16)"
+                            )
+                        code.writeline("else:")
+                        with code.indent():
+                            code.writeline(
+                                f"{alias_name}_jax = jax.device_put({alias_name}.cpu().numpy(), device=jax.devices('tpu')[0])"
+                            )
                     else:
-                        code.writeline(
-                            f"{alias_name}_jax = jax.dlpack.from_dlpack({alias_name}.detach())"
-                        )
+                        if force_cpu_device:
+                            code.writeline(
+                                f"{alias_name}_jax = jax.device_put(jax.dlpack.from_dlpack({alias_name}.detach()), device=jax.devices('cpu')[0])"
+                            )
+                        else:
+                            code.writeline(
+                                f"{alias_name}_jax = jax.dlpack.from_dlpack({alias_name}.detach())"
+                            )
             code.writeline("# Convert Torch -> JAX for in-place tensors")
             for ptr in pointer_tail:
                 if ptr.startswith("in_out_ptr"):
-                    if is_tpu:
-                        code.writeline(
-                            f"{ptr}_jax = jax.device_put({ptr}.cpu().numpy(), device=jax.devices('tpu')[0])"
-                        )
+                    if use_tpu:
+                        code.writeline(f"if {ptr}.dtype == torch.bfloat16:")
+                        with code.indent():
+                            code.writeline(
+                                f"{ptr}_jax = jax.device_put({ptr}.to(torch.float32).cpu().numpy(), device=jax.devices('tpu')[0]).astype(jnp.bfloat16)"
+                            )
+                        code.writeline("else:")
+                        with code.indent():
+                            code.writeline(
+                                f"{ptr}_jax = jax.device_put({ptr}.cpu().numpy(), device=jax.devices('tpu')[0])"
+                            )
                     else:
-                        code.writeline(
-                            f"{ptr}_jax = jax.dlpack.from_dlpack({ptr}.detach())"
-                        )
+                        if force_cpu_device:
+                            code.writeline(
+                                f"{ptr}_jax = jax.device_put(jax.dlpack.from_dlpack({ptr}.detach()), device=jax.devices('cpu')[0])"
+                            )
+                        else:
+                            code.writeline(
+                                f"{ptr}_jax = jax.dlpack.from_dlpack({ptr}.detach())"
+                            )
             code.writeline("# Convert Torch -> JAX for inputs")
             for ptr in pointer_tail:
                 if ptr.startswith("in_ptr"):
-                    if is_tpu:
-                        code.writeline(
-                            f"{ptr}_jax = jax.device_put({ptr}.cpu().numpy(), device=jax.devices('tpu')[0])"
-                        )
+                    if use_tpu:
+                        code.writeline(f"if {ptr}.dtype == torch.bfloat16:")
+                        with code.indent():
+                            code.writeline(
+                                f"{ptr}_jax = jax.device_put({ptr}.to(torch.float32).cpu().numpy(), device=jax.devices('tpu')[0]).astype(jnp.bfloat16)"
+                            )
+                        code.writeline("else:")
+                        with code.indent():
+                            code.writeline(
+                                f"{ptr}_jax = jax.device_put({ptr}.cpu().numpy(), device=jax.devices('tpu')[0])"
+                            )
                     elif self.use_masked_ops:
                         # For masked ops, flatten inputs to 1D for Mosaic compatibility
-                        code.writeline(
-                            f"{ptr}_jax = jax.dlpack.from_dlpack({ptr}.detach().contiguous().flatten())"
-                        )
+                        if force_cpu_device:
+                            code.writeline(
+                                f"{ptr}_jax = jax.device_put(jax.dlpack.from_dlpack({ptr}.detach().contiguous().flatten()), device=jax.devices('cpu')[0])"
+                            )
+                        else:
+                            code.writeline(
+                                f"{ptr}_jax = jax.dlpack.from_dlpack({ptr}.detach().contiguous().flatten())"
+                            )
                     else:
-                        code.writeline(
-                            f"{ptr}_jax = jax.dlpack.from_dlpack({ptr}.detach().contiguous())"
-                        )
+                        if force_cpu_device:
+                            code.writeline(
+                                f"{ptr}_jax = jax.device_put(jax.dlpack.from_dlpack({ptr}.detach().contiguous()), device=jax.devices('cpu')[0])"
+                            )
+                        else:
+                            code.writeline(
+                                f"{ptr}_jax = jax.dlpack.from_dlpack({ptr}.detach().contiguous())"
+                            )
 
             code.writeline("# Prepare output metadata from PyTorch tensor")
             if self.use_masked_ops:
@@ -3408,18 +4638,43 @@ def _pallas_partial_reduce(reduce_fn, v, pw_numel, red_numel):
             wrapper_call_args.extend(size_var_params)
             # Add tensor args (with _jax suffix)
             wrapper_call_args.extend(arg_name_map[name] for name in kernel_input_params)
-            code.writeline(f"res = {jit_wrapper_name}({', '.join(wrapper_call_args)})")
+            if force_cpu_device:
+                code.writeline("with jax.default_device(jax.devices('cpu')[0]):")
+                with code.indent():
+                    code.writeline(
+                        f"res = {jit_wrapper_name}({', '.join(wrapper_call_args)})"
+                    )
+            else:
+                code.writeline(
+                    f"res = {jit_wrapper_name}({', '.join(wrapper_call_args)})"
+                )
             if copy_output_indices:
                 code.writeline(
                     "result_values = res if isinstance(res, tuple) else (res,)"
                 )
                 for idx in copy_output_indices:
                     name = output_params[idx]
-                    if is_tpu:
+                    if use_tpu:
                         code.writeline(
                             f"res_cpu = jax.device_get(result_values[{idx}])"
                         )
-                        code.writeline(f"{name}.copy_(torch.from_dlpack(res_cpu))")
+                        code.writeline(f"if {name}.dtype == torch.bfloat16:")
+                        with code.indent():
+                            code.writeline(
+                                "res_cpu = res_cpu.astype(jnp.float32)"
+                            )
+                            code.writeline(
+                                f"{name}.copy_(torch.from_dlpack(res_cpu).to(dtype=torch.bfloat16))"
+                            )
+                        code.writeline(f"elif {name}.dtype == torch.bool:")
+                        with code.indent():
+                            code.writeline("res_cpu = res_cpu.astype(jnp.uint8)")
+                            code.writeline(
+                                f"{name}.copy_(torch.from_dlpack(res_cpu).to(dtype=torch.bool))"
+                            )
+                        code.writeline("else:")
+                        with code.indent():
+                            code.writeline(f"{name}.copy_(torch.from_dlpack(res_cpu))")
                     elif self.use_masked_ops:
                         # For masked ops, result is flattened, reshape back to original shape
                         code.writeline(
