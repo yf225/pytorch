@@ -2882,6 +2882,10 @@ def _pallas_partial_reduce(reduce_fn, v, pw_numel, red_numel):
 
                 num_broadcast_dims = len(broadcast_vars)
 
+                # Track which axes have been assigned to avoid duplicates
+                # (important for square matrices where multiple dims have same size)
+                used_axes = set()
+
                 for idx, (var_sym, entry) in enumerate(var_items):
                     var_name = str(var_sym)
                     length = entry.length
@@ -2899,29 +2903,42 @@ def _pallas_partial_reduce(reduce_fn, v, pw_numel, red_numel):
                             and idx != total_var_idx
                         ):
                             # Symbolic var in multi-broadcast case needs reshape
-                            broadcast_idx = next(
-                                (
-                                    i
-                                    for i, (vidx, _, _, _) in enumerate(broadcast_vars)
-                                    if vidx == idx
-                                ),
-                                None,
-                            )
-                            if broadcast_idx is not None:
-                                # Same logic as concrete case
-                                has_reduction_vars = any(
-                                    str(v).startswith("r")
-                                    for _, v, _, _ in broadcast_vars
+                            # Try to match symbolic length to target shape dimension
+                            axis_idx = None
+                            if len(reshape_target_shape) == num_broadcast_dims:
+                                for ax, dim_size in enumerate(reshape_target_shape):
+                                    # Compare symbolic expressions, skip already-used axes
+                                    if ax not in used_axes and entry.length == dim_size:
+                                        axis_idx = ax
+                                        break
+
+                            if axis_idx is None:
+                                # Fallback: use position among broadcast vars
+                                broadcast_idx = next(
+                                    (
+                                        i
+                                        for i, (vidx, _, _, _) in enumerate(broadcast_vars)
+                                        if vidx == idx
+                                    ),
+                                    None,
                                 )
-                                has_pointwise_vars = any(
-                                    not str(v).startswith("r")
-                                    for _, v, _, _ in broadcast_vars
-                                )
-                                is_mixed = has_reduction_vars and has_pointwise_vars
-                                if is_mixed:
-                                    axis_idx = broadcast_idx
-                                else:
-                                    axis_idx = num_broadcast_dims - 1 - broadcast_idx
+                                if broadcast_idx is not None:
+                                    has_reduction_vars = any(
+                                        str(v).startswith("r")
+                                        for _, v, _, _ in broadcast_vars
+                                    )
+                                    has_pointwise_vars = any(
+                                        not str(v).startswith("r")
+                                        for _, v, _, _ in broadcast_vars
+                                    )
+                                    is_mixed = has_reduction_vars and has_pointwise_vars
+                                    if is_mixed:
+                                        axis_idx = broadcast_idx
+                                    else:
+                                        axis_idx = num_broadcast_dims - 1 - broadcast_idx
+
+                            if axis_idx is not None:
+                                used_axes.add(axis_idx)
                                 shape_parts = ["1"] * num_broadcast_dims
                                 shape_parts[axis_idx] = length_str
                                 shape_str = ", ".join(shape_parts)
@@ -2945,29 +2962,39 @@ def _pallas_partial_reduce(reduce_fn, v, pw_numel, red_numel):
                             f"{var_name} = {arange}.reshape({shape_str})"
                         )
                     elif num_broadcast_dims > 1 and idx != total_var_idx:
-                        # Find position of this var among broadcast vars
-                        broadcast_idx = next(
-                            i
-                            for i, (vidx, _, _, _) in enumerate(broadcast_vars)
-                            if vidx == idx
-                        )
                         # Reshape for broadcasting with other iteration vars.
-                        # Axis placement depends on var types (reduction r* vs x*):
-                        # - Mixed: pointwise first, reduction last for output reshape
-                        # - Same-type: reverse order, first var innermost
-                        has_reduction_vars = any(
-                            str(v).startswith("r") for _, v, _, _ in broadcast_vars
-                        )
-                        has_pointwise_vars = any(
-                            not str(v).startswith("r") for _, v, _, _ in broadcast_vars
-                        )
-                        is_mixed = has_reduction_vars and has_pointwise_vars
-                        if is_mixed:
-                            # Mixed kernel: pointwise vars first, reduction vars last
-                            axis_idx = broadcast_idx
-                        else:
-                            # Same-type: reverse order (first var -> innermost)
-                            axis_idx = num_broadcast_dims - 1 - broadcast_idx
+                        # Match var length to the corresponding dimension in target shape.
+                        axis_idx = None
+                        if reshape_target_shape and len(reshape_target_shape) == num_broadcast_dims:
+                            # Find axis where target shape matches this var's length
+                            for ax, dim_size in enumerate(reshape_target_shape):
+                                if dim_size == length_val:
+                                    axis_idx = ax
+                                    break
+
+                        if axis_idx is None:
+                            # Fallback: use position among broadcast vars
+                            broadcast_idx = next(
+                                i
+                                for i, (vidx, _, _, _) in enumerate(broadcast_vars)
+                                if vidx == idx
+                            )
+                            # Axis placement depends on var types (reduction r* vs x*):
+                            # - Mixed: pointwise first, reduction last for output reshape
+                            # - Same-type: reverse order, first var innermost
+                            has_reduction_vars = any(
+                                str(v).startswith("r") for _, v, _, _ in broadcast_vars
+                            )
+                            has_pointwise_vars = any(
+                                not str(v).startswith("r") for _, v, _, _ in broadcast_vars
+                            )
+                            is_mixed = has_reduction_vars and has_pointwise_vars
+                            if is_mixed:
+                                # Mixed kernel: pointwise vars first, reduction vars last
+                                axis_idx = broadcast_idx
+                            else:
+                                # Same-type: reverse order (first var -> innermost)
+                                axis_idx = num_broadcast_dims - 1 - broadcast_idx
                         shape_parts = ["1"] * num_broadcast_dims
                         shape_parts[axis_idx] = length_str
                         shape_str = ", ".join(shape_parts)
