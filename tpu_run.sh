@@ -23,7 +23,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+REPO_ROOT="${SCRIPT_DIR}"
 
 # Colors for output
 RED='\033[0;31m'
@@ -119,6 +119,9 @@ pkill -9 -f "python.*jax" 2>/dev/null || true
 # Kill any libtpu processes that might be stuck
 pkill -9 -f "libtpu" 2>/dev/null || true
 
+# Remove stale libtpu lockfile (prevents "Internal error when accessing libtpu multi-process lockfile")
+sudo rm -f /tmp/libtpu_lockfile 2>/dev/null || true
+
 # Give processes time to clean up
 sleep 2
 
@@ -199,8 +202,8 @@ echo ""
 cd "${REPO_ROOT}"
 
 if [[ $# -eq 0 ]]; then
-    # No args: run via run_test.py like CI does
-    python test/run_test.py --include inductor/test_pallas.py --verbose
+    # Run via pytest directly (run_test.py always adds -x internally which stops at first failure)
+    python -m pytest test/inductor/test_pallas.py -v
 else
     # With args: pass to pytest for flexibility (e.g., -k for specific tests)
     python -m pytest test/inductor/test_pallas.py -v "$@"
