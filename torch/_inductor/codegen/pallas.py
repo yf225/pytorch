@@ -287,11 +287,19 @@ class PallasKernelOverrides(OpOverrides):
     def index_expr(expr: sympy.Expr, dtype: torch.dtype) -> str:
         """Convert a sympy expression to a JAX array indexing expression."""
         from ..utils import get_bounds_index_expr
+        import os
 
         # Prepare and rename indexing to register size symbols as kernel args
         prepared = V.kernel.prepare_indexing(expr)
         renamed = V.kernel.rename_indexing(prepared)
         idx_str = V.kernel.kexpr(renamed)
+
+        if os.environ.get("DEBUG_PALLAS_INDEX"):
+            print(f"DEBUG index_expr: raw={expr}")
+            print(f"  prepared={prepared}")
+            print(f"  renamed={renamed}")
+            print(f"  idx_str={idx_str}")
+
         var = V.kernel.cse.generate(
             V.kernel.compute, idx_str, bounds=get_bounds_index_expr(expr)
         )
@@ -898,6 +906,20 @@ class PallasKernel(SIMDKernel):
         self.store_with_output: list[tuple[str, str]] = []
         # Track load index expressions for argmax/argmin axis detection
         self.load_index_exprs: dict[str, sympy.Expr] = {}
+        # Track store index expressions for iteration variable dimension mapping
+        # This stores ORIGINAL index for coefficient analysis
+        self.store_index_exprs: dict[str, sympy.Expr] = {}
+        # Track prepared store index expressions (after prepare_indexing)
+        # This captures block variables that appear in generated code
+        self.store_prepared_exprs: dict[str, sympy.Expr] = {}
+        # Track buffers loaded with [...] that may need reshape for broadcasting
+        # Maps buffer name to the CSE variable name (e.g., "tmp0")
+        self.full_tensor_loads: dict[str, str] = {}
+        # Reverse mapping: CSE variable name -> buffer name (for dataflow tracking)
+        self.cse_var_to_buffer: dict[str, str] = {}
+        # Track CSE variable dependencies for dataflow analysis
+        # Maps cse_var -> set of cse_vars it depends on (its inputs)
+        self.cse_var_dependencies: dict[str, set[str]] = {}
         # Track outputs that need to be readable (for scatter operations)
         self.outputs_need_read: OrderedSet[str] = OrderedSet()
         # Track if any load in this kernel used transpose
@@ -1020,22 +1042,32 @@ class PallasKernel(SIMDKernel):
                     return "..."
         elif len(used_vars) > 1:
             # Multi-dimensional indexing
-            # For contiguous multi-dim access, all terms should have unit stride
+            # Check if all terms have unit stride (contiguous access)
+            # and if coefficients match a contiguous stride pattern
             all_unit_stride = True
+            coefficients = []
             for var in used_vars:
                 var_expr = BlockPatternMatcher.get_subexpr_involving_symbol(index, var)
                 stride = BlockPatternMatcher.match_affine_block_expr(var_expr, var)
-                if stride != 1:
+                if stride is None or stride < 0:
                     all_unit_stride = False
                     break
+                coefficients.append(stride)
+                if stride != 1:
+                    all_unit_stride = False
             if all_unit_stride:
                 # Contiguous multi-dimensional access
                 return "..."
+            elif len(coefficients) == len(used_vars):
+                # Non-contiguous multi-dimensional access (e.g., permuted view, strided tensor)
+                # IMPORTANT: At runtime, inputs are made contiguous:
+                # - GPU: .detach().contiguous() is called in the wrapper
+                # - TPU: .numpy() inherently creates a contiguous copy
+                # So we should always use [...] indexing and let the runtime make inputs contiguous.
+                # Using explicit strided indexing here would be wrong since the data layout changes.
+                return "..."
             else:
-                # Strided multi-dimensional access
-                # For most cases, inputs are made contiguous before passing to JAX,
-                # so strided tensors become contiguous and we can use [...]
-                # The buffer size check in load() handles im2col-like patterns
+                # Couldn't determine strides, use full tensor load
                 return "..."
 
         # For complex cases, use [...] since inputs are made contiguous
@@ -1050,6 +1082,10 @@ class PallasKernel(SIMDKernel):
 
         The iteration variables (x0, x1, x2, x3) are already defined as jnp.arange arrays
         in the kernel. We just need to convert the sympy expression to JAX code.
+
+        Note: For expand patterns with total_var, the index expression is rewritten
+        during codegen_kernel() post-processing to derive iteration var values from
+        the total_var, ensuring correct element ordering.
         """
         free_symbols = index.free_symbols
         iter_vars = self._get_iter_vars()
@@ -1119,99 +1155,531 @@ class PallasKernel(SIMDKernel):
         # So output shape is [second_var_length, first_var_length, ...]
         return list(reversed(broadcast_vars))
 
+    def _has_any_column_major_input(self) -> bool:
+        """Check if any input buffer has column-major stride layout.
+
+        This is used to detect mixed transpose cases like a.t() + b where
+        one input is column-major and one is row-major. In such cases,
+        .contiguous() handles the transpose and no kernel transpose is needed.
+
+        IMPORTANT: We check ALL graph inputs, not just the ones already tracked
+        in self.args.input_buffers, because this function may be called during
+        load() before all inputs have been added to the args.
+        """
+        # Check all graph inputs from V.graph.graph_inputs
+        # This ensures we see all inputs even during incremental loading
+        for buf_name, buf_obj in V.graph.graph_inputs.items():
+            if buf_obj is None:
+                continue
+            # Get underlying data if it's a TensorBox
+            data = getattr(buf_obj, "data", buf_obj)
+            if data is None:
+                continue
+            # Get layout
+            layout = getattr(data, "get_layout", lambda: None)()
+            if layout is None:
+                layout = getattr(data, "layout", None)
+            if layout is None:
+                continue
+            # Get size and stride
+            buf_size = getattr(data, "get_size", lambda: None)()
+            if buf_size is None:
+                buf_size = getattr(layout, "size", None)
+            if buf_size is None or len(buf_size) != 2:
+                continue
+            buf_stride = getattr(layout, "stride", None)
+            if buf_stride is None or len(buf_stride) != 2:
+                continue
+
+            s0 = self._safe_int(buf_stride[0])
+            s1 = self._safe_int(buf_stride[1])
+            size0 = self._safe_int(buf_size[0])
+            size1 = self._safe_int(buf_size[1])
+
+            if s0 is None or s1 is None or size0 is None or size1 is None:
+                continue
+
+            # Column-major: s0 = 1, s1 = size0 (stride[0] < stride[1])
+            if s0 < s1:
+                return True
+
+        return False
+
+    def _is_transposed_access_square(self, name: str, index: sympy.Expr, dim_size: int) -> bool:
+        """Check if access to a square buffer is transposed.
+
+        For square buffers, we can't use shape comparison. Instead, we check
+        if the index coefficient order is "inverted" - i.e., the smaller
+        coefficient (stride 1) is associated with the first iteration variable.
+
+        Normal access: N*var0 + var1 (larger coeff with first/outer var)
+        Transposed access: var0 + N*var1 (smaller coeff with first/outer var)
+
+        IMPORTANT: If the input buffer is already column-major (transposed view),
+        then .contiguous() handles the transpose and no kernel transpose is needed.
+
+        Also: If ANY input is column-major, then the iteration order is set up
+        for that transposed view, and ROW-MAJOR inputs should NOT be transposed.
+        """
+        # Check if ANY input is column-major
+        # If so, .contiguous() handles transpose and we don't need kernel transpose
+        # for ANY input (including row-major ones, since iteration order matches
+        # the transposed view)
+        if self._has_any_column_major_input():
+            return False
+
+        # Also check if THIS buffer is column-major or strided
+        buf_obj = V.graph.get_buffer(name)
+        if buf_obj is not None:
+            layout = getattr(buf_obj, "get_layout", lambda: None)()
+            if layout is not None:
+                buf_stride = getattr(layout, "stride", None)
+                if buf_stride is not None and len(buf_stride) == 2:
+                    s0 = self._safe_int(buf_stride[0])
+                    s1 = self._safe_int(buf_stride[1])
+                    if s0 is not None and s1 is not None:
+                        if s0 < s1:
+                            # Buffer is column-major, .contiguous() handles transpose
+                            return False
+                        # Check for strided buffer: row-major order (s0 > s1)
+                        # but with non-unit inner stride (s1 != 1)
+                        # Strided buffers are NOT transposed, they just skip elements
+                        if s0 > s1 and s1 != 1:
+                            return False
+
+        # Also check graph inputs for strided pattern
+        if name in V.graph.graph_inputs:
+            buf_input = V.graph.graph_inputs[name]
+            if buf_input is not None:
+                data = getattr(buf_input, "data", buf_input)
+                if data is not None:
+                    layout = getattr(data, "get_layout", lambda: None)()
+                    if layout is None:
+                        layout = getattr(data, "layout", None)
+                    if layout is not None:
+                        buf_stride = getattr(layout, "stride", None)
+                        if buf_stride is not None and len(buf_stride) == 2:
+                            s0 = self._safe_int(buf_stride[0])
+                            s1 = self._safe_int(buf_stride[1])
+                            if s0 is not None and s1 is not None:
+                                if s0 < s1:
+                                    # Column-major
+                                    return False
+                                if s0 > s1 and s1 != 1:
+                                    # Strided but not transposed
+                                    return False
+
+        index = self.rename_indexing(index)
+
+        # Extract variable-coefficient pairs
+        var_coeff_pairs = []
+        for term in index.as_ordered_terms():
+            coeff = 1
+            var = None
+            for factor in term.as_ordered_factors():
+                if factor.is_number:
+                    coeff *= int(factor)
+                elif factor.is_symbol:
+                    var = factor
+            if var is not None and coeff > 0:
+                var_coeff_pairs.append((var, coeff))
+
+        if len(var_coeff_pairs) < 2:
+            # For 1D index with 2D square buffer, check output strides
+            # If output has column-major strides, we need to transpose
+            from torch._inductor.ir import ComputedBuffer
+
+            for buf_name, buf in V.graph.name_to_buffer.items():
+                if buf_name == name:  # Skip the input buffer itself
+                    continue
+                if not isinstance(buf, ComputedBuffer):
+                    continue
+                try:
+                    shape = buf.get_size()
+                    if len(shape) != 2:
+                        continue
+                    s0 = self._safe_int(shape[0])
+                    s1 = self._safe_int(shape[1])
+                    if s0 != dim_size or s1 != dim_size:
+                        continue  # Not matching shape
+                    out_layout = getattr(buf, "get_layout", lambda: None)()
+                    if out_layout is None:
+                        continue
+                    out_stride = getattr(out_layout, "stride", None)
+                    if out_stride is None or len(out_stride) != 2:
+                        continue
+                    stride0 = self._safe_int(out_stride[0])
+                    stride1 = self._safe_int(out_stride[1])
+                    if stride0 is not None and stride1 is not None and stride0 < stride1:
+                        # Output is column-major, need to transpose input
+                        return True
+                except (NotImplementedError, TypeError):
+                    pass
+            return False
+
+        # Get iteration variable order from range_tree_nodes
+        var_order = list(self.range_tree_nodes.keys())
+        if len(var_order) < 2:
+            return False
+
+        # Coefficient analysis only works for 2D input with 2D output.
+        # If output has more dimensions (e.g., 3D due to broadcasting), the
+        # coefficient analysis doesn't apply - the 2D input just broadcasts.
+        if len(var_order) > 2:
+            return False
+
+        # Find coefficient for each iteration variable
+        coeff_for_var = {}
+        for var, coeff in var_coeff_pairs:
+            coeff_for_var[var] = coeff
+
+        # Check if first iteration variable has smaller coefficient
+        first_var = var_order[0]
+        second_var = var_order[1]
+
+        coeff_first = coeff_for_var.get(first_var)
+        coeff_second = coeff_for_var.get(second_var)
+
+        if coeff_first is None or coeff_second is None:
+            return False
+
+        # Transpose detection should compare the INDEX expression pattern against
+        # the BUFFER's memory layout, NOT the output layout.
+        #
+        # For a row-major buffer with strides (N, 1), normal access is:
+        #   index = N * row_var + col_var  (larger coeff for the "row" dimension)
+        # If instead we see:
+        #   index = row_var + N * col_var  (smaller coeff for "row" dimension)
+        # Then it's transposed access and we need jnp.transpose().
+        #
+        # The "first_var" in var_order corresponds to the first loop dimension,
+        # which for a standard kernel is the "row" of iteration space.
+        #
+        # A row-major buffer accessed normally: coeff_first > coeff_second
+        # A row-major buffer accessed transposed: coeff_first < coeff_second
+        #
+        # We only apply transpose when accessing a row-major buffer with transposed pattern.
+        # Column-major buffers are handled by .contiguous() at runtime.
+        return coeff_first < coeff_second
+
     def _is_transposed_access(self, name: str, index: sympy.Expr) -> bool:
         """Check if buffer access needs transpose.
 
-        Transpose on load is needed when:
-        1. Non-square buffers: dimensions are swapped relative to iteration vars
-        2. Square buffers: index coefficient pattern indicates transposed access
-           (first iteration var has larger coefficient than second)
+        When loading a full 2D buffer with [...], we get the buffer's actual shape.
+        If the buffer shape doesn't match the expected output shape (transposed),
+        we need to transpose the loaded array for proper broadcasting.
+
+        For example:
+        - Buffer shape [16, 32], output shape [32, 16] -> need transpose
+        - Buffer shape [32, 16], output shape [32, 16] -> no transpose
         """
         buf_obj = V.graph.get_buffer(name)
         if buf_obj is None:
             return False
 
         buf_size = buf_obj.get_size()
-
-        # Only handle 2D buffers
         if len(buf_size) != 2:
             return False
 
-        layout = getattr(buf_obj, "get_layout", lambda: None)()
-        if layout is None:
+        dim0 = self._safe_int(buf_size[0])
+        dim1 = self._safe_int(buf_size[1])
+        if dim0 is None or dim1 is None:
             return False
 
-        buf_stride = getattr(layout, "stride", None)
-        if buf_stride is None or len(buf_stride) != 2:
+        # For square tensors, use index coefficient analysis
+        if dim0 == dim1:
+            return self._is_transposed_access_square(name, index, dim0)
+
+        # Get the actual output shape from graph buffers
+        # Look for ComputedBuffer (output) with matching numel
+        output_shape = None
+        buf_numel = dim0 * dim1
+
+        # First try: look at all graph buffers for a ComputedBuffer with same numel
+        from torch._inductor.ir import ComputedBuffer
+        for buf_name, buf in V.graph.name_to_buffer.items():
+            if buf_name == name:  # Skip the input buffer itself
+                continue
+            if not isinstance(buf, ComputedBuffer):
+                continue
+            try:
+                shape = [self._safe_int(s) for s in buf.get_size()]
+                if len(shape) == 2 and all(s is not None for s in shape):
+                    numel = shape[0] * shape[1]
+                    if numel == buf_numel:
+                        output_shape = shape
+                        break
+            except (NotImplementedError, TypeError):
+                pass
+
+        if output_shape is None or len(output_shape) != 2:
             return False
 
-        size0 = self._safe_int(buf_size[0])
-        size1 = self._safe_int(buf_size[1])
-        if size0 is None or size1 is None or size0 <= 1 or size1 <= 1:
-            return False
+        out_dim0, out_dim1 = output_shape
 
-        # Get buffer strides
-        s0 = self._safe_int(buf_stride[0])
-        s1 = self._safe_int(buf_stride[1])
-        if s0 is None or s1 is None:
-            return False
+        # Check if buffer shape is transposed relative to output shape
+        # Buffer [16, 32] with output [32, 16] -> transpose needed
+        # Buffer [32, 16] with output [32, 16] -> no transpose
+        buf_matches_output = (dim0 == out_dim0 and dim1 == out_dim1)
+        buf_matches_transposed = (dim0 == out_dim1 and dim1 == out_dim0)
 
-        # Get iteration variable info
-        var_items = list(self.range_tree_nodes.items())
-        if len(var_items) < 2:
-            return False
+        return buf_matches_transposed and not buf_matches_output
 
-        # Skip for reduction variables
-        # pyrefly: ignore [missing-argument]
-        if any(entry.is_reduction for _, entry in var_items):
-            return False
+    def _get_transpose_axes(
+        self, name: str, index: sympy.Expr
+    ) -> Optional[tuple[int, ...]]:
+        """Compute transpose axes for n-dimensional buffer access.
 
-        # Extract coefficients from index expression
-        inner_var = var_items[0][0]
-        outer_var = var_items[1][0]
-        index = V.graph.sizevars.simplify(index)
+        For now, only handles 2D transposes reliably. For 3D+, the mapping
+        between iteration variables and output dimensions is complex and
+        requires additional metadata that isn't easily available.
 
-        def get_coefficient(expr, var):
-            """Extract coefficient of var from expression."""
-            if expr == var:
-                return 1
-            if expr.is_Add:
-                for term in expr.args:
-                    coeff = get_coefficient(term, var)
-                    if coeff is not None:
-                        return coeff
-            if expr.is_Mul:
-                coeff = 1
-                has_var = False
-                for factor in expr.args:
-                    if factor == var:
-                        has_var = True
-                    elif factor.is_number:
-                        coeff *= int(factor)
-                if has_var:
-                    return coeff
+        Returns:
+            - None if no transpose needed or unable to determine
+            - tuple of axes if transpose is needed (2D only for now)
+        """
+        # If any input is column-major, .contiguous() is called at runtime which
+        # handles the transpose. No kernel-level transpose is needed.
+        if self._has_any_column_major_input():
             return None
 
-        inner_coeff = get_coefficient(index, inner_var)
-        outer_coeff = get_coefficient(index, outer_var)
+        buf_obj = V.graph.get_buffer(name)
+        if buf_obj is None:
+            return None
 
-        if inner_coeff is not None and outer_coeff is not None:
-            # Only transpose for standard row-major buffers (stride[0] = size[1], stride[1] = 1)
-            is_standard_row_major = s0 == size1 and s1 == 1
-            if not is_standard_row_major:
-                return False
+        buf_size = buf_obj.get_size()
+        ndim = len(buf_size)
 
-            # Only transpose if output is column-major (indicates actual transpose op)
-            output_is_column_major = self._has_column_major_output()
-            if not output_is_column_major:
-                return False
+        # For 3D+ tensors, skip coefficient-based detection.
+        # The 2D fallback method _is_transposed_access handles 2D cases.
+        # For 3D+, we'd need additional metadata about var->dim mapping.
+        if ndim != 2:
+            return None
 
-            # Check if coefficients indicate transposed access
-            inner_matches_s0 = abs(inner_coeff - s0) < abs(inner_coeff - s1)
-            outer_matches_s1 = abs(outer_coeff - s1) < abs(outer_coeff - s0)
-            return inner_matches_s0 and outer_matches_s1
+        # Get buffer strides
+        layout = getattr(buf_obj, "get_layout", lambda: None)()
+        if layout is None:
+            return None
+        buf_stride = getattr(layout, "stride", None)
+        if buf_stride is None or len(buf_stride) != ndim:
+            return None
 
-        return False
+        # Convert strides to ints
+        strides = []
+        for s in buf_stride:
+            s_int = self._safe_int(s)
+            if s_int is None:
+                return None
+            strides.append(s_int)
+
+        # Check for strided buffer: row-major order (s0 > s1) but with non-unit inner stride
+        # Strided buffers are NOT transposed, they just skip elements in memory
+        if len(strides) == 2 and strides[0] > strides[1] and strides[1] != 1:
+            return None
+
+        # Check for non-contiguous row-strided buffer: stride[0] > expected contiguous stride
+        # E.g., shape (16, 32) with stride (64, 1) means rows are spaced 64 apart instead of 32
+        # Such buffers are NOT transposed, they skip elements between rows
+        if len(strides) == 2 and len(buf_size) == 2:
+            dim1_size = self._safe_int(buf_size[1])
+            if dim1_size is not None and strides[1] == 1 and strides[0] > dim1_size:
+                return None
+
+        # Build stride -> input_dim mapping
+        stride_to_dim: dict[int, int] = {}
+        for dim_idx, stride in enumerate(strides):
+            if stride in stride_to_dim:
+                return None
+            stride_to_dim[stride] = dim_idx
+
+        # Rename index to get canonical variable names
+        index = self.rename_indexing(index)
+
+        # Extract variable-coefficient pairs from index expression
+        var_coeff_pairs: list[tuple[Any, int]] = []
+        for term in index.as_ordered_terms():
+            coeff = 1
+            var = None
+            for factor in term.as_ordered_factors():
+                if factor.is_number:
+                    coeff *= int(factor)
+                elif factor.is_symbol:
+                    var = factor
+            if var is not None and coeff > 0:
+                var_coeff_pairs.append((var, coeff))
+
+        if len(var_coeff_pairs) != ndim:
+            return None
+
+        # Build coefficient map
+        coeff_for_var: dict[Any, int] = {}
+        for var, coeff in var_coeff_pairs:
+            coeff_for_var[var] = coeff
+
+        # Check that coefficients are a permutation of strides
+        coeff_set = set(coeff_for_var.values())
+        stride_set = set(strides)
+        if coeff_set != stride_set:
+            return None
+
+        # For 2D, determine if input needs transpose for correct element alignment.
+        #
+        # Key insight: In JAX/Pallas with `ptr[...]`, we get the whole array.
+        # Element-wise ops align by position [i, j]: result[i, j] = f(a[i, j], b[i, j]).
+        #
+        # The index expression tells us what LINEAR OFFSET to use for each (var0, var1).
+        # We need to determine:
+        # 1. What OUTPUT position [out_dim0, out_dim1] does (var0, var1) correspond to?
+        # 2. What INPUT position [in_dim0, in_dim1] does the load index access?
+        # 3. If they differ, we need to transpose the input.
+        #
+        # For example with a.T + b (column-major output):
+        # - Output has strides (1, 8), so store coeff 1 → dim0, coeff 8 → dim1
+        # - Store index x1 + 8*y0: x1→dim0, y0→dim1 → output position [x1, y0]
+        # - For arg0_1 (a): load index x1 + 8*y0, buffer strides (8, 1)
+        #   coeff 8→dim0 (row), coeff 1→dim1 (col) → accesses a[y0, x1]
+        #   Output [x1, y0] but accessing a[y0, x1] → TRANSPOSED
+        # - For arg1_1 (b): load index 8*x1 + y0, buffer strides (8, 1)
+        #   coeff 8→dim0, coeff 1→dim1 → accesses b[x1, y0]
+        #   Output [x1, y0] and accessing b[x1, y0] → NOT TRANSPOSED
+
+        var_order = list(self.range_tree_nodes.keys())
+        if len(var_order) != 2:
+            return None
+
+        # Get output strides from ComputedBuffer
+        out_strides = None
+        for buf_name, buf in V.graph.name_to_buffer.items():
+            if not isinstance(buf, ComputedBuffer):
+                continue
+            out_layout = getattr(buf, "get_layout", lambda: None)()
+            if out_layout is None:
+                continue
+            out_stride = getattr(out_layout, "stride", None)
+            if out_stride is None or len(out_stride) != 2:
+                continue
+            out_s0 = self._safe_int(out_stride[0])
+            out_s1 = self._safe_int(out_stride[1])
+            if out_s0 is not None and out_s1 is not None:
+                out_strides = (out_s0, out_s1)
+                break
+
+        if out_strides is None:
+            return None
+
+        # Build output stride_to_dim mapping
+        out_stride_to_dim: dict[int, int] = {}
+        for dim_idx, stride in enumerate(out_strides):
+            out_stride_to_dim[stride] = dim_idx
+
+        # Determine which var maps to which OUTPUT dim based on assumed store pattern
+        # The store index should have coefficients matching output strides
+        # Var with coeff matching out_strides[0] → out_dim0
+        # Var with coeff matching out_strides[1] → out_dim1
+        var_to_out_dim: dict[Any, int] = {}
+        for var in var_order:
+            load_coeff = coeff_for_var.get(var)
+            if load_coeff is None:
+                continue
+            # For the store, var coefficients should match output strides
+            # We use the input coefficient pattern to infer output dim mapping
+            # This is indirect but works: if output is col-major (1, 8) and store uses
+            # same vars as load, the var with smaller coeff in load maps to dim0 of output
+            # Actually, we need to know the STORE index pattern, not load.
+            # Since store isn't available yet, use heuristic:
+            # Output strides tell us physical layout. For col-major (1, 8):
+            # dim0 has stride 1, dim1 has stride 8
+            # In Inductor, the store typically matches: coeff 1 for dim0, coeff 8 for dim1
+
+        # Simpler approach: determine mapping by comparing coefficient ORDER
+        # Output position for (var0, var1) based on output strides:
+        # - If out_strides[0] < out_strides[1] (col-major): var with smaller coeff → dim0
+        # - If out_strides[0] > out_strides[1] (row-major): var with larger coeff → dim0
+
+        first_var = var_order[0]
+        second_var = var_order[1]
+        coeff_first = coeff_for_var.get(first_var)
+        coeff_second = coeff_for_var.get(second_var)
+
+        if coeff_first is None or coeff_second is None:
+            return None
+
+        # Input buffer maps: var with coeff 8 (strides[0]) → in_dim0, coeff 1 → in_dim1
+        in_dim_for_first = stride_to_dim.get(coeff_first)  # Which input dim does first_var access?
+        in_dim_for_second = stride_to_dim.get(coeff_second)  # Which input dim does second_var access?
+
+        if in_dim_for_first is None or in_dim_for_second is None:
+            return None
+
+        # Output position mapping: which output dim does each var correspond to?
+        #
+        # The store index uses coefficients that match the output strides:
+        # For output strides (s0, s1): store_index = s0*var_a + s1*var_b
+        # where var_a→out_dim0, var_b→out_dim1
+        #
+        # We need to determine which var maps to which out_dim.
+        # Key insight: the store coefficient for each var equals the output stride
+        # for the dimension that var addresses.
+        #
+        # For col-major output (1, 8) with store x1 + 8*y0:
+        #   - x1 has store_coeff=1=out_strides[0] → x1 maps to out_dim0
+        #   - y0 has store_coeff=8=out_strides[1] → y0 maps to out_dim1
+        #
+        # Since we don't have the store index, we use the output strides directly.
+        # A var maps to out_dim D where its store coefficient would be out_strides[D].
+        #
+        # For vars y0 and x1 with output strides (1, 8):
+        # - If store is `1*x1 + 8*y0`: x1→dim0, y0→dim1
+        # - If store is `1*y0 + 8*x1`: y0→dim0, x1→dim1
+        #
+        # We can determine this by checking which coefficient pattern from the loads
+        # matches the output strides. The buffer whose load coefficients match the
+        # output strides is the one that "defines" the output layout.
+
+        # Determine var→out_dim mapping from output strides.
+        # The store index has coefficients matching output strides.
+        # var_order[0] (outer loop var) typically maps to the dimension with LARGER stride.
+        #
+        # For col-major output (1, 8): dim0 has stride 1 (smaller), dim1 has stride 8 (larger)
+        #   var_order[0] maps to dim1 (larger stride)
+        #   var_order[1] maps to dim0 (smaller stride)
+        # For row-major output (8, 1): dim0 has stride 8 (larger), dim1 has stride 1 (smaller)
+        #   var_order[0] maps to dim0 (larger stride)
+        #   var_order[1] maps to dim1 (smaller stride)
+
+        if out_strides[0] < out_strides[1]:
+            # Col-major: dim1 has larger stride
+            out_dim_for_first = 1  # first_var maps to larger stride dim
+            out_dim_for_second = 0  # second_var maps to smaller stride dim
+        else:
+            # Row-major: dim0 has larger stride
+            out_dim_for_first = 0  # first_var maps to larger stride dim
+            out_dim_for_second = 1  # second_var maps to smaller stride dim
+
+        # Now check alignment:
+        # At output position [first_var → out_dim0, second_var → out_dim1]
+        # We access input at [var_with_coeff_for_in_dim0, var_with_coeff_for_in_dim1]
+        #
+        # If in_dim_for_first == out_dim_for_first and in_dim_for_second == out_dim_for_second:
+        #   Input dim0 aligns with output dim0, input dim1 aligns with output dim1
+        #   → No transpose
+        # Else:
+        #   → Transpose needed
+
+        # Reframe: load index assigns each var to an input dimension.
+        # For proper alignment, we need input_dim == output_dim for each var.
+        # first_var accesses in_dim_for_first but should align with out_dim0
+        # second_var accesses in_dim_for_second but should align with out_dim1
+
+        # Transpose is needed if the dims don't match
+        needs_transpose = (in_dim_for_first != out_dim_for_first) or (in_dim_for_second != out_dim_for_second)
+
+        if not needs_transpose:
+            # Return empty tuple to indicate "successfully analyzed, no transpose needed"
+            # This is distinct from None which means "couldn't determine"
+            return ()
+
+        return (1, 0)
 
     def _has_column_major_output(self) -> bool:
         """Check if any output buffer has column-major stride layout."""
@@ -1556,8 +2024,12 @@ class PallasKernel(SIMDKernel):
             s is not None for s in actual_strides
         )
         has_symbolic_coef = any(not isinstance(c, int | float) for c in coefficients)
+        # Skip strided indexing for non-contiguous inputs when:
+        # - GPU: the input is made contiguous at runtime anyway
+        # - TPU: the .numpy() conversion makes inputs contiguous automatically
+        # In both cases, using strided indexing on already-contiguous data gives wrong results
         skip_for_non_contiguous = (
-            is_known_non_contiguous and not is_tpu and buf_numel == output_numel
+            is_known_non_contiguous and buf_numel == output_numel
         )
 
         # Determine if strided indexing is needed
@@ -1640,12 +2112,115 @@ class PallasKernel(SIMDKernel):
             # Direct indexing for contiguous access
             load_expr = f"{buf}[{index_str}]"
 
-            # Check for transposed access
-            if index_str == "..." and self._is_transposed_access(name, index):
-                load_expr = f"jnp.transpose({load_expr})"
-                self.has_transposed_load = True
+            # Check for transposed access (n-dimensional first, then 2D fallback)
+            if index_str == "...":
+                # Try n-dimensional transpose detection first
+                # Returns: None = couldn't determine, () = no transpose needed, (axes) = transpose with axes
+                transpose_axes = self._get_transpose_axes(name, index)
+                if transpose_axes is not None and len(transpose_axes) > 0:
+                    # Non-empty tuple means transpose is needed
+                    load_expr = f"jnp.transpose({load_expr}, axes={transpose_axes})"
+                    self.has_transposed_load = True
+                elif transpose_axes is None:
+                    # Couldn't determine with coefficient analysis, fallback to 2D detection
+                    if self._is_transposed_access(name, index):
+                        load_expr = f"jnp.transpose({load_expr})"
+                        self.has_transposed_load = True
+                # If transpose_axes == (), no transpose needed, skip fallback
+
+            # Track full tensor loads for potential reshape during codegen
+            # The actual reshape happens in codegen_kernel() after output shape is known
+            if index_str == "...":
+                # Will be associated with CSE variable later in load()
+                self._pending_full_tensor_load = name
 
             return load_expr
+
+    def _maybe_reshape_for_broadcast(self, name: str, load_expr: str) -> str:
+        """
+        Reshape buffer to align with output dimensions for broadcasting.
+
+        When a buffer has smaller numel than the largest store target but
+        the numel divides it evenly, reshape to align with leading dimensions.
+        This ensures correct broadcasting semantics.
+
+        E.g., buffer (4, 4, 16, 1) with numel=256 for output (4, 64, 16)
+        with numel=4096 should be reshaped to (4, 64, 1).
+        """
+        buf_obj = V.graph.get_buffer(name)
+        if buf_obj is None:
+            return load_expr
+
+        buf_size = buf_obj.get_size()
+        buf_numel = 1
+        for s in buf_size:
+            s_int = self._safe_int(s)
+            if s_int is None:
+                return load_expr  # Can't handle symbolic sizes
+            buf_numel *= s_int
+
+        # Find largest store target shape from store_index_exprs
+        # store_index_exprs is populated by store() calls before codegen_kernel()
+        output_shape: list[int] | None = None
+        output_numel = 0
+        for store_name in self.store_index_exprs.keys():
+            store_buf = V.graph.try_get_buffer(store_name)
+            if store_buf is not None:
+                try:
+                    store_size = store_buf.get_size()
+                    shape = [self._safe_int(s) for s in store_size]
+                    if None not in shape:
+                        numel = 1
+                        for s in shape:
+                            numel *= s
+                        if numel > output_numel:
+                            output_numel = numel
+                            output_shape = shape
+                except (NotImplementedError, TypeError):
+                    pass
+
+        if output_shape is None or output_numel == 0:
+            return load_expr
+
+        # Only reshape if buffer numel < output numel and divides evenly
+        if buf_numel >= output_numel or output_numel % buf_numel != 0:
+            return load_expr
+
+        # Compute target shape: find prefix of output_shape that matches buf_numel
+        target_shape: list[int] = []
+        running_product = 1
+        for dim_size in output_shape:
+            if running_product < buf_numel:
+                target_shape.append(dim_size)
+                running_product *= dim_size
+            else:
+                break
+
+        if running_product != buf_numel:
+            return load_expr  # Can't find matching prefix
+
+        # Add trailing 1s to match output rank for broadcasting
+        output_rank = len(output_shape)
+        while len(target_shape) < output_rank:
+            target_shape.append(1)
+
+        # Only reshape if the target shape is different from current shape
+        buf_shape_ints = [self._safe_int(s) for s in buf_size]
+        if target_shape == buf_shape_ints:
+            return load_expr
+
+        # Check if current shape can broadcast with target (if so, skip reshape)
+        # Pad buf_shape to match target rank
+        padded_buf = [1] * (len(target_shape) - len(buf_shape_ints)) + buf_shape_ints
+        can_broadcast = all(
+            b == t or b == 1 or t == 1
+            for b, t in zip(padded_buf, target_shape)
+        )
+        if can_broadcast:
+            return load_expr
+
+        shape_str = ", ".join(str(s) for s in target_shape)
+        return f"{load_expr}.reshape({shape_str})"
 
     def _maybe_squeeze_intermediate_buffer(self, name: str, load_expr: str) -> str:
         """
@@ -1742,17 +2317,22 @@ class PallasKernel(SIMDKernel):
 
     def _check_im2col_pattern(
         self, index: sympy.Expr, index_str: str, needs_flatten: bool
-    ) -> tuple[str, bool]:
+    ) -> tuple[str, bool, sympy.Expr]:
         """
         Check for im2col-like patterns where store uses block variables but load doesn't.
 
         For cat/expand patterns, both load and store prepared indices share block vars.
         For im2col patterns, store compresses to block vars but load doesn't.
-        """
-        if index_str != "..." or needs_flatten:
-            return index_str, needs_flatten
 
+        Returns:
+            tuple of (index_str, needs_flatten, effective_index)
+            effective_index is the prepared index for coefficient analysis
+        """
         prepared_index = self.prepare_indexing(index)
+
+        if index_str != "..." or needs_flatten:
+            return index_str, needs_flatten, prepared_index
+
         iter_vars = self._get_iter_vars()
         store_orig_vars = self._get_used_iter_vars(index)
         store_prep_vars = (
@@ -1764,7 +2344,7 @@ class PallasKernel(SIMDKernel):
 
         # Only trigger if store introduces new block vars
         if not new_vars or len(store_orig_vars) <= 1:
-            return index_str, needs_flatten
+            return index_str, needs_flatten, prepared_index
 
         # Check if loads are compatible with broadcast or cat pattern
         has_im2col_pattern = False
@@ -1797,9 +2377,9 @@ class PallasKernel(SIMDKernel):
                 break
 
         if has_im2col_pattern:
-            return self._generate_strided_index(prepared_index), True
+            return self._generate_strided_index(prepared_index), True, prepared_index
 
-        return index_str, needs_flatten
+        return index_str, needs_flatten, prepared_index
 
     def _check_load_is_strided_input(
         self, buf_name: str, load_index: sympy.Expr, load_orig_vars: OrderedSet
@@ -1845,64 +2425,16 @@ class PallasKernel(SIMDKernel):
         """
         Check if output needs transpose for column-major storage.
 
-        Transpose on store is needed when:
-        - Output has column-major stride (s0 < s1)
-        - But input(s) have row-major stride
-        - And we haven't already transposed on load
+        Note: In Pallas, the output array shape is fixed by pallas_call.
+        Transposing the value before storing would change its shape, not
+        just its memory layout. The actual layout handling happens when
+        copying the JAX result back to the PyTorch buffer via .copy_().
+        Therefore, we should never transpose on store in Pallas kernels.
         """
-        if self.has_transposed_load:
-            return False
-
-        buf = V.graph.get_buffer(name)
-        if buf is None:
-            return False
-
-        layout = getattr(buf, "get_layout", lambda: None)()
-        if layout is None:
-            return False
-
-        buf_stride = getattr(layout, "stride", None)
-        if buf_stride is None:
-            return False
-
-        buf_size = buf.get_size()
-        if len(buf_stride) != 2 or len(buf_size) != 2:
-            return False
-
-        size0 = self._safe_int(buf_size[0])
-        size1 = self._safe_int(buf_size[1])
-        s0 = self._safe_int(buf_stride[0])
-        s1 = self._safe_int(buf_stride[1])
-
-        # Check if output is column-major with valid dimensions
-        if not (
-            s0 is not None
-            and s1 is not None
-            and s0 < s1
-            and size0 is not None
-            and size1 is not None
-            and size0 > 1
-            and size1 > 1
-        ):
-            return False
-
-        # Check if any input is column-major (if so, no transpose needed)
-        for inp_name in self.args.input_buffers:
-            inp_buf = V.graph.get_buffer(inp_name)
-            if inp_buf is None:
-                continue
-            inp_layout = getattr(inp_buf, "get_layout", lambda: None)()
-            if inp_layout is None:
-                continue
-            inp_stride = getattr(inp_layout, "stride", None)
-            if inp_stride is None or len(inp_stride) != 2:
-                continue
-            inp_s0 = self._safe_int(inp_stride[0])
-            inp_s1 = self._safe_int(inp_stride[1])
-            if inp_s0 is not None and inp_s1 is not None and inp_s0 < inp_s1:
-                return False  # Input is also column-major
-
-        return True
+        # Pallas outputs have fixed shapes from pallas_call.
+        # Transposing would change shape, not layout.
+        # Layout conversion happens in the copy back to PyTorch.
+        return False
 
     def _build_full_array_store_expr(
         self, out: str, value: CSEVariable, needs_transpose: bool
@@ -1956,14 +2488,29 @@ class PallasKernel(SIMDKernel):
 
         if needs_flatten:
             # Block variable indexing (e.g., im2col) - use flattened scatter
-            scatter_op = "add" if mode == "atomic_add" else "set"
-            if self.is_gpu:
-                return f"pltriton.store({out}.at[{index_str}], jnp.asarray({value}))"
+            # But only if the index covers all output elements. If the store index
+            # uses a subset of iteration variables, fall through to full-array store.
+            index_vars = set()
+            for var_sym in self.range_tree_nodes:
+                if sympy.Symbol(str(var_sym)) in index.free_symbols:
+                    index_vars.add(str(var_sym))
+            all_iter_vars = {str(s) for s in self.range_tree_nodes.keys()}
+            index_covers_all = (index_vars == all_iter_vars) or len(all_iter_vars) == 0
+
+            if index_covers_all:
+                scatter_op = "add" if mode == "atomic_add" else "set"
+                if self.is_gpu:
+                    return f"pltriton.store({out}.at[{index_str}], jnp.asarray({value}))"
+                else:
+                    return (
+                        f"{out}[...] = {out}[...].flatten().at[({index_str}).flatten()].{scatter_op}("
+                        f"jnp.asarray({value}).flatten()).reshape({out}.shape)"
+                    )
             else:
-                return (
-                    f"{out}[...] = {out}[...].flatten().at[({index_str}).flatten()].{scatter_op}("
-                    f"jnp.asarray({value}).flatten()).reshape({out}.shape)"
-                )
+                # Store index doesn't cover all iteration vars - use full-array store
+                # The value will be broadcast/reshaped to match output shape
+                needs_transpose = self._check_store_needs_transpose(name)
+                return self._build_full_array_store_expr(out, value, needs_transpose)
 
         # Direct indexed assignment
         has_indirect = self._has_indirect_vars(index)
@@ -2114,11 +2661,22 @@ class PallasKernel(SIMDKernel):
             # Handle 1D buffer broadcasting for higher-dimensional kernels
             load_expr = self._maybe_broadcast_1d_buffer(name, index, load_expr)
 
-        return self.cse.generate(
+        cse_var = self.cse.generate(
             self.compute,
             load_expr,
             dtype=dtype,
         )
+
+        # Track CSE var -> buffer mapping for dataflow analysis
+        # This allows us to trace indirect index vars back to their source buffers
+        self.cse_var_to_buffer[str(cse_var)] = name
+
+        # Track full tensor loads for potential reshape during codegen
+        if hasattr(self, "_pending_full_tensor_load") and self._pending_full_tensor_load:
+            self.full_tensor_loads[self._pending_full_tensor_load] = str(cse_var)
+            self._pending_full_tensor_load = None
+
+        return cse_var
 
     def _handle_mixed_indexing(self, index: sympy.Expr) -> str:
         """
@@ -2170,10 +2728,11 @@ class PallasKernel(SIMDKernel):
         # Get coefficients for indirect vars to determine output ordering
         indirect_coeffs = {str(s): get_coefficient(s) for s in indirect_var_syms}
 
-        # Special case: reduction var + single indirect var = element-wise gather
-        # Reduction vars (r prefix) iterate over the reduction dimension, and when paired
-        # with an indirect var, both are aligned to that dimension (element-wise).
-        # Pointwise vars form output dimensions and need the complex reshape code.
+        # Special case: reduction var + single indirect var
+        # This can be either:
+        # 1. Element-wise gather: indirect var has same size as reduction (both iterate together)
+        # 2. Broadcast gather: indirect var has different shape (e.g., embedding lookup)
+        #    In this case, we need to reshape for broadcasting
         if len(used_iter_vars) == 1 and len(indirect_vars) == 1:
             var = used_iter_vars[0]
             var_name = str(var)
@@ -2183,15 +2742,36 @@ class PallasKernel(SIMDKernel):
             )
 
             if is_reduction_var:
-                # Reduction var: simple element-wise gather
+                indirect_var = indirect_vars[0]
                 if var in self.range_tree_nodes:
                     range_entry = self.range_tree_nodes[var]
                     range_size = range_entry.length
-                    # Rename to use kernel parameter names for symbolic sizes
-                    renamed_size = self.rename_indexing(range_size)
-                    arange_expr = f"jnp.arange({self.kexpr(renamed_size)})"
-                    index_str = index_str.replace(var_name, arange_expr)
-                return index_str
+
+                    # Check if this is element-wise (same size) or broadcast (different shapes)
+                    # For element-wise: indirect var size == reduction size
+                    # For broadcast: indirect var is multi-dimensional, reduction is 1D
+                    # The indirect var coefficient tells us its stride in the index
+                    # Use the pre-computed indirect_coeffs dictionary
+                    indirect_coeff = indirect_coeffs.get(indirect_var, 1)
+
+                    # If coefficient > 1, the indirect var corresponds to a higher dimension
+                    # than the reduction var (coeff=1), so we need to broadcast
+                    if indirect_coeff > 1:
+                        # Broadcast case: add trailing None to indirect var for reduction dim
+                        renamed_size = self.rename_indexing(range_size)
+                        arange_expr = f"jnp.arange({self.kexpr(renamed_size)})"
+                        index_str = index_str.replace(var_name, arange_expr)
+                        # Add trailing dimension to indirect var for broadcasting
+                        index_str = index_str.replace(
+                            indirect_var, f"{indirect_var}[..., None]"
+                        )
+                        return index_str
+                    else:
+                        # Element-wise case: both have same size, no reshape needed
+                        renamed_size = self.rename_indexing(range_size)
+                        arange_expr = f"jnp.arange({self.kexpr(renamed_size)})"
+                        index_str = index_str.replace(var_name, arange_expr)
+                        return index_str
             # For pointwise vars, fall through to the complex reshape code
 
         # Check if multiple indirect vars should be paired element-wise.
@@ -2267,9 +2847,26 @@ class PallasKernel(SIMDKernel):
         # that will be handled by the reshape at store time
 
         # For iter vars, we need to count how many dimensions come after in the output
+        # IMPORTANT: For TPU (non-GPU), iteration variables are pre-defined in codegen_kernel
+        # with proper shapes using divisor-based dimension mapping. In this case, we should
+        # NOT replace variable names with inline jnp.arange expressions, as the pre-defined
+        # variables already have the correct shapes for broadcasting.
+        iter_vars_predefined = (
+            not self.is_gpu
+            and self.range_tree_nodes
+            and not getattr(self, "use_masked_ops", False)
+        )
+
         for i, var in enumerate(used_iter_vars):
             var_name = str(var)
             if var in self.range_tree_nodes:
+                # If iteration variables are pre-defined with correct shapes,
+                # just use the variable name directly - no replacement needed.
+                # The pre-defined variables already have proper shapes for broadcasting
+                # with both other iteration vars and indirect vars.
+                if iter_vars_predefined:
+                    continue
+
                 range_entry = self.range_tree_nodes[var]
                 range_size = range_entry.length
                 # Rename to use kernel parameter names for symbolic sizes
@@ -2296,26 +2893,42 @@ class PallasKernel(SIMDKernel):
                 index_str = index_str.replace(var_name, arange_expr)
 
         # Reshape indirect variables for proper broadcasting.
+        # Use coefficient-based logic: indirect vars with higher coefficients (outer dims)
+        # need trailing dimensions for iteration vars with lower coefficients (inner dims).
         for indirect_var in indirect_vars:
             indirect_coeff = indirect_coeffs[indirect_var]
 
-            # Count dims needed before and after this indirect var
-            n_leading = sum(1 for c in iter_coeffs if c > indirect_coeff)
+            # Use coefficient-based logic for both TPU/CPU and GPU
+            # Count how many iteration vars have smaller coefficients than this indirect var
+            # These correspond to dimensions that come AFTER the indirect var in the output
             n_trailing = sum(1 for c in iter_coeffs if c < indirect_coeff)
 
-            # Build the indexing expression with leading Nones, ellipsis, trailing Nones
-            if n_leading > 0 and n_trailing > 0:
-                leading_nones = "None, " * n_leading
-                trailing_nones = ", None" * n_trailing
-                reshape_expr = f"{indirect_var}[{leading_nones}...{trailing_nones}]"
-            elif n_leading > 0:
-                leading_nones = "None, " * n_leading
-                reshape_expr = f"{indirect_var}[{leading_nones}...]"
-            elif n_trailing > 0:
-                trailing_nones = ", None" * n_trailing
-                reshape_expr = f"{indirect_var}[...{trailing_nones}]"
+            if iter_vars_predefined:
+                # For TPU/CPU: only add trailing dims, no leading dims needed
+                # (iteration variables are pre-shaped, only indirect vars need adjustment)
+                if n_trailing > 0:
+                    trailing_nones = ", None" * n_trailing
+                    reshape_expr = f"{indirect_var}[...{trailing_nones}]"
+                else:
+                    reshape_expr = indirect_var
             else:
-                reshape_expr = indirect_var
+                # For GPU: full reshape based on both leading and trailing coefficients
+                n_leading = sum(1 for c in iter_coeffs if c > indirect_coeff)
+                n_trailing = sum(1 for c in iter_coeffs if c < indirect_coeff)
+
+                # Build the indexing expression with leading Nones, ellipsis, trailing Nones
+                if n_leading > 0 and n_trailing > 0:
+                    leading_nones = "None, " * n_leading
+                    trailing_nones = ", None" * n_trailing
+                    reshape_expr = f"{indirect_var}[{leading_nones}...{trailing_nones}]"
+                elif n_leading > 0:
+                    leading_nones = "None, " * n_leading
+                    reshape_expr = f"{indirect_var}[{leading_nones}...]"
+                elif n_trailing > 0:
+                    trailing_nones = ", None" * n_trailing
+                    reshape_expr = f"{indirect_var}[...{trailing_nones}]"
+                else:
+                    reshape_expr = indirect_var
 
             index_str = index_str.replace(indirect_var, reshape_expr)
 
@@ -2352,14 +2965,27 @@ class PallasKernel(SIMDKernel):
                 store_expr = self._build_scatter_store_expr(
                     out, value, scatter_info, name, mode
                 )
+                # Track store index for iteration variable dimension mapping
+                # even for scatter patterns (index vars used in scatter indexing)
+                self.store_index_exprs[name] = index
+                # Also track prepared index for block variable detection
+                self.store_prepared_exprs[name] = self.prepare_indexing(index)
             else:
                 # Get base index expression
                 index_str, needs_flatten = self._get_index_expr(index)
 
-                # Check for im2col-like patterns
-                index_str, needs_flatten = self._check_im2col_pattern(
+                # Check for im2col-like patterns (returns effective_index for tracking)
+                index_str, needs_flatten, effective_index = self._check_im2col_pattern(
                     index, index_str, needs_flatten
                 )
+
+                # Track store index expression for iteration variable dimension mapping
+                # IMPORTANT: Use ORIGINAL index for coefficient analysis, NOT prepared index
+                # The prepared index may combine iteration vars (e.g., y0+y1 -> y3 block var)
+                # which loses coefficient information needed to map vars to dimensions
+                self.store_index_exprs[name] = index
+                # Also track prepared index for block variable detection
+                self.store_prepared_exprs[name] = effective_index
 
                 # Determine if masked operations should be used
                 use_masked = (
@@ -2613,9 +3239,14 @@ class PallasKernel(SIMDKernel):
                 and pointwise_numel > 1
                 and reduction_numel
             )
-            # Also check for symbolic partial reduction (has both pw and reduction vars)
+            # Also check for symbolic partial reduction:
+            # - has pointwise dimensions
+            # - has reduction dimensions
+            # - EITHER pointwise_numel is symbolic (None) OR reduction_numel is symbolic (None)
             is_symbolic_partial = (
-                has_pointwise and n_reduction_dims > 0 and pointwise_numel is None
+                has_pointwise
+                and n_reduction_dims > 0
+                and (pointwise_numel is None or reduction_numel is None)
             )
             if is_partial_reduction:
                 # For partial reductions, we need to:
@@ -2627,8 +3258,38 @@ class PallasKernel(SIMDKernel):
                 # Use a helper to find reduction axes by product matching
                 reduction_expr = f"_pallas_partial_reduce({reduction_op}, {value}, {pointwise_numel}, {reduction_numel})"
             elif is_symbolic_partial:
-                # Symbolic sizes: use axis-based reduction (axis=0 for outer reduction)
-                reduction_expr = f"{reduction_ops[reduction_type]}({value}, axis=0)"
+                # Symbolic sizes: determine reduction axis from buffer layout
+                # For full tensor loads, compare buffer dimensions to reduction/pointwise numels
+                reduction_axis = -1  # Default to last axis
+
+                # For full tensor loads, check which buffer dimension matches reduction
+                if self.full_tensor_loads:
+                    buf_name = next(iter(self.full_tensor_loads.keys()))
+                    buf = V.graph.get_buffer(buf_name)
+                    if buf is not None:
+                        buf_size = buf.get_size()
+                        if len(buf_size) >= 2:
+                            # Get reduction variable's length (symbolic)
+                            reduction_vars = [
+                                entry
+                                for var, entry in self.range_tree_nodes.items()
+                                if entry.is_reduction  # pyrefly: ignore [missing-argument]
+                            ]
+                            if reduction_vars:
+                                r_length = reduction_vars[0].length
+                                # Check if buf dim 0 matches reduction length
+                                # Using sympy simplify for symbolic comparison
+                                from sympy import simplify
+                                try:
+                                    if simplify(buf_size[0] - r_length) == 0:
+                                        reduction_axis = 0
+                                    elif simplify(buf_size[-1] - r_length) == 0:
+                                        reduction_axis = -1
+                                except Exception:
+                                    pass  # Keep default
+
+                # Use keepdims=True for partial reductions to maintain broadcasting compatibility
+                reduction_expr = f"{reduction_ops[reduction_type]}({value}, axis={reduction_axis}, keepdims=True)"
             else:
                 # Full reduction to scalar
                 reduction_expr = f"{reduction_ops[reduction_type]}({value})"
@@ -2720,6 +3381,9 @@ def _pallas_partial_reduce(reduce_fn, v, pw_numel, red_numel):
     # Helper for partial reductions: reorders axes and reduces
     # Returns result with keepdims-style shape for proper in-kernel broadcasting
     shape = tuple(v.shape)
+    total_numel = 1
+    for s in shape:
+        total_numel *= s
     # Find contiguous axes whose product = red_numel (search from right)
     red_axes = None
     for i in range(len(shape) - 1, -1, -1):
@@ -2738,7 +3402,10 @@ def _pallas_partial_reduce(reduce_fn, v, pw_numel, red_numel):
     # Move pointwise axes to front, reduction axes to back
     pw_axes = [i for i in range(len(shape)) if i not in red_axes]
     reordered = jnp.moveaxis(v, pw_axes, list(range(len(pw_axes))))
-    result = reduce_fn(reordered.reshape(pw_numel, red_numel), axis=-1)
+    # Compute actual pointwise numel from tensor shape (may differ from passed pw_numel
+    # when tensor was loaded via full tensor load with different shape)
+    actual_pw_numel = total_numel // red_numel
+    result = reduce_fn(reordered.reshape(actual_pw_numel, red_numel), axis=-1)
     return result.reshape(out_shape)
 """ + (
             "\nfrom jax.experimental.pallas import mosaic_gpu as plgpu"
@@ -2822,6 +3489,12 @@ def _pallas_partial_reduce(reduce_fn, v, pw_numel, red_numel):
                             f"{mask_var} = jnp.arange(block_size) < {mask_var}_size"
                         )
 
+            # Initialize output_shape for reshape map logic below (used outside the if block)
+            output_shape: list[int] | None = None
+            # Initialize variables used both inside and outside the range_tree_nodes block
+            total_var_idx: int | None = None
+            var_items: list[tuple[sympy.Symbol, Any]] = []
+
             # Generate iteration variables as jnp.arange arrays
             # These are used by index_expr operations like torch.arange
             # Skip on GPU - jnp.arange is not supported by Pallas Mosaic backend
@@ -2829,158 +3502,964 @@ def _pallas_partial_reduce(reduce_fn, v, pw_numel, red_numel):
             if self.range_tree_nodes and not self.use_masked_ops and not self.is_gpu:
                 kernel_body.writeline("# Define iteration variables as JAX arrays")
 
-                # Find reshape target: N-D shape whose numel matches an iteration
-                # var. Try output first (repeat/upsample), then inputs (reductions).
-                iter_lengths = OrderedSet(
-                    [
-                        int(e.length)
-                        for e in self.range_tree_nodes.values()
-                        if isinstance(e.length, (int, sympy.Integer))
-                    ]
-                )
-
-                def _get_nd_shape_if_matches(buf_name):
-                    buf = V.graph.try_get_buffer(buf_name)
-                    if buf is None or len(buf.get_size()) <= 1:
-                        return None, None
-                    shape = tuple(
-                        int(s) if isinstance(s, (int, sympy.Integer)) else s
-                        for s in buf.get_size()
-                    )
-                    numel = math.prod(shape)
-                    return (shape, numel) if numel in iter_lengths else (None, None)
-
-                # Candidate buffers: output first, then inputs
-                candidate_buf_names = []
-                if output_params:
-                    buf_name = output_buffer_lookup.get(output_params[0])
-                    if buf_name:
-                        candidate_buf_names.append(buf_name)
-                candidate_buf_names.extend(self.args.input_buffers)
-
-                # Find first N-D buffer whose numel matches an iteration var
-                reshape_target_shape, reshape_target_numel = None, None
-                for name in candidate_buf_names:
-                    result = _get_nd_shape_if_matches(name)
-                    if result[0]:
-                        reshape_target_shape, reshape_target_numel = result
-                        break
-
-                # Collect all iteration variable info for broadcasting shape computation
+                # Collect iteration variable info
                 var_items = list(self.range_tree_nodes.items())
 
-                # Count vars that are NOT the "total" var (which equals output numel)
-                # These are the actual iteration dimensions that need broadcasting
-                broadcast_vars = []
-                total_var_idx = None
+                # Determine which iteration vars are actually used in expressions
+                # Check load, store ORIGINAL, and store PREPARED expressions
+                # - Load/store original: variables in the original index expressions
+                # - Store prepared: block variables created by prepare_indexing that
+                #   appear in generated code (e.g., y3 from combining y0+y1)
+                used_vars: OrderedSet[sympy.Symbol] = OrderedSet()
+                # Track vars used in ORIGINAL expressions - these affect dimension mapping
+                original_used_vars: OrderedSet[sympy.Symbol] = OrderedSet()
+                for load_idx in self.load_index_exprs.values():
+                    if hasattr(load_idx, "free_symbols"):
+                        for sym in load_idx.free_symbols:
+                            if sym in self.range_tree_nodes:
+                                used_vars.add(sym)
+                                original_used_vars.add(sym)
+                for store_idx in self.store_index_exprs.values():
+                    if hasattr(store_idx, "free_symbols"):
+                        for sym in store_idx.free_symbols:
+                            if sym in self.range_tree_nodes:
+                                used_vars.add(sym)
+                                original_used_vars.add(sym)
+                # Include block variables from prepared store expressions
+                # These are created by prepare_indexing and appear in generated code
+                # BUT they are "block-only" vars - used for flat indexing, not dimension mapping
+                block_only_vars: OrderedSet[sympy.Symbol] = OrderedSet()
+                for prep_idx in self.store_prepared_exprs.values():
+                    if hasattr(prep_idx, "free_symbols"):
+                        for sym in prep_idx.free_symbols:
+                            if sym in self.range_tree_nodes:
+                                used_vars.add(sym)
+                                # If not in original expressions, it's a block-only var
+                                if sym not in original_used_vars:
+                                    block_only_vars.add(sym)
+
+                # DEBUG: Print tracking info
+                import os
+                if os.environ.get("PALLAS_DEBUG"):
+                    print(f"DEBUG: var_items = {[(str(v), e.length, e.divisor) for v, e in var_items]}")
+                    print(f"DEBUG: used_vars = {[str(v) for v in used_vars]}")
+                    print(f"DEBUG: original_used_vars = {[str(v) for v in original_used_vars]}")
+                    print(f"DEBUG: block_only_vars = {[str(v) for v in block_only_vars]}")
+                    print(f"DEBUG: load_index_exprs = {self.load_index_exprs}")
+                    print(f"DEBUG: store_index_exprs = {self.store_index_exprs}")
+                    print(f"DEBUG: store_prepared_exprs = {self.store_prepared_exprs}")
+
+                # Find the largest output shape for coefficient analysis
+                output_numel: int | None = None
+                output_strides: list[int] | None = None
+                num_output_dims = 0
+                largest_output_buf: str | None = None  # Track which buffer has largest shape
+                for out_param in output_params:
+                    buf_name = output_buffer_lookup.get(out_param)
+                    if buf_name:
+                        buf = V.graph.try_get_buffer(buf_name)
+                        if buf is not None:
+                            try:
+                                size = buf.get_size()
+                                # Always update num_output_dims if this buffer has more dims
+                                # This works even with symbolic dimensions
+                                if len(size) > num_output_dims:
+                                    num_output_dims = len(size)
+                                shape = [
+                                    int(s)
+                                    if isinstance(s, (int, sympy.Integer))
+                                    else None
+                                    for s in size
+                                ]
+                                if None not in shape:
+                                    numel = math.prod(shape)
+                                    if output_numel is None or numel > output_numel:
+                                        output_shape = shape
+                                        output_numel = numel
+                                        largest_output_buf = buf_name
+                                        # Compute strides (row-major)
+                                        strides = []
+                                        stride = 1
+                                        for dim_size in reversed(shape):
+                                            strides.append(stride)
+                                            stride *= dim_size
+                                        output_strides = list(reversed(strides))
+                            except (NotImplementedError, TypeError):
+                                pass
+
+                # Fallback for scalar output: use input buffer shape for iteration variable shaping
+                # When output is scalar (reduction-only kernel), iteration vars should match
+                # the input tensor shape for proper broadcasting
+                if (output_numel is None or output_numel <= 1) and self.full_tensor_loads:
+                    # Find largest input buffer shape from full_tensor_loads
+                    for buf_name in self.full_tensor_loads.keys():
+                        buf = V.graph.get_buffer(buf_name)
+                        if buf is not None:
+                            try:
+                                size = buf.get_size()
+                                shape = [
+                                    int(s)
+                                    if isinstance(s, (int, sympy.Integer))
+                                    else None
+                                    for s in size
+                                ]
+                                if None not in shape:
+                                    numel = math.prod(shape)
+                                    if output_numel is None or numel > output_numel:
+                                        output_shape = shape
+                                        output_numel = numel
+                                        num_output_dims = len(shape)
+                                        # Compute strides (row-major)
+                                        strides = []
+                                        stride = 1
+                                        for dim_size in reversed(shape):
+                                            strides.append(stride)
+                                            stride *= dim_size
+                                        output_strides = list(reversed(strides))
+                            except (NotImplementedError, TypeError):
+                                pass
+
+                # Compute "computational shape" including reduction dims for reshape logic
+                # This is the shape that intermediate computations operate at
+                # It's the output shape extended with reduction dimension sizes
+                computational_shape: list[int] | None = None
+                computational_numel: int | None = None
+                if output_shape is not None:
+                    computational_shape = list(output_shape)
+                    # Add reduction variable sizes as trailing dimensions
+                    for var_sym, entry in var_items:
+                        if str(var_sym).startswith("r"):  # Reduction var
+                            red_len = self._safe_int(entry.length)
+                            if red_len is not None:
+                                computational_shape.append(red_len)
+                    computational_numel = math.prod(computational_shape) if computational_shape else None
+
+                # Build stride -> dimension mapping for divisor-based analysis
+                # IMPORTANT: Pointwise vars have divisors relative to pointwise numel,
+                # while reduction vars have divisors relative to reduction numel.
+                # We need SEPARATE stride maps for each.
+
+                # Count reduction dimensions and compute their total numel
+                reduction_dims: list[int] = []
+                reduction_numel = 1
+                for var_sym, entry in var_items:
+                    if str(var_sym).startswith("r"):
+                        red_len = self._safe_int(entry.length)
+                        if red_len is not None:
+                            reduction_numel *= red_len
+
+                # Pointwise numel is output numel (since output doesn't include reduction dims)
+                pointwise_numel = output_numel if output_numel else 1
+
+                # Build stride map for POINTWISE dimensions only (excluding reduction dims)
+                # For output shape [2, 4, 8, 8] with reduction on last dim:
+                # - Pointwise dims are [0, 1, 2] with shape [2, 4, 8]
+                # - Pointwise strides (row-major) are [32, 8, 1]
+                pointwise_stride_to_dim: dict[int, int] = {}
+                reduction_stride_to_dim: dict[int, int] = {}
+
+                if output_strides and output_shape:
+                    # Identify which output dims are reduction dims
+                    # Reduction vars map to trailing dimensions in computational shape
+                    num_reduction_dims = sum(1 for v, _ in var_items if str(v).startswith("r"))
+                    num_pointwise_dims = len(output_shape)  # Output shape is pointwise only
+
+                    # Build pointwise stride map with RELATIVE strides
+                    # within the pointwise iteration space
+                    pw_stride = 1
+                    for dim_idx in range(num_pointwise_dims - 1, -1, -1):
+                        pointwise_stride_to_dim[pw_stride] = dim_idx
+                        pw_stride *= output_shape[dim_idx]
+
+                    # Build reduction stride map for reduction dimensions
+                    # These are AFTER the output shape in computational shape
+                    red_stride = 1
+                    for red_offset, (var_sym, entry) in enumerate(var_items):
+                        if str(var_sym).startswith("r"):
+                            red_len = self._safe_int(entry.length)
+                            if red_len is not None:
+                                # Reduction dim index = num_pointwise_dims + red_offset
+                                # But we only use this for computational shape
+                                reduction_stride_to_dim[red_stride] = num_pointwise_dims + red_offset
+                                red_stride *= red_len
+
+                # Also keep the original full stride map for fallback
+                stride_to_dim: dict[int, int] = {}
+                if output_strides:
+                    for dim_idx, stride in enumerate(output_strides):
+                        stride_to_dim[stride] = dim_idx
+
+                # Detect total var (length == output_numel) for full reshape
                 for idx, (var_sym, entry) in enumerate(var_items):
                     length_val = self._safe_int(entry.length)
-                    if length_val is not None and length_val == reshape_target_numel:
+                    if length_val is not None and length_val == output_numel:
                         total_var_idx = idx
+                        break
+
+                # Map each var to its output dimension using entry.divisor
+                # IMPORTANT: Use pointwise_stride_to_dim for pointwise vars,
+                # and reduction_stride_to_dim for reduction vars.
+                # This correctly handles cases where pointwise and reduction dims
+                # have the same size (e.g., softmax with [8, 8] -> [8] reduction).
+                var_to_dim: dict[int, int | None] = {}
+
+                # Track multi-dimension spans: var_idx -> (start_dim, end_dim)
+                # This handles cases where a single iteration variable covers
+                # multiple consecutive output dimensions (e.g., batch * channels)
+                var_multi_dim_span: dict[int, tuple[int, int]] = {}
+
+                # Track dimensions claimed by exact matches to prevent double-assignment
+                claimed_dims: set[int] = set()
+
+                # NEW: Coefficient-based assignment for permuted/transposed access patterns
+                # When loading from a transposed view, the LOAD expression coefficients
+                # represent VIEW strides, not OUTPUT strides. We need to use these
+                # coefficients to correctly map iteration variables to OUTPUT dimensions.
+                #
+                # Example: x.transpose(1, 2).contiguous() on shape [8, 8, 8]
+                # - OUTPUT strides: [64, 8, 1] (contiguous)
+                # - VIEW strides: [64, 1, 8] (transposed)
+                # - LOAD index: y0 + 8*x2 + 64*y1
+                # - y0 coef=1 (VIEW dim 1) → OUTPUT dim 1
+                # - x2 coef=8 (VIEW dim 2) → OUTPUT dim 2
+                # - y1 coef=64 (VIEW dim 0) → OUTPUT dim 0
+                coef_assigned_dims: dict[int, int] = {}  # var_idx -> output_dim
+
+                # Use STORE index coefficients to map iteration vars to OUTPUT dimensions
+                # The store index for contiguous output uses OUTPUT strides as coefficients:
+                # store_index = var0 * stride[0] + var1 * stride[1] + var2 * stride[2]
+                # By matching coefficient to output stride, we find var -> output dim
+                if self.store_index_exprs and output_shape and output_strides:
+                    # Get the store index expression for the LARGEST output buffer
+                    # Using the wrong store expression can cause incorrect dimension mapping
+                    # when there are multiple outputs with different shapes
+                    store_idx = None
+                    if largest_output_buf and largest_output_buf in self.store_index_exprs:
+                        store_idx = self.store_index_exprs[largest_output_buf]
                     else:
-                        broadcast_vars.append((idx, var_sym, entry, length_val))
+                        # Fallback to first store expression
+                        store_idx = next(iter(self.store_index_exprs.values()))
+                    store_idx_simplified = V.graph.sizevars.simplify(store_idx)
 
-                num_broadcast_dims = len(broadcast_vars)
+                    # Build output_stride -> output_dim map
+                    output_stride_to_dim: dict[int, int] = {}
+                    for dim_idx, stride in enumerate(output_strides):
+                        output_stride_to_dim[stride] = dim_idx
 
+                    # Extract coefficients of each iteration variable in store index
+                    # Only consider USED vars - unused vars shouldn't affect dimension assignment
+                    # Also exclude block_only_vars - they're for flat indexing only
+                    for idx, (var_sym, entry) in enumerate(var_items):
+                        if idx == total_var_idx:
+                            continue
+                        if str(var_sym).startswith("r"):  # Skip reduction vars
+                            continue
+                        if var_sym not in used_vars:  # Skip unused vars
+                            continue
+                        if var_sym in block_only_vars:  # Skip block-only vars
+                            continue
+
+                        # Get coefficient of this var in the store expression using sympy's coeff
+                        coef_expr = store_idx_simplified.coeff(var_sym)
+                        coef = self._safe_int(coef_expr) if coef_expr != 0 else 0
+                        if coef is None or coef <= 0:
+                            continue
+
+                        # Map coefficient → OUTPUT dim
+                        # Also verify that the variable length matches the output dimension size
+                        # This prevents incorrect matches when dimensions have size 1 (same stride)
+                        if coef in output_stride_to_dim:
+                            out_dim = output_stride_to_dim[coef]
+                            if out_dim < len(output_shape):
+                                length_val = self._safe_int(entry.length)
+                                dim_size = output_shape[out_dim]
+                                # Only assign if length matches dim size
+                                # Skip if size mismatch - let divisor-based matching handle it
+                                if length_val is not None and length_val == dim_size:
+                                    coef_assigned_dims[idx] = out_dim
+                                    claimed_dims.add(out_dim)
+
+                # First pass: handle exact divisor+length matches and multi-dim spans
+                # Use SEPARATE stride maps for pointwise vs reduction vars
+                # Only assign dimensions to USED vars (excluding block-only vars)
                 for idx, (var_sym, entry) in enumerate(var_items):
+                    if idx == total_var_idx:
+                        var_to_dim[idx] = None  # Total var handled separately
+                        continue
+
+                    # Skip unused vars - they shouldn't affect dimension assignment
+                    if var_sym not in used_vars:
+                        var_to_dim[idx] = None
+                        continue
+
+                    # Skip block-only vars - they're used for flat indexing, not dimensions
+                    # They'll be generated as 1D arrays without reshape
+                    if var_sym in block_only_vars:
+                        var_to_dim[idx] = None
+                        continue
+
+                    length_val = self._safe_int(entry.length)
+                    is_reduction_var = str(var_sym).startswith("r")
+
+                    # Check coefficient-based assignment FIRST (for permuted access)
+                    # This takes priority over divisor-based assignment
+                    if idx in coef_assigned_dims:
+                        var_to_dim[idx] = coef_assigned_dims[idx]
+                        continue
+
+                    # Use entry.divisor directly - it's the stride/divisor from the
+                    # iteration range calculation and uniquely identifies the dimension
+                    # IMPORTANT: Use pointwise_stride_to_dim for pointwise vars,
+                    # as their divisors are relative to pointwise numel, not output numel.
+                    if output_strides and output_shape:
+                        divisor_val = self._safe_int(entry.divisor)
+
+                        # Choose the appropriate stride map based on var type
+                        if is_reduction_var:
+                            # Reduction vars: handled later with computational shape
+                            var_to_dim[idx] = None
+                            continue
+                        else:
+                            # Pointwise vars: use pointwise-relative stride map
+                            active_stride_map = pointwise_stride_to_dim
+
+                        if divisor_val is not None and divisor_val in active_stride_map:
+                            matched_dim = active_stride_map[divisor_val]
+                            # Ensure matched_dim is within output_shape bounds
+                            if matched_dim < len(output_shape):
+                                dim_size = output_shape[matched_dim]
+
+                                # Check if var length matches dim size exactly
+                                if length_val is not None and length_val == dim_size:
+                                    var_to_dim[idx] = matched_dim
+                                    claimed_dims.add(matched_dim)
+                                    continue
+
+                                # Check if var spans multiple consecutive dimensions
+                                # ending at matched_dim. E.g., output_shape=[4,64,16],
+                                # matched_dim=1, length=256 => spans dims 0-1 (4*64=256)
+                                if length_val is not None:
+                                    found_span = False
+                                    for start_dim in range(matched_dim + 1):
+                                        span_product = 1
+                                        for d in range(start_dim, matched_dim + 1):
+                                            span_product *= output_shape[d]
+                                        if span_product == length_val:
+                                            var_multi_dim_span[idx] = (
+                                                start_dim,
+                                                matched_dim,
+                                            )
+                                            var_to_dim[idx] = matched_dim
+                                            for d in range(start_dim, matched_dim + 1):
+                                                claimed_dims.add(d)
+                                            found_span = True
+                                            break
+                                    if found_span:
+                                        continue
+
+                    var_to_dim[idx] = None  # Will try length-based or positional fallback
+
+                # Second pass: for unassigned vars, try length-based matching to unclaimed dims
+                # Sort by divisor (descending) so higher-divisor vars (outer loops) get
+                # lower dimension indices (outer dimensions). This is critical for ops
+                # like im2col where permute is fused and var order doesn't match output.
+                # IMPORTANT: Exclude block_only_vars - they're for flat indexing only
+                unassigned_for_length_match = [
+                    (idx, var_sym, entry)
+                    for idx, (var_sym, entry) in enumerate(var_items)
+                    if var_to_dim.get(idx) is None
+                    and idx != total_var_idx
+                    and var_sym not in block_only_vars
+                ]
+
+                def get_divisor_for_length_match(item: tuple) -> int:
+                    idx, v, e = item
+                    divisor_val = self._safe_int(e.divisor)
+                    return divisor_val if divisor_val is not None else 0
+
+                unassigned_for_length_match = sorted(
+                    unassigned_for_length_match,
+                    key=get_divisor_for_length_match,
+                    reverse=True  # Higher divisor first (outer dimension)
+                )
+
+                for idx, var_sym, entry in unassigned_for_length_match:
+                    length_val = self._safe_int(entry.length)
+                    if length_val is None or output_shape is None:
+                        continue
+
+                    # Try to find an unclaimed dimension with matching size
+                    found_match = False
+                    for dim_idx, dim_size in enumerate(output_shape):
+                        if dim_idx in claimed_dims:
+                            continue
+                        if dim_size == length_val:
+                            var_to_dim[idx] = dim_idx
+                            claimed_dims.add(dim_idx)
+                            found_match = True
+                            break
+
+                    # If no exact match, check for multi-dim spans
+                    # E.g., length 48 with output shape [2, 24, 4, 4, 14, 14] spans dims 0-1
+                    if not found_match:
+                        for end_dim in range(len(output_shape)):
+                            if end_dim in claimed_dims:
+                                continue
+                            for start_dim in range(end_dim + 1):
+                                # Check if all dims in range are unclaimed
+                                all_unclaimed = all(
+                                    d not in claimed_dims
+                                    for d in range(start_dim, end_dim + 1)
+                                )
+                                if not all_unclaimed:
+                                    continue
+                                # Check if product matches length
+                                span_product = 1
+                                for d in range(start_dim, end_dim + 1):
+                                    span_product *= output_shape[d]
+                                if span_product == length_val:
+                                    var_multi_dim_span[idx] = (start_dim, end_dim)
+                                    var_to_dim[idx] = end_dim
+                                    for d in range(start_dim, end_dim + 1):
+                                        claimed_dims.add(d)
+                                    found_match = True
+                                    break
+                            if found_match:
+                                break
+
+                # Identify reduction vars first (they get special handling)
+                reduction_var_indices = {
+                    idx
+                    for idx, (v, _) in enumerate(var_items)
+                    if str(v).startswith("r")
+                }
+
+                # Collect non-reduction vars that are used but not yet assigned
+                # These need positional assignment for broadcasting
+                # IMPORTANT: Exclude block_only_vars - they're for flat indexing only,
+                # not for dimension mapping (they get generated as 1D arrays)
+                unassigned_used_vars = [
+                    (idx, var_sym, entry)
+                    for idx, (var_sym, entry) in enumerate(var_items)
+                    if var_sym in used_vars
+                    and var_sym not in block_only_vars  # Exclude block-only vars
+                    and var_to_dim.get(idx) is None
+                    and idx != total_var_idx
+                    and idx not in reduction_var_indices  # Exclude reduction vars
+                ]
+
+                # Sort pointwise vars by divisor (DESCENDING) for correct dimension ordering
+                # Higher divisor = outer loop = lower dimension index
+                # This is critical for operations like im2col where permute is fused
+                # and the var_items order doesn't match output dimension order
+                def get_pw_divisor(item: tuple) -> int:
+                    idx, v, e = item
+                    divisor_val = self._safe_int(e.divisor)
+                    return divisor_val if divisor_val is not None else 0
+
+                unassigned_used_vars = sorted(
+                    unassigned_used_vars,
+                    key=get_pw_divisor,
+                    reverse=True  # Descending: highest divisor first (outermost dim)
+                )
+
+                # Identify used reduction vars that aren't already assigned
+                # Also exclude total_var_idx since it's handled separately
+                unassigned_reduction_vars = [
+                    (idx, v, e)
+                    for idx, (v, e) in enumerate(var_items)
+                    if idx in reduction_var_indices
+                    and v in used_vars
+                    and var_to_dim.get(idx) is None
+                    and idx != total_var_idx
+                ]
+
+                # Sort reduction vars by divisor (DESCENDING) to ensure proper dimension ordering
+                # Higher divisor = outer dimension (lower index), lower divisor = inner dimension
+                # This is critical for operations like argmax where linear index order matters
+                def get_divisor_for_sort(item: tuple) -> int:
+                    idx, v, e = item
+                    divisor_val = self._safe_int(e.divisor)
+                    return divisor_val if divisor_val is not None else 0
+
+                unassigned_reduction_vars = sorted(
+                    unassigned_reduction_vars,
+                    key=get_divisor_for_sort,
+                    reverse=True  # Descending: highest divisor first (outermost dim)
+                )
+                num_unassigned_reduction = len(unassigned_reduction_vars)
+
+                # Fallback for symbolic shapes: when output_shape is None but we have
+                # iteration variables, derive dimensions from the variables themselves
+                if num_output_dims == 0 and (unassigned_used_vars or unassigned_reduction_vars):
+                    # Use the number of unassigned non-reduction vars as num_output_dims
+                    # This handles cases like LayerNorm with symbolic batch dims
+                    # For reduction-only kernels (scalar output), keep num_output_dims=0
+                    # so reduction vars get dimensions starting from 0
+                    num_output_dims = len(unassigned_used_vars) if unassigned_used_vars else 0
+
+                # Assign unassigned non-reduction vars to available dimensions
+                # Use dimensions NOT already taken by coefficient-matched vars
+                assigned_dims = {d for d in var_to_dim.values() if d is not None}
+                available_dims = [
+                    d for d in range(num_output_dims) if d not in assigned_dims
+                ]
+
+                for i, (idx, _, _) in enumerate(unassigned_used_vars):
+                    if i < len(available_dims):
+                        var_to_dim[idx] = available_dims[i]
+
+                # Calculate total_rank after positional assignment
+                assigned_dims = [d for d in var_to_dim.values() if d is not None]
+                max_assigned = max(assigned_dims) + 1 if assigned_dims else 0
+                # Reduction vars go AFTER all output dimensions
+                reduction_start_dim = max(max_assigned, num_output_dims)
+                total_rank = reduction_start_dim + num_unassigned_reduction
+
+                # Assign reduction vars to dimensions after output dimensions
+                for i, (idx, _, _) in enumerate(unassigned_reduction_vars):
+                    var_to_dim[idx] = reduction_start_dim + i
+
+                # Generate jnp.arange for each USED iteration variable with proper reshape
+                # Skip unused vars - they shouldn't be generated at all
+                for idx, (var_sym, entry) in enumerate(var_items):
+                    # Skip unused vars entirely - don't generate code for them
+                    if var_sym not in used_vars:
+                        continue
+
                     var_name = str(var_sym)
                     length = entry.length
                     # Rename symbolic lengths to use kernel parameter names
                     renamed_length = self.rename_indexing(length)
                     length_str = self.kexpr(renamed_length)
-                    length_val = self._safe_int(length)
 
-                    # For symbolic lengths, only reshape if we have a valid target shape
-                    # Without a target, we can't determine correct dimensions
-                    if length_val is None:
-                        if (
-                            reshape_target_shape
-                            and num_broadcast_dims > 1
-                            and idx != total_var_idx
-                        ):
-                            # Symbolic var in multi-broadcast case needs reshape
-                            broadcast_idx = next(
-                                (
-                                    i
-                                    for i, (vidx, _, _, _) in enumerate(broadcast_vars)
-                                    if vidx == idx
-                                ),
-                                None,
-                            )
-                            if broadcast_idx is not None:
-                                # Same logic as concrete case
-                                has_reduction_vars = any(
-                                    str(v).startswith("r")
-                                    for _, v, _, _ in broadcast_vars
-                                )
-                                has_pointwise_vars = any(
-                                    not str(v).startswith("r")
-                                    for _, v, _, _ in broadcast_vars
-                                )
-                                is_mixed = has_reduction_vars and has_pointwise_vars
-                                if is_mixed:
-                                    axis_idx = broadcast_idx
-                                else:
-                                    axis_idx = num_broadcast_dims - 1 - broadcast_idx
-                                shape_parts = ["1"] * num_broadcast_dims
-                                shape_parts[axis_idx] = length_str
+                    # Block-only vars (from prepare_indexing) are used for flat indexing
+                    # BUT they need to be reshaped to broadcast with other variables
+                    # if they span multiple output dimensions
+                    if var_sym in block_only_vars:
+                        length_val = self._safe_int(entry.length)
+                        # Check if this var spans multiple output dimensions
+                        if output_shape and length_val is not None and total_rank > 1:
+                            # Find which dimensions this var spans
+                            # E.g., length 128 with output [2, 1, 64] spans dims 0,2 (2*64=128)
+                            span_dims = []
+                            for end_dim in range(len(output_shape)):
+                                for start_dim in range(end_dim + 1):
+                                    span_product = 1
+                                    for d in range(start_dim, end_dim + 1):
+                                        span_product *= output_shape[d]
+                                    if span_product == length_val:
+                                        span_dims = list(range(start_dim, end_dim + 1))
+                                        break
+                                if span_dims:
+                                    break
+
+                            if span_dims:
+                                # Reshape to have actual sizes for spanned dims, 1 for others
+                                shape_parts: list[str] = []
+                                for d in range(num_output_dims):
+                                    if d in span_dims:
+                                        shape_parts.append(str(output_shape[d]))
+                                    else:
+                                        shape_parts.append("1")
+                                # Add trailing 1s for reduction dimensions
+                                while len(shape_parts) < total_rank:
+                                    shape_parts.append("1")
                                 shape_str = ", ".join(shape_parts)
-                                arange = f"jnp.arange({length_str})"
                                 kernel_body.writeline(
-                                    f"{var_name} = {arange}.reshape({shape_str})"
+                                    f"{var_name} = jnp.arange({length_str}).reshape({shape_str})"
                                 )
                                 continue
+                        # Fallback: generate as 1D if no span found
                         kernel_body.writeline(f"{var_name} = jnp.arange({length_str})")
                         continue
 
-                    if (
-                        reshape_target_shape
-                        and len(reshape_target_shape) > 1
-                        and length_val == reshape_target_numel
-                    ):
-                        # Reshape to match output/input shape for broadcasting
-                        shape_str = ", ".join(str(s) for s in reshape_target_shape)
-                        arange = f"jnp.arange({length_str})"
+                    if idx == total_var_idx and output_shape:
+                        # Total var: reshape to full output shape
+                        # Add trailing 1s if there are reduction dimensions
+                        total_var_shape = list(output_shape)
+                        while len(total_var_shape) < total_rank:
+                            total_var_shape.append(1)
+                        shape_str = ", ".join(str(s) for s in total_var_shape)
                         kernel_body.writeline(
-                            f"{var_name} = {arange}.reshape({shape_str})"
+                            f"{var_name} = jnp.arange({length_str}).reshape({shape_str})"
                         )
-                    elif num_broadcast_dims > 1 and idx != total_var_idx:
-                        # Find position of this var among broadcast vars
-                        broadcast_idx = next(
-                            i
-                            for i, (vidx, _, _, _) in enumerate(broadcast_vars)
-                            if vidx == idx
-                        )
-                        # Reshape for broadcasting with other iteration vars.
-                        # Axis placement depends on var types (reduction r* vs x*):
-                        # - Mixed: pointwise first, reduction last for output reshape
-                        # - Same-type: reverse order, first var innermost
-                        has_reduction_vars = any(
-                            str(v).startswith("r") for _, v, _, _ in broadcast_vars
-                        )
-                        has_pointwise_vars = any(
-                            not str(v).startswith("r") for _, v, _, _ in broadcast_vars
-                        )
-                        is_mixed = has_reduction_vars and has_pointwise_vars
-                        if is_mixed:
-                            # Mixed kernel: pointwise vars first, reduction vars last
-                            axis_idx = broadcast_idx
-                        else:
-                            # Same-type: reverse order (first var -> innermost)
-                            axis_idx = num_broadcast_dims - 1 - broadcast_idx
-                        shape_parts = ["1"] * num_broadcast_dims
-                        shape_parts[axis_idx] = length_str
+                    elif idx in var_multi_dim_span and output_shape:
+                        # Var spans multiple consecutive output dimensions
+                        # E.g., var with length 256 for output shape [4, 64, 16]
+                        # spans dims 0-1, so reshape to (4, 64, 1)
+                        start_dim, end_dim = var_multi_dim_span[idx]
+                        shape_parts: list[str] = []
+                        for d in range(num_output_dims):
+                            if start_dim <= d <= end_dim:
+                                shape_parts.append(str(output_shape[d]))
+                            else:
+                                shape_parts.append("1")
+                        # Add trailing 1s for reduction dimensions
+                        while len(shape_parts) < total_rank:
+                            shape_parts.append("1")
                         shape_str = ", ".join(shape_parts)
-                        arange = f"jnp.arange({length_str})"
                         kernel_body.writeline(
-                            f"{var_name} = {arange}.reshape({shape_str})"
+                            f"{var_name} = jnp.arange({length_str}).reshape({shape_str})"
+                        )
+                    elif var_to_dim.get(idx) is not None and total_rank > 1:
+                        # Var mapped to specific dimension via coefficient analysis
+                        # or fallback assignment from iteration variable order
+                        dim = var_to_dim[idx]
+                        shape_parts = ["1"] * total_rank
+                        shape_parts[dim] = length_str
+                        shape_str = ", ".join(shape_parts)
+                        kernel_body.writeline(
+                            f"{var_name} = jnp.arange({length_str}).reshape({shape_str})"
                         )
                     else:
-                        kernel_body.writeline(f"{var_name} = jnp.arange({length_str})")
+                        # Fallback: if we have multi-dimensional output, reshape with
+                        # trailing ones so all iteration vars can broadcast together.
+                        # Otherwise use 1D arange.
+                        # Note: use total_rank > 1 even when output_shape is None
+                        # (for symbolic shapes, num_output_dims is derived from iter vars)
+                        if total_rank > 1:
+                            # Put this var in position 0, with trailing 1s
+                            shape_parts = [length_str] + ["1"] * (total_rank - 1)
+                            shape_str = ", ".join(shape_parts)
+                            kernel_body.writeline(
+                                f"{var_name} = jnp.arange({length_str}).reshape({shape_str})"
+                            )
+                        else:
+                            kernel_body.writeline(f"{var_name} = jnp.arange({length_str})")
 
-            # Emit compute (CSE) and store lines; they reference *_ptr[index] directly.
+            # Build reshape map for buffers that need broadcast alignment
+            # This handles cases where a buffer's physical shape doesn't match
+            # the output shape for broadcasting (e.g., (4,4,16,1) vs (4,64,16))
+            # or same-numel but different-shape cases (e.g., (8,8) vs (2,4,8))
+            reshape_map: dict[str, str] = {}  # cse_var -> target_shape_str
+            if output_shape and self.full_tensor_loads:
+                # Build CSE dependency graph by parsing compute lines
+                # This tracks which tmp* vars depend on which other tmp* vars
+                import re
+
+                cse_dependencies: dict[str, set[str]] = {}
+                tmp_pattern = re.compile(r"\btmp\d+\b")
+                for line in self.compute._lines:
+                    line_str = str(line)
+                    if " = " in line_str:
+                        lhs, rhs = line_str.split(" = ", 1)
+                        lhs = lhs.strip()
+                        if lhs.startswith("tmp"):
+                            # Find all tmp* vars referenced in the RHS
+                            deps = set(tmp_pattern.findall(rhs))
+                            deps.discard(lhs)  # Remove self-reference
+                            cse_dependencies[lhs] = deps
+
+                # Find all buffers that contribute (transitively) to indirect indices
+                # by tracing back from indirect vars in load index expressions
+                def get_transitive_deps(var: str, visited: set[str]) -> set[str]:
+                    """Get all CSE vars that contribute to this var (transitively)."""
+                    if var in visited:
+                        return set()
+                    visited.add(var)
+                    result = {var}
+                    for dep in cse_dependencies.get(var, set()):
+                        result.update(get_transitive_deps(dep, visited))
+                    return result
+
+                buffers_used_as_indices: set[str] = set()
+                for load_idx_expr in self.load_index_exprs.values():
+                    for indirect_sym in self._get_indirect_vars(load_idx_expr):
+                        var_name = str(indirect_sym)
+                        # Get all vars that contribute to this indirect var
+                        all_contributing = get_transitive_deps(var_name, set())
+                        # Map back to buffers
+                        for contributing_var in all_contributing:
+                            if contributing_var in self.cse_var_to_buffer:
+                                buffers_used_as_indices.add(
+                                    self.cse_var_to_buffer[contributing_var]
+                                )
+
+                for buf_name, cse_var in self.full_tensor_loads.items():
+                    buf_obj = V.graph.get_buffer(buf_name)
+                    if buf_obj is None:
+                        continue
+
+                    # Skip buffers whose values contribute to indirect indices
+                    # Reshaping them would break the gather/scatter indexing pattern
+                    if buf_name in buffers_used_as_indices:
+                        continue
+
+                    buf_size = buf_obj.get_size()
+                    buf_shape = [self._safe_int(s) for s in buf_size]
+                    if None in buf_shape:
+                        continue
+                    buf_numel = math.prod(buf_shape)
+
+                    # Case 1a: Same numel as computational shape - reshape to computational_shape
+                    # This handles buffers that match the full intermediate computation size
+                    # (e.g., [32, 64] -> [2, 16, 64] when output is [2, 16, 1] with reduction over 64)
+                    # BUT: Only apply if the buffer has FEWER dimensions than computational_shape
+                    # If dimensions match, it might need transpose (handled in Case 1b)
+                    if (
+                        computational_numel is not None
+                        and buf_numel == computational_numel
+                        and len(buf_shape) < len(computational_shape)  # Pure reshape, not transpose
+                    ):
+                        if buf_shape != computational_shape:
+                            shape_str = ", ".join(str(s) for s in computational_shape)
+                            reshape_map[cse_var] = shape_str
+                        continue
+
+                    # Case 1b: Same numel as output - may need transpose or reshape
+                    # Check even if shapes are same, as access pattern may differ (transpose)
+                    if buf_numel == output_numel:
+                        # Check if this is a transpose case by analyzing index expressions
+                        # Use coefficient ORDER analysis (not absolute values) to robustly
+                        # determine dimension mapping even when dimensions have same size
+                        load_idx = self.load_index_exprs.get(buf_name)
+                        needs_transpose = False
+                        transpose_perm = None
+
+                        # Skip coefficient-based transpose analysis entirely.
+                        # This analysis incorrectly tries to "align" input buffers to the
+                        # output layout by transposing them, but input buffers with non-standard
+                        # strides should be accessed via their natural indexing pattern.
+                        # Transpose for explicit permute ops is already handled by _is_transposed_access.
+                        if False and (
+                            load_idx is not None
+                            and len(buf_shape) == len(output_shape)
+                            and self.store_index_exprs
+                            and not self.has_transposed_load
+                        ):
+                            # Get the first store index expression for output dim mapping
+                            store_idx = next(iter(self.store_index_exprs.values()))
+
+                            # Get iteration vars and their coefficients in both expressions
+                            iter_vars = list(self.range_tree_nodes.keys())
+
+                            # Extract (var, coefficient) pairs for load and store
+                            load_var_coeffs = []
+                            store_var_coeffs = []
+                            for var in iter_vars:
+                                load_coeff = load_idx.coeff(var)
+                                store_coeff = store_idx.coeff(var)
+                                load_c = self._safe_int(load_coeff) if load_coeff != 0 else 0
+                                store_c = self._safe_int(store_coeff) if store_coeff != 0 else 0
+                                if load_c is not None and load_c > 0:
+                                    load_var_coeffs.append((var, load_c))
+                                if store_c is not None and store_c > 0:
+                                    store_var_coeffs.append((var, store_c))
+
+                            # Only proceed if we have complete mappings for all dimensions
+                            if (
+                                len(load_var_coeffs) == len(buf_shape)
+                                and len(store_var_coeffs) == len(output_shape)
+                            ):
+                                # Sort by coefficient (descending) to get dimension order
+                                # Higher coefficient = outer dimension (lower index)
+                                load_sorted = sorted(load_var_coeffs, key=lambda x: -x[1])
+                                store_sorted = sorted(store_var_coeffs, key=lambda x: -x[1])
+
+                                # Build var -> buffer_dim and var -> output_dim mappings
+                                # based on sorted order (not coefficient value)
+                                var_to_buf_dim = {var: dim for dim, (var, _) in enumerate(load_sorted)}
+                                var_to_out_dim = {var: dim for dim, (var, _) in enumerate(store_sorted)}
+
+                                # Build permutation: for each output dim, find buffer dim
+                                perm = []
+                                for out_dim in range(len(output_shape)):
+                                    # Find which var corresponds to this output dim
+                                    for var, dim in var_to_out_dim.items():
+                                        if dim == out_dim and var in var_to_buf_dim:
+                                            perm.append(var_to_buf_dim[var])
+                                            break
+
+                                if len(perm) == len(buf_shape) and perm != list(range(len(buf_shape))):
+                                    needs_transpose = True
+                                    transpose_perm = tuple(perm)
+
+                        if needs_transpose and transpose_perm:
+                            # Use transpose instead of reshape
+                            perm_str = ", ".join(str(p) for p in transpose_perm)
+                            # Store transpose info instead of reshape
+                            reshape_map[cse_var] = f"TRANSPOSE:{perm_str}:{','.join(str(s) for s in output_shape)}"
+                        elif buf_shape != output_shape:
+                            # Only reshape if shapes actually differ
+                            shape_str = ", ".join(str(s) for s in output_shape)
+                            reshape_map[cse_var] = shape_str
+                        # If shapes are same and no transpose needed, no transformation required
+                        continue
+
+                    # Case 2: Buffer is smaller - needs broadcast alignment
+                    # Only reshape if buffer numel < output numel and divides evenly
+                    if buf_numel >= output_numel or output_numel % buf_numel != 0:
+                        continue
+
+                    # Check if current shape already broadcasts with output
+                    padded_buf = [1] * (len(output_shape) - len(buf_shape)) + buf_shape
+                    can_broadcast = all(
+                        b == o or b == 1 or o == 1
+                        for b, o in zip(padded_buf, output_shape)
+                    )
+                    if can_broadcast:
+                        continue
+
+                    # Compute target shape: find prefix of output_shape matching buf_numel
+                    target_shape: list[int] = []
+                    running_product = 1
+                    for dim_size in output_shape:
+                        if running_product < buf_numel:
+                            target_shape.append(dim_size)
+                            running_product *= dim_size
+                        else:
+                            break
+
+                    if running_product != buf_numel:
+                        continue  # Can't find matching prefix
+
+                    # Add trailing 1s to match output rank for broadcasting
+                    while len(target_shape) < len(output_shape):
+                        target_shape.append(1)
+
+                    shape_str = ", ".join(str(s) for s in target_shape)
+                    reshape_map[cse_var] = shape_str
+
+            # Build iteration var substitution map for expand patterns with total_var
+            # When there's a total_var covering all output positions and strided loads
+            # use other iteration vars, we need to derive those var values from total_var
+            # to ensure correct element ordering in the output
+            iter_var_substitutions: dict[str, str] = {}
+            if total_var_idx is not None and output_shape:
+                total_var_sym, _ = var_items[total_var_idx]
+                total_var_str = str(total_var_sym)
+
+                # Build substitutions for non-total vars used in load expressions
+                # that aren't correctly mapped to output dimensions
+                assigned_dims_set: set[int] = set()
+
+                # Sort non-total vars by name for deterministic processing
+                non_total_vars = sorted(
+                    [(idx, sym, entry) for idx, (sym, entry) in enumerate(var_items)
+                     if idx != total_var_idx and sym in used_vars],
+                    key=lambda x: str(x[1])
+                )
+
+                for idx, var_sym, entry in non_total_vars:
+                    var_length = self._safe_int(entry.length)
+                    if var_length is None or var_length <= 1:
+                        continue
+
+                    var_name = str(var_sym)
+
+                    # Try single dim first (rightmost available)
+                    found = False
+                    for d in range(len(output_shape) - 1, -1, -1):
+                        if d in assigned_dims_set:
+                            continue
+                        if output_shape[d] == var_length:
+                            dim_stride = output_strides[d]
+                            dim_size = output_shape[d]
+                            if d == len(output_shape) - 1:
+                                expr = f"({total_var_str} % {dim_size})"
+                            else:
+                                expr = f"(({total_var_str} // {dim_stride}) % {dim_size})"
+                            iter_var_substitutions[var_name] = expr
+                            assigned_dims_set.add(d)
+                            found = True
+                            break
+
+                    if found:
+                        continue
+
+                    # Try contiguous spans
+                    for end_dim in range(len(output_shape) - 1, -1, -1):
+                        if end_dim in assigned_dims_set:
+                            continue
+                        product = output_shape[end_dim]
+                        span_dims = [end_dim]
+                        for start_dim in range(end_dim - 1, -1, -1):
+                            if start_dim in assigned_dims_set:
+                                break
+                            product *= output_shape[start_dim]
+                            span_dims.insert(0, start_dim)
+                            if product == var_length:
+                                end_stride = output_strides[end_dim]
+                                if end_dim == len(output_shape) - 1:
+                                    expr = f"({total_var_str} % {product})"
+                                else:
+                                    expr = f"(({total_var_str} // {end_stride}) % {product})"
+                                iter_var_substitutions[var_name] = expr
+                                for dd in span_dims:
+                                    assigned_dims_set.add(dd)
+                                found = True
+                                break
+                            elif product > var_length:
+                                break
+                        if found:
+                            break
+
+                    if found:
+                        continue
+
+                    # Try non-contiguous dims (expand pattern)
+                    available = [d for d in range(len(output_shape)) if d not in assigned_dims_set]
+                    for mask in range(1, (1 << len(available))):
+                        dims_in_mask = [available[i] for i in range(len(available)) if mask & (1 << i)]
+                        product = 1
+                        for d in dims_in_mask:
+                            product *= output_shape[d]
+                        if product == var_length:
+                            parts = []
+                            var_stride = 1
+                            for d in reversed(sorted(dims_in_mask)):
+                                dim_size = output_shape[d]
+                                out_stride = output_strides[d]
+                                if d == len(output_shape) - 1:
+                                    pos_expr = f"({total_var_str} % {dim_size})"
+                                else:
+                                    pos_expr = f"(({total_var_str} // {out_stride}) % {dim_size})"
+                                if var_stride == 1:
+                                    parts.append(pos_expr)
+                                else:
+                                    parts.append(f"{var_stride}*{pos_expr}")
+                                var_stride *= dim_size
+                            iter_var_substitutions[var_name] = "(" + " + ".join(reversed(parts)) + ")"
+                            for dd in dims_in_mask:
+                                assigned_dims_set.add(dd)
+                            found = True
+                            break
+
+            # Emit compute (CSE) and store lines
+            # Apply reshape or transpose to assignments of tracked CSE variables
+            import re
             for line in self.compute._lines:
-                kernel_body.writeline(str(line))
+                line_str = str(line)
+
+                # Check if this is an assignment to a CSE var that needs reshape/transpose
+                # Pattern: "tmpN = ..."
+                if reshape_map:
+                    for cse_var, transform_str in reshape_map.items():
+                        # Match "cse_var = " at start of line
+                        if line_str.startswith(f"{cse_var} = "):
+                            rhs = line_str[len(f"{cse_var} = "):]
+                            if transform_str.startswith("TRANSPOSE:"):
+                                # Parse transpose info: "TRANSPOSE:perm:shape"
+                                parts = transform_str.split(":")
+                                perm_str = parts[1]
+                                # Apply transpose
+                                line_str = f"{cse_var} = jnp.transpose({rhs}, ({perm_str}))"
+                            else:
+                                # Standard reshape
+                                line_str = f"{cse_var} = ({rhs}).reshape({transform_str})"
+                            break
+
+                # Apply iteration var substitutions for expand patterns
+                # This rewrites strided load expressions to use total_var-derived values
+                # Pattern: "... = ptr[...].flatten()[index_expr]" where index_expr uses x0, x1, etc.
+                if iter_var_substitutions and ".flatten()[" in line_str:
+                    for var_name, expr in iter_var_substitutions.items():
+                        # Replace variable name with derived expression
+                        # Use word boundary to avoid partial matches (x0 vs x01)
+                        line_str = re.sub(rf"\b{var_name}\b", expr, line_str)
+
+                kernel_body.writeline(line_str)
 
         # Recompute kernel parameters after kernel body generation.
         # Size variables may have been registered during kernel body generation
@@ -3408,7 +4887,20 @@ def _pallas_partial_reduce(reduce_fn, v, pw_numel, red_numel):
             wrapper_call_args.extend(size_var_params)
             # Add tensor args (with _jax suffix)
             wrapper_call_args.extend(arg_name_map[name] for name in kernel_input_params)
-            code.writeline(f"res = {jit_wrapper_name}({', '.join(wrapper_call_args)})")
+
+            # For CPU mode, wrap JAX call in CPU device context to prevent
+            # JAX from defaulting to TPU when one is available
+            if interpret_is_cpu and not is_tpu:
+                code.writeline("# Force JAX to use CPU device")
+                code.writeline("with jax.default_device(jax.devices('cpu')[0]):")
+                with code.indent():
+                    code.writeline(
+                        f"res = {jit_wrapper_name}({', '.join(wrapper_call_args)})"
+                    )
+            else:
+                code.writeline(
+                    f"res = {jit_wrapper_name}({', '.join(wrapper_call_args)})"
+                )
             if copy_output_indices:
                 code.writeline(
                     "result_values = res if isinstance(res, tuple) else (res,)"
