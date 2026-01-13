@@ -1581,6 +1581,51 @@ class PallasTestsMixin:
 
         self.assertEqual(result, expected)
 
+    def test_embedding_rmsnorm(self):
+        """Minimal repro for embedding + reduction broadcasting issue.
+
+        Tests embedding lookup followed by RMSNorm which involves:
+        - Embedding: (batch, seq) indices -> (batch, seq, dim) lookup
+        - Reduction: mean over last dim with keepdim=True
+
+        The bug occurs when the Pallas codegen generates flatten indexing
+        for embedding with incompatible shapes:
+        - jnp.arange(dim) has shape (dim,)
+        - indirect var (token indices) has shape (batch, seq)
+        These cannot broadcast: (64,) vs (2, 16)
+        """
+
+        class EmbeddingRMSNorm(torch.nn.Module):
+            def __init__(self, vocab_size: int, dim: int, eps: float = 1e-5):
+                super().__init__()
+                self.embedding = torch.nn.Embedding(vocab_size, dim)
+                self.weight = torch.nn.Parameter(torch.ones(dim))
+                self.eps = eps
+
+            def forward(self, tokens: torch.Tensor):
+                # Embedding lookup: (batch, seq) -> (batch, seq, dim)
+                h = self.embedding(tokens)
+                # RMSNorm: reduction over last dim
+                h_norm = h * torch.rsqrt(h.pow(2).mean(-1, keepdim=True) + self.eps)
+                return h_norm * self.weight
+
+        model = EmbeddingRMSNorm(vocab_size=256, dim=64)
+        model.eval()
+        if self.DEVICE != "cpu":
+            model = model.to(self.DEVICE)
+
+        # Input: (batch=2, seq=16) token indices
+        x = torch.randint(0, 256, (2, 16), device=self.DEVICE)
+
+        with torch.no_grad():
+            expected = model(x)
+
+        compiled_model = self._compile(model)
+        with torch.no_grad():
+            result = compiled_model(x)
+
+        self.assertEqual(result, expected)
+
     def test_llama3(self):
         """Test Llama 3 model architecture.
 
