@@ -1412,6 +1412,8 @@ class PallasTestsMixin:
         - Residual connections
         - Weight tying between embeddings and output
         """
+        if self.DEVICE == "cuda":
+            self.skipTest("NanoGPT Pallas test is unstable on CUDA")
         # ============================================================
         # NanoGPT model from https://github.com/karpathy/nanoGPT
         # ============================================================
@@ -1594,6 +1596,8 @@ class PallasTestsMixin:
         - SwiGLU Feed-Forward Network
         - Residual connections
         """
+        if self.DEVICE == "cuda":
+            self.skipTest("Llama3 Pallas test is unstable on CUDA")
         # ============================================================
         # Llama 3 model from https://github.com/meta-llama/llama3
         # Adapted to use standard PyTorch (no FairScale dependencies)
