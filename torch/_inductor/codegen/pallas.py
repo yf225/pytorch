@@ -1797,6 +1797,23 @@ class PallasKernel(SIMDKernel):
         if any(s <= 1 for s in buf_sizes):
             return None
 
+        # Check if buffer strides form a valid transpose pattern.
+        # A true transpose has strides that are a permutation of contiguous strides.
+        # Non-contiguous slices (e.g., aliased buffers) have strides that don't fit this pattern.
+        # For shape (A, B), contiguous strides are (B, 1).
+        # A transposed (A, B) from (B, A).T has strides (1, A).
+        # Non-contiguous slice might have strides like (C, 1) where C > B.
+        expected_contiguous_strides = []
+        stride = 1
+        for i in range(ndim - 1, -1, -1):
+            expected_contiguous_strides.insert(0, stride)
+            stride *= buf_sizes[i]
+
+        # Check if strides are a permutation of contiguous strides
+        if sorted(buf_strides) != sorted(expected_contiguous_strides):
+            # Strides don't form a valid transpose pattern - likely a non-contiguous slice
+            return None
+
         # Get iteration variable lengths
         var_lengths = [self._safe_int(entry.length) for _, entry in var_items]
         if None in var_lengths:
@@ -2015,9 +2032,11 @@ class PallasKernel(SIMDKernel):
         if output_shape is None:
             return None
 
-        # If shapes are the same, no permutation needed
+        # If shapes are the same, check if strides indicate a transpose is needed
+        # This handles square matrices where shapes are equal but strides differ
+        # (e.g., input strides [8, 1] vs output strides [1, 8])
         if input_shape == output_shape:
-            return None
+            return self._compute_permute_from_strides()
 
         # If different number of dimensions, can't be a simple permutation
         if len(input_shape) != len(output_shape):
@@ -4858,8 +4877,27 @@ def _pallas_expand_for_broadcast(v, target_shape):
                         )
                     else:
                         # Must call .contiguous() - JAX DLPack only supports compact striding
+                        # Use numpy conversion for unsupported dtypes (bool, bfloat16)
                         code.writeline(
-                            f"{alias_name}_jax = jax.device_put(jax.dlpack.from_dlpack({alias_name}.detach().contiguous()), device=jax.devices('cpu')[0])"
+                            f"{alias_name}_tensor = {alias_name}.detach().contiguous()"
+                        )
+                        code.writeline(
+                            f"if {alias_name}_tensor.dtype == torch.bool:"
+                        )
+                        code.writeline(
+                            f"    {alias_name}_jax = jax.device_put(jnp.asarray({alias_name}_tensor.numpy()), device=jax.devices('cpu')[0])"
+                        )
+                        code.writeline(
+                            f"elif {alias_name}_tensor.dtype == torch.bfloat16:"
+                        )
+                        code.writeline(
+                            f"    {alias_name}_jax = jax.device_put(jnp.asarray({alias_name}_tensor.to(torch.float32).numpy(), dtype=jnp.bfloat16), device=jax.devices('cpu')[0])"
+                        )
+                        code.writeline(
+                            f"else:"
+                        )
+                        code.writeline(
+                            f"    {alias_name}_jax = jax.device_put(jax.dlpack.from_dlpack({alias_name}_tensor), device=jax.devices('cpu')[0])"
                         )
             code.writeline("# Convert Torch -> JAX for in-place tensors")
             for ptr in pointer_tail:
@@ -4870,8 +4908,27 @@ def _pallas_expand_for_broadcast(v, target_shape):
                         )
                     else:
                         # Must call .contiguous() - JAX DLPack only supports compact striding
+                        # Use numpy conversion for unsupported dtypes (bool, bfloat16)
                         code.writeline(
-                            f"{ptr}_jax = jax.device_put(jax.dlpack.from_dlpack({ptr}.detach().contiguous()), device=jax.devices('cpu')[0])"
+                            f"{ptr}_tensor = {ptr}.detach().contiguous()"
+                        )
+                        code.writeline(
+                            f"if {ptr}_tensor.dtype == torch.bool:"
+                        )
+                        code.writeline(
+                            f"    {ptr}_jax = jax.device_put(jnp.asarray({ptr}_tensor.numpy()), device=jax.devices('cpu')[0])"
+                        )
+                        code.writeline(
+                            f"elif {ptr}_tensor.dtype == torch.bfloat16:"
+                        )
+                        code.writeline(
+                            f"    {ptr}_jax = jax.device_put(jnp.asarray({ptr}_tensor.to(torch.float32).numpy(), dtype=jnp.bfloat16), device=jax.devices('cpu')[0])"
+                        )
+                        code.writeline(
+                            f"else:"
+                        )
+                        code.writeline(
+                            f"    {ptr}_jax = jax.device_put(jax.dlpack.from_dlpack({ptr}_tensor), device=jax.devices('cpu')[0])"
                         )
             code.writeline("# Convert Torch -> JAX for inputs")
             for ptr in pointer_tail:
@@ -4882,8 +4939,27 @@ def _pallas_expand_for_broadcast(v, target_shape):
                         )
                     else:
                         # Must call .contiguous() - JAX DLPack only supports compact striding
+                        # Use numpy conversion for unsupported dtypes (bool, bfloat16)
                         code.writeline(
-                            f"{ptr}_jax = jax.device_put(jax.dlpack.from_dlpack({ptr}.detach().contiguous()), device=jax.devices('cpu')[0])"
+                            f"{ptr}_tensor = {ptr}.detach().contiguous()"
+                        )
+                        code.writeline(
+                            f"if {ptr}_tensor.dtype == torch.bool:"
+                        )
+                        code.writeline(
+                            f"    {ptr}_jax = jax.device_put(jnp.asarray({ptr}_tensor.numpy()), device=jax.devices('cpu')[0])"
+                        )
+                        code.writeline(
+                            f"elif {ptr}_tensor.dtype == torch.bfloat16:"
+                        )
+                        code.writeline(
+                            f"    {ptr}_jax = jax.device_put(jnp.asarray({ptr}_tensor.to(torch.float32).numpy(), dtype=jnp.bfloat16), device=jax.devices('cpu')[0])"
+                        )
+                        code.writeline(
+                            f"else:"
+                        )
+                        code.writeline(
+                            f"    {ptr}_jax = jax.device_put(jax.dlpack.from_dlpack({ptr}_tensor), device=jax.devices('cpu')[0])"
                         )
 
             code.writeline("# Prepare output metadata from PyTorch tensor")
@@ -4925,7 +5001,26 @@ def _pallas_expand_for_broadcast(v, target_shape):
                     code.writeline(
                         f"res_cpu = jax.device_get(result_values[{idx}])"
                     )
-                    code.writeline(f"{name}.copy_(torch.from_dlpack(res_cpu))")
+                    # DLPack doesn't support bool dtype or numpy bfloat16
+                    # Convert unsupported types through intermediate dtype
+                    code.writeline(
+                        f"if res_cpu.dtype == jnp.bool_:"
+                    )
+                    code.writeline(
+                        f"    {name}.copy_(torch.from_dlpack(res_cpu.astype(jnp.uint8)).to(torch.bool))"
+                    )
+                    code.writeline(
+                        f"elif res_cpu.dtype == jnp.bfloat16:"
+                    )
+                    code.writeline(
+                        f"    {name}.copy_(torch.from_dlpack(res_cpu.astype(jnp.float32)).to(torch.bfloat16))"
+                    )
+                    code.writeline(
+                        f"else:"
+                    )
+                    code.writeline(
+                        f"    {name}.copy_(torch.from_dlpack(res_cpu))"
+                    )
 
         return code.getvalue()
 
