@@ -3929,6 +3929,7 @@ class PallasKernel(SIMDKernel):
         kernel_name = name or "<KERNEL_NAME>"
         interpret_is_cpu = V.graph.get_current_device_or_throw().type == "cpu"
         is_tpu = torch._inductor.config._debug_cpu_to_tpu_pallas
+        is_gpu = self.is_gpu
         if is_tpu:
             if not torch._inductor.config.pallas_take_first_jax_device_only:
                 raise RuntimeError(
@@ -4828,6 +4829,10 @@ def _pallas_expand_for_broadcast(v, target_shape):
                         code.writeline(
                             f"{alias_name}_jax = jax.device_put({alias_name}.cpu().numpy(), device=jax.devices('tpu')[0])"
                         )
+                    elif is_gpu:
+                        code.writeline(
+                            f"{alias_name}_jax = jax.device_put(jax.dlpack.from_dlpack({alias_name}.detach()), device=jax.devices('gpu')[0])"
+                        )
                     else:
                         code.writeline(
                             f"{alias_name}_jax = jax.device_put(jax.dlpack.from_dlpack({alias_name}.detach()), device=jax.devices('cpu')[0])"
@@ -4839,6 +4844,10 @@ def _pallas_expand_for_broadcast(v, target_shape):
                         code.writeline(
                             f"{ptr}_jax = jax.device_put({ptr}.cpu().numpy(), device=jax.devices('tpu')[0])"
                         )
+                    elif is_gpu:
+                        code.writeline(
+                            f"{ptr}_jax = jax.device_put(jax.dlpack.from_dlpack({ptr}.detach()), device=jax.devices('gpu')[0])"
+                        )
                     else:
                         code.writeline(
                             f"{ptr}_jax = jax.device_put(jax.dlpack.from_dlpack({ptr}.detach()), device=jax.devices('cpu')[0])"
@@ -4849,6 +4858,13 @@ def _pallas_expand_for_broadcast(v, target_shape):
                     if is_tpu:
                         code.writeline(
                             f"{ptr}_jax = jax.device_put({ptr}.cpu().numpy(), device=jax.devices('tpu')[0])"
+                        )
+                    elif is_gpu:
+                        # Note: Do NOT call .contiguous() here - the kernel was generated
+                        # for the original stride pattern, and we need to preserve it.
+                        # DLPack handles non-contiguous tensors correctly.
+                        code.writeline(
+                            f"{ptr}_jax = jax.device_put(jax.dlpack.from_dlpack({ptr}.detach()), device=jax.devices('gpu')[0])"
                         )
                     else:
                         # Note: Do NOT call .contiguous() here - the kernel was generated
