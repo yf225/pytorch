@@ -3116,11 +3116,30 @@ class PallasKernel(SIMDKernel):
         )
 
         # Compute output numel from iteration variable lengths
-        output_numel = 1
+        # Detect and exclude linear index variables (divisor=1, length=product of others)
+        var_lengths: list[tuple[int | None, int | None]] = []
         for var, entry in var_items:
             length = self._safe_int(entry.length)
-            if length is not None:
-                output_numel *= length
+            divisor = self._safe_int(entry.divisor)
+            var_lengths.append((length, divisor))
+
+        output_numel = 1
+        for i, (length, divisor) in enumerate(var_lengths):
+            if length is None:
+                continue
+
+            # Check if this is a linear index variable (divisor=1, length=product of others)
+            if divisor == 1 and len(var_lengths) > 1:
+                other_product = 1
+                for j, (other_len, _) in enumerate(var_lengths):
+                    if j != i and other_len is not None:
+                        other_product *= other_len
+
+                if length == other_product:
+                    # This is a linear index variable - skip it
+                    continue
+
+            output_numel *= length
 
         # Only handle expand pattern: output has more elements than input
         if buf_numel >= output_numel or buf_numel == 0:
@@ -4325,6 +4344,21 @@ def _pallas_expand_for_broadcast(v, target_shape):
                 if test_numel == v_remaining:
                     intermediate = prefix + test_suffix
                     return jnp.broadcast_to(v.reshape(-1).reshape(intermediate), target_shape)
+    # Case: Right-aligned expand (PyTorch expand semantics)
+    # E.g., (2, 1, 2) -> (2, 1, 2, 3, 2): value dims align to target's TRAILING dims
+    # Intermediate: [1, 1, 2, 1, 2] (prepend 1s, keep value dims)
+    if len(v_shape) < len(t_shape) and v_numel < t_numel:
+        extra_dims = len(t_shape) - len(v_shape)
+        trailing_target = list(t_shape[extra_dims:])
+        # Check if value dims are broadcast-compatible with trailing target dims
+        valid = True
+        for v_dim, t_dim in zip(v_shape, trailing_target):
+            if v_dim != t_dim and v_dim != 1:
+                valid = False
+                break
+        if valid:
+            intermediate = [1] * extra_dims + list(v_shape)
+            return jnp.broadcast_to(v.reshape(intermediate), target_shape)
     # Case 3: Expand case - use value's shape to determine broadcast pattern
     # The value's shape encodes the expand info: dims with size 1 are broadcast dims.
     # E.g., value (64, 1, 16) -> target (2, 16, 2, 2, 16):
@@ -4394,21 +4428,13 @@ def _pallas_expand_for_broadcast(v, target_shape):
         # Case: Standard broadcasting with fewer dimensions
         # E.g., (256, 256) -> (256, 256, 256)
         # Standard NumPy/PyTorch semantics: prepend 1s on the left
+        # ONLY applies when value's dims EXACTLY match target's TRAILING dims
         if len(v_shape) < len(t_shape):
-            leading_ones = len(t_shape) - len(v_shape)
-            intermediate = [1] * leading_ones + v_shape
-            # Verify this is valid for broadcasting (trailing dims match or are 1)
-            valid = True
-            for v_dim, t_dim in zip(intermediate, t_shape):
-                if v_dim != t_dim and v_dim != 1:
-                    valid = False
-                    break
-            if valid:
-                inter_numel = 1
-                for s in intermediate:
-                    inter_numel *= s
-                if inter_numel == v_numel:
-                    return jnp.broadcast_to(v.reshape(intermediate), target_shape)
+            trailing_target = list(t_shape[-len(v_shape):])
+            if v_shape == trailing_target:
+                leading_ones = len(t_shape) - len(v_shape)
+                intermediate = [1] * leading_ones + v_shape
+                return jnp.broadcast_to(v.reshape(intermediate), target_shape)
         # Fallback: try each target dim as the expand dim (try LEFT to RIGHT first
         # to prefer standard broadcast semantics of prepending 1s)
         for i in range(len(t_shape)):
