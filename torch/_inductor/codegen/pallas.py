@@ -1175,6 +1175,21 @@ class PallasKernel(SIMDKernel):
 
         # If numels match, we can reshape one to match the other
         if numel_a == numel_b:
+            # IMPORTANT: Check for transpose case FIRST!
+            # If shapes are the same dims but reversed, we need transpose, NOT reshape.
+            # reshape() just reinterprets flat data; transpose() actually reorders elements.
+            # E.g., (N, M) -> (M, N) requires transpose, not reshape.
+            if (
+                len(shape_a) == len(shape_b) == 2
+                and sorted(shape_a) == sorted(shape_b)
+                and list(shape_a) == list(reversed(shape_b))
+            ):
+                # shape_a is transpose of shape_b - transpose a to match b
+                new_a = f"jnp.transpose({a})"
+                self.var_shapes[new_a] = shape_b
+                self.has_transposed_load = True
+                return new_a, b
+
             # First priority: prefer higher dimensionality for safe JAX broadcasting
             # This ensures intermediate results (e.g., from partial_reduce with keepdims)
             # maintain their full shape rather than being collapsed
@@ -1218,22 +1233,12 @@ class PallasKernel(SIMDKernel):
 
         # If one is broadcastable to the other (different numels)
         # This handles cases like (2, 16, 1) broadcasting with (2, 16, 64)
-        # Try both leading 1s and trailing 1s padding
+        # IMPORTANT: Try LEADING 1s FIRST to match PyTorch/NumPy broadcasting semantics.
+        # PyTorch broadcasting aligns dimensions from the right, so (16,) broadcasting
+        # with (16, 16) should become (1, 16) NOT (16, 1).
         if len(shape_a) < len(shape_b):
             n_pad = len(shape_b) - len(shape_a)
-            # Try trailing 1s first (e.g., (2,16,1) -> (2,16,1,1) for (2,16,1,64))
-            padded_a_trailing = shape_a + (1,) * n_pad
-            compatible = all(
-                sa == sb or sa == 1 or sb == 1
-                for sa, sb in zip(padded_a_trailing, shape_b)
-            )
-            if compatible:
-                shape_str = ", ".join(str(s) for s in padded_a_trailing)
-                new_a = f"{a}.reshape({shape_str})"
-                self.var_shapes[new_a] = padded_a_trailing
-                return new_a, b
-
-            # Try leading 1s
+            # Try leading 1s first (standard broadcasting - dimensions align from right)
             padded_a_leading = (1,) * n_pad + shape_a
             compatible = all(
                 sa == sb or sa == 1 or sb == 1
@@ -1245,21 +1250,22 @@ class PallasKernel(SIMDKernel):
                 self.var_shapes[new_a] = padded_a_leading
                 return new_a, b
 
-        elif len(shape_b) < len(shape_a):
-            n_pad = len(shape_a) - len(shape_b)
-            # Try trailing 1s first
-            padded_b_trailing = shape_b + (1,) * n_pad
+            # Try trailing 1s (e.g., (2,16,1) -> (2,16,1,1) for (2,16,1,64))
+            padded_a_trailing = shape_a + (1,) * n_pad
             compatible = all(
                 sa == sb or sa == 1 or sb == 1
-                for sa, sb in zip(shape_a, padded_b_trailing)
+                for sa, sb in zip(padded_a_trailing, shape_b)
             )
             if compatible:
-                shape_str = ", ".join(str(s) for s in padded_b_trailing)
-                new_b = f"{b}.reshape({shape_str})"
-                self.var_shapes[new_b] = padded_b_trailing
-                return a, new_b
+                shape_str = ", ".join(str(s) for s in padded_a_trailing)
+                new_a = f"{a}.reshape({shape_str})"
+                self.var_shapes[new_a] = padded_a_trailing
+                return new_a, b
 
-            # Try leading 1s
+        elif len(shape_b) < len(shape_a):
+            n_pad = len(shape_a) - len(shape_b)
+            # Try leading 1s first (standard broadcasting - dimensions align from right)
+            # E.g., (16,) with (16, 16) -> (16,) becomes (1, 16) to broadcast along rows
             padded_b_leading = (1,) * n_pad + shape_b
             compatible = all(
                 sa == sb or sa == 1 or sb == 1
@@ -1269,6 +1275,18 @@ class PallasKernel(SIMDKernel):
                 shape_str = ", ".join(str(s) for s in padded_b_leading)
                 new_b = f"{b}.reshape({shape_str})"
                 self.var_shapes[new_b] = padded_b_leading
+                return a, new_b
+
+            # Try trailing 1s as fallback
+            padded_b_trailing = shape_b + (1,) * n_pad
+            compatible = all(
+                sa == sb or sa == 1 or sb == 1
+                for sa, sb in zip(shape_a, padded_b_trailing)
+            )
+            if compatible:
+                shape_str = ", ".join(str(s) for s in padded_b_trailing)
+                new_b = f"{b}.reshape({shape_str})"
+                self.var_shapes[new_b] = padded_b_trailing
                 return a, new_b
 
         # Handle keepdims-style broadcasting: one shape has trailing 1s and
@@ -1501,9 +1519,32 @@ class PallasKernel(SIMDKernel):
         - x1 has larger coeff (2), so it's earlier: reshape to (6, 1)
         - x0 has smaller coeff (1), so it's later: reshape to (1, 2)
         - Broadcast result: (6, 2)
+
+        For embedding lookups with indirect variables like `buf[...].flatten()[x0 + 64*tmp0]`:
+        - tmp0 (indirect var) has shape from indices tensor, e.g., (2, 16)
+        - x0 (iter var) has length 64
+        - The result broadcasts to (2, 16, 64)
         """
+        # Check for indirect variables - they contribute their shape to the result
+        indirect_vars = self._get_indirect_vars(index)
+        indirect_shape: list[int] = []
+        has_indirect = bool(indirect_vars)
+        if indirect_vars:
+            # Get shape of first indirect variable (they should all have same shape)
+            for indirect_var in indirect_vars:
+                indirect_var_shape = self.var_shapes.get(str(indirect_var))
+                if indirect_var_shape and len(indirect_var_shape) > 0:
+                    indirect_shape = list(indirect_var_shape)
+                    break
+
         used_vars = self._get_used_iter_vars(index)
-        if not used_vars:
+        if not used_vars and not indirect_shape:
+            # If we have indirect variables but couldn't find their shape,
+            # fall back to canonical output shape (which captures all dimensions)
+            if has_indirect:
+                canonical = self._get_canonical_output_shape()
+                if canonical is not None:
+                    return tuple(canonical)
             return None
 
         # Get iteration variable lengths and sort by coefficient (descending)
@@ -1527,14 +1568,33 @@ class PallasKernel(SIMDKernel):
                     coeff_val = 0
                 var_info.append((var, length, coeff_val))
 
-        if not var_info:
-            return None
-
         # Sort by coefficient descending (larger coeff = earlier dimension)
         var_info.sort(key=lambda x: x[2], reverse=True)
 
-        # The broadcast shape is simply the lengths in coefficient order
-        shape = tuple(length for _, length, _ in var_info)
+        # The broadcast shape combines indirect var shape with iteration var lengths
+        # Indirect var shape comes first (leading dimensions from indices tensor)
+        # Iteration var lengths come after (e.g., embedding dimension)
+        iter_shape = tuple(length for _, length, _ in var_info)
+
+        if indirect_shape:
+            # Combine: indirect shape (e.g., batch, seq) + iter shape (e.g., embed_dim)
+            shape = tuple(indirect_shape) + iter_shape
+        elif has_indirect:
+            # Have indirect vars but couldn't find their shape
+            # Fall back to canonical output shape (which captures all dimensions)
+            canonical = self._get_canonical_output_shape()
+            if canonical is not None:
+                return tuple(canonical)
+            # If no canonical shape, just use iteration variables
+            if var_info:
+                shape = iter_shape
+            else:
+                return None
+        elif var_info:
+            shape = iter_shape
+        else:
+            return None
+
         return shape
 
     def _track_var_shape(
@@ -1551,7 +1611,23 @@ class PallasKernel(SIMDKernel):
         if buf_obj is None:
             return
 
-        # For indexed loads, compute the shape from index expression broadcast
+        # Check for trailing .reshape() first - this takes priority over index-based
+        # shape inference since it's the final shape of the expression.
+        # This handles cases like: buf[...].flatten()[idx].reshape(20, 1048576)
+        if ".reshape(" in load_expr:
+            import re
+
+            match = re.search(r"\.reshape\(([^)]+)\)$", load_expr)
+            if match:
+                try:
+                    dims_str = match.group(1)
+                    dims = tuple(int(d.strip()) for d in dims_str.split(","))
+                    self.var_shapes[var_name] = dims
+                    return
+                except (ValueError, AttributeError):
+                    pass
+
+        # For indexed loads without trailing reshape, compute shape from index broadcast
         # The shape is determined by the broadcast of all iteration variable shapes
         if ".flatten()[" in load_expr:
             shape = self._compute_indexed_load_shape(index)
@@ -2021,6 +2097,12 @@ class PallasKernel(SIMDKernel):
         else:
             # Variables likely in reversed order (innermost to outermost)
             actual_axes = reversed_output
+
+        # Check if actual_axes is identity (no transpose needed)
+        # We checked output_to_input above, but actual_axes could be reversed_output
+        # which might be identity even if output_to_input is not
+        if list(actual_axes) == identity_perm:
+            return None
 
         # The axes for jnp.transpose: axes[i] = which input dim goes to output dim i
         return tuple(actual_axes)
@@ -2901,8 +2983,65 @@ class PallasKernel(SIMDKernel):
                     axes_str = ", ".join(str(a) for a in transpose_axes)
                     load_expr = f"jnp.transpose({load_expr}, axes=({axes_str},))"
                     self.has_transposed_load = True
+                else:
+                    # Also check if buffer shape is transpose of output shape
+                    # This handles cases where index pattern is normal but output
+                    # shape differs (e.g., x.t() where x is accessed normally but
+                    # output needs transposed shape)
+                    load_expr = self._maybe_transpose_for_output_shape(
+                        name, load_expr
+                    )
 
             return load_expr
+
+    def _maybe_transpose_for_output_shape(
+        self, name: str, load_expr: str
+    ) -> str:
+        """
+        Transpose buffer if its shape is the transpose of the output shape.
+
+        This handles cases like x.t() + y where:
+        - x has shape (N, M) with normal row-major strides
+        - x.t() should have shape (M, N)
+        - The kernel output shape is (M, N)
+
+        The index expression accesses x in normal row-major order, but we need
+        the data in transposed shape for the output. In this case, we need to
+        apply jnp.transpose() on load.
+        """
+        buf_obj = V.graph.get_buffer(name)
+        if buf_obj is None:
+            return load_expr
+
+        buf_size = buf_obj.get_size()
+        buf_size_ints = [self._safe_int(s) for s in buf_size]
+        if None in buf_size_ints or len(buf_size_ints) != 2:
+            return load_expr
+
+        # Get output buffer shape
+        output_shape = None
+        output_buffers = getattr(self.args, "output_buffers", {})
+        for out_name in output_buffers:
+            out_buf = V.graph.get_buffer(out_name)
+            if out_buf is not None:
+                out_size = [self._safe_int(s) for s in out_buf.get_size()]
+                if None not in out_size and len(out_size) == 2:
+                    output_shape = out_size
+                    break
+
+        if output_shape is None:
+            return load_expr
+
+        # Check if buffer shape is transpose of output shape (same dims, reversed)
+        if (
+            buf_size_ints != output_shape
+            and sorted(buf_size_ints) == sorted(output_shape)
+            and buf_size_ints == list(reversed(output_shape))
+        ):
+            self.has_transposed_load = True
+            return f"jnp.transpose({load_expr})"
+
+        return load_expr
 
     def _maybe_squeeze_intermediate_buffer(self, name: str, load_expr: str) -> str:
         """
@@ -2976,6 +3115,27 @@ class PallasKernel(SIMDKernel):
             return load_expr
         if buf_size_ints == output_shape_no_keepdims:
             return load_expr
+
+        # Check if buffer shape is a TRANSPOSE of output shape (same dims, different order)
+        # In this case, we need jnp.transpose(), not reshape() - they have different semantics!
+        # reshape() just reinterprets the flat array; transpose() actually reorders elements.
+        if len(buf_size_ints) == len(output_shape) and sorted(buf_size_ints) == sorted(output_shape):
+            # Check if it's a simple 2D transpose (most common case)
+            if len(buf_size_ints) == 2 and buf_size_ints == list(reversed(output_shape)):
+                self.has_transposed_load = True
+                return f"jnp.transpose({load_expr})"
+            # For N-D, compute the permutation
+            if len(set(buf_size_ints)) == len(buf_size_ints):  # All dims unique
+                axes = []
+                for out_dim_size in output_shape:
+                    for i, buf_dim_size in enumerate(buf_size_ints):
+                        if buf_dim_size == out_dim_size and i not in axes:
+                            axes.append(i)
+                            break
+                if len(axes) == len(output_shape) and axes != list(range(len(axes))):
+                    axes_str = ", ".join(str(a) for a in axes)
+                    self.has_transposed_load = True
+                    return f"jnp.transpose({load_expr}, axes=({axes_str},))"
 
         # Decide which target shape to use based on buffer characteristics:
         # - If buffer has a 1 dimension (likely keepdims result), use full output_shape
@@ -3081,6 +3241,11 @@ class PallasKernel(SIMDKernel):
         and dimension 3 is expanded (stride=0), we reshape input from (2, 16, 2, 16)
         to (2, 16, 2, 1, 16) so JAX broadcast_to can expand to (2, 16, 2, 2, 16).
         """
+        # Skip if load_expr already has a reshape (e.g., from _maybe_broadcast_1d_buffer)
+        # to avoid double reshaping which causes shape mismatches
+        if ".reshape(" in load_expr:
+            return load_expr
+
         buf_obj = V.graph.get_buffer(name)
         if buf_obj is None:
             return load_expr
@@ -3453,7 +3618,13 @@ class PallasKernel(SIMDKernel):
             needs_transpose = self._check_store_needs_transpose(name)
             broadcast_shape = self._get_broadcast_shape_for_expand(name)
             # Check if a permutation is needed (input/output shapes differ by transpose)
-            permute_axes = self._get_permute_axes_for_store() if not needs_transpose and broadcast_shape is None else None
+            # IMPORTANT: Skip permute_axes if we already transposed on load - the data
+            # is already in the correct shape and doesn't need another permutation.
+            permute_axes = (
+                self._get_permute_axes_for_store()
+                if not needs_transpose and broadcast_shape is None and not self.has_transposed_load
+                else None
+            )
             return self._build_full_array_store_expr(out, value, needs_transpose, broadcast_shape, permute_axes)
 
         if needs_flatten:
@@ -3579,7 +3750,11 @@ class PallasKernel(SIMDKernel):
         else:
             # Slice-based scatter: use : for iteration dimensions
             index_parts = [":" for _ in dims_before]
-            index_parts.append(indirect_var)
+            # Flatten indirect variable to 1D for JAX scatter semantics.
+            # The variable may have extra dims from _maybe_reshape_for_expand
+            # (e.g., shape (601, 1) instead of (601,)), which would cause JAX
+            # to expect a different value shape for broadcasting.
+            index_parts.append(f"{indirect_var}.reshape(-1)")
             index_parts.extend(":" for _ in dims_after)
 
         index_tuple = ", ".join(index_parts)

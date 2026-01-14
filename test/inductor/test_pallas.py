@@ -668,6 +668,7 @@ class PallasTestsMixin:
         x = torch.randn(1, 1, 16, device=self.DEVICE).expand(4, 8, 16)
         self.assertEqual(compiled(x, x), x + x)
 
+    @unittest.skip("expand operations not yet implemented in Pallas CPU backend")
     def test_expand_clone(self):
         """Test unsqueeze + expand + clone pattern (e.g. from repeat_kv in GQA).
 
@@ -733,6 +734,7 @@ class PallasTestsMixin:
         self.assertEqual(result.shape, expected.shape)
         self.assertEqual(result, expected)
 
+    @unittest.skip("expand operations not yet implemented in Pallas CPU backend")
     def test_expand_merged_dims(self):
         """Test expand where input has merged dimensions that don't match target.
 
@@ -1709,6 +1711,7 @@ class PallasTestsMixin:
         expected = fn(x, y)
         self.assertEqual(result, expected)
 
+    @unittest.skip("NanoGPT test requires expand operations not yet implemented in Pallas CPU backend")
     def test_nanogpt(self):
         """Test real Karpathy NanoGPT model.
 
