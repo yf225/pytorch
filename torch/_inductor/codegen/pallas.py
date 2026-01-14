@@ -1034,7 +1034,8 @@ class PallasKernel(SIMDKernel):
 
         # Helper to check if buffer's numel matches an iteration var
         def _get_nd_shape_if_matches(buf_name, prefer_no_ones=True):
-            buf = V.graph.try_get_buffer(buf_name)
+            # Use get_buffer which works for both intermediate buffers and graph inputs
+            buf = V.graph.get_buffer(buf_name)
             if buf is None or len(buf.get_size()) <= 1:
                 return None, None
             shape = [self._safe_int(s) for s in buf.get_size()]
@@ -1174,8 +1175,24 @@ class PallasKernel(SIMDKernel):
 
         # If numels match, we can reshape one to match the other
         if numel_a == numel_b:
-            # Count intermediate 1s in each shape (exclude leading/trailing 1s)
-            # Prefer the shape with fewer intermediate 1s (keepdims artifacts)
+            # First priority: prefer higher dimensionality for safe JAX broadcasting
+            # This ensures intermediate results (e.g., from partial_reduce with keepdims)
+            # maintain their full shape rather than being collapsed
+            if len(shape_a) > len(shape_b):
+                # Reshape b to match a's higher dimensionality
+                shape_str = ", ".join(str(s) for s in shape_a)
+                new_b = f"{b}.reshape({shape_str})"
+                self.var_shapes[new_b] = shape_a
+                return a, new_b
+            elif len(shape_b) > len(shape_a):
+                # Reshape a to match b's higher dimensionality
+                shape_str = ", ".join(str(s) for s in shape_b)
+                new_a = f"{a}.reshape({shape_str})"
+                self.var_shapes[new_a] = shape_b
+                return new_a, b
+
+            # Same dimensionality - use intermediate 1s count as tiebreaker
+            # to avoid keepdims artifacts like (2, 16, 1, 64) vs (2, 16, 64)
             def count_intermediate_ones(shape):
                 if len(shape) <= 2:
                     return 0
@@ -1186,32 +1203,18 @@ class PallasKernel(SIMDKernel):
             ones_a = count_intermediate_ones(shape_a)
             ones_b = count_intermediate_ones(shape_b)
 
-            # Prefer the shape with fewer intermediate 1s
-            # This avoids keepdims artifacts like (2, 16, 1, 64) vs (2, 16, 64)
             if ones_a < ones_b:
                 # Reshape b to match a's shape (a has fewer intermediate 1s)
                 shape_str = ", ".join(str(s) for s in shape_a)
                 new_b = f"{b}.reshape({shape_str})"
                 self.var_shapes[new_b] = shape_a
                 return a, new_b
-            elif ones_b < ones_a:
-                # Reshape a to match b's shape (b has fewer intermediate 1s)
-                shape_str = ", ".join(str(s) for s in shape_b)
-                new_a = f"{a}.reshape({shape_str})"
-                self.var_shapes[new_a] = shape_b
-                return new_a, b
-            elif len(shape_a) < len(shape_b):
-                # Same number of intermediate 1s, prefer higher dimensionality
-                shape_str = ", ".join(str(s) for s in shape_b)
-                new_a = f"{a}.reshape({shape_str})"
-                self.var_shapes[new_a] = shape_b
-                return new_a, b
             else:
-                # Reshape b to match a's shape
-                shape_str = ", ".join(str(s) for s in shape_a)
-                new_b = f"{b}.reshape({shape_str})"
-                self.var_shapes[new_b] = shape_a
-                return a, new_b
+                # Reshape a to match b's shape (or they're equal, default to b)
+                shape_str = ", ".join(str(s) for s in shape_b)
+                new_a = f"{a}.reshape({shape_str})"
+                self.var_shapes[new_a] = shape_b
+                return new_a, b
 
         # If one is broadcastable to the other (different numels)
         # This handles cases like (2, 16, 1) broadcasting with (2, 16, 64)
@@ -1333,6 +1336,9 @@ class PallasKernel(SIMDKernel):
         - "in_ptr0[...].reshape(2, 16, 64)" -> (2, 16, 64)
         - "tmp0.reshape(2, 16, 64)" -> (2, 16, 64)
         - "tmp3" -> look up in CSE cache to find original expression's shape
+        - "jnp.array(256, dtype=...)" -> () (scalar)
+        - "jnp.asarray(...).astype(...)" -> inherit from inner expression
+        - Integer literals -> () (scalar)
         """
         import re
 
@@ -1346,6 +1352,33 @@ class PallasKernel(SIMDKernel):
             except (ValueError, AttributeError):
                 pass
 
+        # Check for scalar patterns - these all have shape ()
+        # jnp.array(value, dtype=...) with a scalar value
+        if re.match(r"^jnp\.array\([^,\[\]]+,\s*dtype=", expr):
+            return ()
+        # Pure integer literals
+        if re.match(r"^-?\d+$", expr):
+            return ()
+        # Pure float literals
+        if re.match(r"^-?\d+\.?\d*$", expr):
+            return ()
+        # JAX special values
+        if expr in ("jnp.nan", "jnp.inf", "-jnp.inf", "True", "False"):
+            return ()
+
+        # Check for type cast patterns - inherit shape from inner expression
+        # jnp.asarray(x).astype(dtype) -> shape of x
+        match = re.match(r"^jnp\.asarray\(([^)]+)\)\.astype\(", expr)
+        if match:
+            inner_expr = match.group(1)
+            inner_shape = self._infer_shape_from_expr(inner_expr)
+            if inner_shape is not None:
+                return inner_shape
+            # Also check var_shapes directly
+            inner_shape = self.var_shapes.get(inner_expr)
+            if inner_shape is not None:
+                return inner_shape
+
         # Check for simple CSE variable name like "tmp3"
         # Look up the original expression in CSE cache and get its shape
         if re.match(r"^tmp\d+$", expr):
@@ -1358,7 +1391,18 @@ class PallasKernel(SIMDKernel):
                         # Also cache this for future lookups
                         self.var_shapes[expr] = shape
                         return shape
+                    # Shape not directly tracked, try to infer from the expression
+                    inferred = self._infer_shape_from_expr(cache_key)
+                    if inferred is not None:
+                        self.var_shapes[expr] = inferred
+                        return inferred
                     break
+
+        # Check for indexed access pattern like "in_ptr0[...].flatten()[idx]"
+        # These have shape determined by the index expression broadcast, which is
+        # complex to infer. Return None to avoid incorrect reshapes.
+        if ".flatten()[" in expr:
+            return None
 
         # Check for buffer access pattern like "in_ptr0[...]"
         match = re.match(r"(in_ptr\d+|buf\d+)\[", expr)
@@ -1439,6 +1483,60 @@ class PallasKernel(SIMDKernel):
         if shape is not None:
             self.var_shapes[result_expr] = shape
 
+    def _compute_indexed_load_shape(
+        self, index: sympy.Expr
+    ) -> Optional[tuple[int, ...]]:
+        """
+        Compute the shape of an indexed load from the index expression broadcast.
+
+        For indexed loads like `buf[...].flatten()[x0 + 2*x1]`, the result shape
+        is determined by broadcasting the shapes of x0 and x1 (as reshaped arrays).
+
+        The iteration variables are reshaped for broadcasting:
+        - Variables with larger coefficients become earlier dimensions
+        - Each variable contributes its length to one dimension
+        - Singleton dimensions (1) are inserted for other positions
+
+        Example: index = x0 + 2*x1 with x0.length=2, x1.length=6
+        - x1 has larger coeff (2), so it's earlier: reshape to (6, 1)
+        - x0 has smaller coeff (1), so it's later: reshape to (1, 2)
+        - Broadcast result: (6, 2)
+        """
+        used_vars = self._get_used_iter_vars(index)
+        if not used_vars:
+            return None
+
+        # Get iteration variable lengths and sort by coefficient (descending)
+        # Higher coefficient = earlier dimension in the output
+        var_info = []
+        for var in used_vars:
+            if var in self.range_tree_nodes:
+                entry = self.range_tree_nodes[var]
+                if entry.is_reduction:
+                    continue  # Skip reduction variables
+                length = self._safe_int(entry.length)
+                if length is None:
+                    return None  # Dynamic shape, can't compute
+                # Get coefficient of this var in the index
+                coeff = index.coeff(var)
+                if coeff == 0:
+                    coeff = sympy.diff(index, var)
+                try:
+                    coeff_val = int(coeff) if coeff.is_number else 0
+                except (TypeError, AttributeError):
+                    coeff_val = 0
+                var_info.append((var, length, coeff_val))
+
+        if not var_info:
+            return None
+
+        # Sort by coefficient descending (larger coeff = earlier dimension)
+        var_info.sort(key=lambda x: x[2], reverse=True)
+
+        # The broadcast shape is simply the lengths in coefficient order
+        shape = tuple(length for _, length, _ in var_info)
+        return shape
+
     def _track_var_shape(
         self, var_name: str, buf_name: str, load_expr: str, index: sympy.Expr
     ) -> None:
@@ -1451,6 +1549,14 @@ class PallasKernel(SIMDKernel):
         """
         buf_obj = V.graph.try_get_buffer(buf_name)
         if buf_obj is None:
+            return
+
+        # For indexed loads, compute the shape from index expression broadcast
+        # The shape is determined by the broadcast of all iteration variable shapes
+        if ".flatten()[" in load_expr:
+            shape = self._compute_indexed_load_shape(index)
+            if shape is not None:
+                self.var_shapes[var_name] = shape
             return
 
         # Get original buffer shape
@@ -1508,12 +1614,18 @@ class PallasKernel(SIMDKernel):
                 # For direct indexing, check if buffer shape needs to match canonical
                 # BUT preserve buffer shapes with singleton dimensions (e.g., (1, 10))
                 # as these are meaningful for broadcasting.
+                # ALSO preserve higher-dimensional buffer shapes (e.g., (65, 2, 2, 2) vs (65, 8))
+                # as these are needed for correct broadcasting with keepdims-style reductions.
                 canonical = self._get_canonical_output_shape()
                 if canonical is not None and list(canonical) != list(buf_shape):
                     # Don't replace buffer shape if it has singleton dimensions
                     # These indicate explicit broadcast structure (e.g., (1, 10) for row broadcast)
                     has_singletons = 1 in buf_shape
-                    if not has_singletons:
+                    # Don't replace buffer shape if it has more dimensions than canonical
+                    # Higher-dimensional shapes are needed for keepdims-style broadcasting
+                    # e.g., (65, 2, 2, 2) should not become (65, 8)
+                    has_more_dims = len(buf_shape) > len(canonical)
+                    if not has_singletons and not has_more_dims:
                         buf_numel = 1
                         for s in buf_shape:
                             buf_numel *= s
@@ -2035,7 +2147,46 @@ class PallasKernel(SIMDKernel):
         # If shapes are the same, check if strides indicate a transpose is needed
         # This handles square matrices where shapes are equal but strides differ
         # (e.g., input strides [8, 1] vs output strides [1, 8])
+        # BUT: for "copy" kernels where output strides are just a different layout
+        # (not a true transpose/reverse), don't apply permutation - the .copy_()
+        # in the main function will handle the layout conversion correctly.
         if input_shape == output_shape:
+            # Get both input and output strides to determine if this is a true transpose
+            input_strides = None
+            output_strides = None
+            for buf_name in self.args.input_buffers:
+                buf_obj = V.graph.get_buffer(buf_name)
+                if buf_obj is not None:
+                    layout = getattr(buf_obj, "get_layout", lambda: None)()
+                    if layout is not None:
+                        stride = getattr(layout, "stride", None)
+                        if stride is not None:
+                            input_strides = [self._safe_int(s) for s in stride]
+                            if None in input_strides:
+                                input_strides = None
+                            break
+            output_buffers = getattr(self.args, "output_buffers", {})
+            for buf_name in output_buffers:
+                buf_obj = V.graph.get_buffer(buf_name)
+                if buf_obj is not None:
+                    layout = getattr(buf_obj, "get_layout", lambda: None)()
+                    if layout is not None:
+                        stride = getattr(layout, "stride", None)
+                        if stride is not None:
+                            output_strides = [self._safe_int(s) for s in stride]
+                            if None in output_strides:
+                                output_strides = None
+                            break
+
+            if input_strides is not None and output_strides is not None:
+                # Check if output strides are the REVERSE of input strides
+                # This indicates a true transpose (like x.T on square matrix)
+                if output_strides == input_strides[::-1]:
+                    # True transpose: apply permutation
+                    return self._compute_permute_from_strides()
+                # Otherwise, this is just a layout change (copy kernel)
+                # Don't apply permutation - .copy_() handles layout conversion
+                return None
             return self._compute_permute_from_strides()
 
         # If different number of dimensions, can't be a simple permutation
@@ -2045,6 +2196,40 @@ class PallasKernel(SIMDKernel):
         # Check if output_shape is a permutation of input_shape
         if sorted(input_shape) != sorted(output_shape):
             return None  # Not a permutation (different elements)
+
+        # IMPORTANT: If both input and output are contiguous (row-major strides),
+        # this is a VIEW/reshape operation, NOT a transpose. A view just reinterprets
+        # the same flat data with a different shape - no data reordering needed.
+        # For a true transpose, the output would have non-contiguous strides.
+        def is_contiguous_for_shape(shape, strides):
+            """Check if strides are standard row-major for the given shape."""
+            if strides is None or shape is None:
+                return False
+            expected_stride = 1
+            for dim_size, actual_stride in reversed(list(zip(shape, strides))):
+                if actual_stride != expected_stride:
+                    return False
+                expected_stride *= dim_size
+            return True
+
+        # Get output strides
+        output_strides = None
+        output_buffers = getattr(self.args, "output_buffers", {})
+        for buf_name in output_buffers:
+            buf_obj = V.graph.get_buffer(buf_name)
+            if buf_obj is not None:
+                layout = getattr(buf_obj, "get_layout", lambda: None)()
+                if layout is not None:
+                    stride = getattr(layout, "stride", None)
+                    if stride is not None:
+                        output_strides = [self._safe_int(s) for s in stride]
+                        if None in output_strides:
+                            output_strides = None
+                        break
+
+        # If output has contiguous strides for its shape, this is a view/reshape
+        if is_contiguous_for_shape(output_shape, output_strides):
+            return None  # No transpose needed - it's a view operation
 
         # Find the permutation: for each output dim, which input dim has the same size
         # This only works reliably when all dimensions have unique sizes
@@ -2666,7 +2851,45 @@ class PallasKernel(SIMDKernel):
             # Flatten then index for non-contiguous access (gather operation)
             has_minmax = index.has(sympy.Min) or index.has(sympy.Max)
             idx = f"({index_str}).astype(jnp.int64)" if has_minmax else index_str
-            return f"{buf}[...].flatten()[{idx}]"
+            load_expr = f"{buf}[...].flatten()[{idx}]"
+
+            # For indexed loads, the result shape is determined by index expression
+            # broadcast. This may not match the canonical output shape needed for
+            # correct binary op broadcasting. Reshape to canonical shape when:
+            # 1. We have a canonical output shape
+            # 2. Buffer numel matches canonical numel (same total elements)
+            # This ensures shapes like (6, 2) become (2, 3, 2) for correct broadcasting.
+            canonical = self._get_canonical_output_shape()
+            if canonical is not None:
+                canonical_numel = 1
+                for s in canonical:
+                    canonical_numel *= s
+
+                # Try to get buffer size to verify numel matches
+                buf_obj = V.graph.get_buffer(name)
+                should_reshape = False
+                if buf_obj is not None:
+                    buf_size = buf_obj.get_size()
+                    buf_numel = 1
+                    for s in buf_size:
+                        buf_numel_val = self._safe_int(s)
+                        if buf_numel_val is None:
+                            buf_numel = None
+                            break
+                        buf_numel *= buf_numel_val
+
+                    if buf_numel is not None and buf_numel == canonical_numel:
+                        should_reshape = True
+                else:
+                    # For input buffers not in graph.buffers, reshape unconditionally
+                    # since indexed loads must produce matching numel
+                    should_reshape = True
+
+                if should_reshape:
+                    shape_str = ", ".join(str(s) for s in canonical)
+                    load_expr = f"{load_expr}.reshape({shape_str})"
+
+            return load_expr
         else:
             # Direct indexing for contiguous access
             load_expr = f"{buf}[{index_str}]"
@@ -3465,8 +3688,31 @@ class PallasKernel(SIMDKernel):
                 # Reshape indirect var for proper broadcasting with reduction var
                 # e.g., tmp5 shape (2,16) + arange(64) shape (64,) won't broadcast
                 # but tmp5[..., None] shape (2,16,1) + (64,) -> (2,16,64) works
+                # However, if indirect var is already 1D, adding [..., None] would
+                # create wrong broadcast: (N,1) + (N,) -> (N,N) instead of (N,)
                 indirect_var = indirect_vars[0]
-                index_str = index_str.replace(indirect_var, f"{indirect_var}[..., None]")
+                indirect_shape = self.var_shapes.get(indirect_var)
+
+                # Check if the kernel has any pointwise (non-reduction) iteration vars
+                # If all vars are reduction vars (pure reduction kernel), the indirect
+                # var is element-wise with the reduction, so no broadcast needed
+                all_iter_vars = self._get_iter_vars()
+                has_pointwise_vars = any(
+                    not self.range_tree_nodes[v].is_reduction
+                    for v in all_iter_vars
+                    if v in self.range_tree_nodes
+                )
+
+                # Only add [..., None] if:
+                # 1. We know the indirect var is multi-dimensional, OR
+                # 2. Shape is unknown AND kernel has pointwise vars (need broadcast)
+                if len(indirect_shape or ()) > 1 or (
+                    indirect_shape is None and has_pointwise_vars
+                ):
+                    index_str = index_str.replace(
+                        indirect_var, f"{indirect_var}[..., None]"
+                    )
+                # else: 1D indirect var or pure reduction kernel - element-wise
                 return index_str
             # For pointwise vars, fall through to the complex reshape code
 
@@ -4025,7 +4271,7 @@ def _pallas_partial_reduce(reduce_fn, v, pw_numel, red_numel):
 def _pallas_expand_for_broadcast(v, target_shape):
     # Helper for expand patterns: reshape value to be broadcastable to target_shape.
     # For expand (stride=0), value has fewer elements. We insert singleton dims
-    # where needed to make shapes broadcast-compatible.
+    # as needed for broadcast compatibility.
     # E.g., (2, 16, 2, 16) -> (2, 16, 2, 1, 16) to broadcast to (2, 16, 2, 2, 16)
     v_shape = list(v.shape)
     t_shape = list(target_shape)
@@ -4054,7 +4300,7 @@ def _pallas_expand_for_broadcast(v, target_shape):
         v_remaining = 1
         for s in v_shape[common_prefix_len:]:
             v_remaining *= s
-        # Build intermediate shape: prefix + suffix with 1s where expansion happens
+        # Build intermediate shape: prefix + suffix with 1s at expansion positions
         prefix = list(t_shape[:common_prefix_len])
         suffix = list(t_shape[common_prefix_len:])
         # Find which suffix dims to set to 1 to match v_remaining
@@ -4145,8 +4391,27 @@ def _pallas_expand_for_broadcast(v, target_shape):
                 inter_numel *= s
             if inter_numel == v_numel and len(intermediate) == len(t_shape):
                 return jnp.broadcast_to(v.reshape(-1).reshape(intermediate), target_shape)
-        # Fallback: try each target dim as the expand dim
-        for i in range(len(t_shape) - 1, -1, -1):
+        # Case: Standard broadcasting with fewer dimensions
+        # E.g., (256, 256) -> (256, 256, 256)
+        # Standard NumPy/PyTorch semantics: prepend 1s on the left
+        if len(v_shape) < len(t_shape):
+            leading_ones = len(t_shape) - len(v_shape)
+            intermediate = [1] * leading_ones + v_shape
+            # Verify this is valid for broadcasting (trailing dims match or are 1)
+            valid = True
+            for v_dim, t_dim in zip(intermediate, t_shape):
+                if v_dim != t_dim and v_dim != 1:
+                    valid = False
+                    break
+            if valid:
+                inter_numel = 1
+                for s in intermediate:
+                    inter_numel *= s
+                if inter_numel == v_numel:
+                    return jnp.broadcast_to(v.reshape(intermediate), target_shape)
+        # Fallback: try each target dim as the expand dim (try LEFT to RIGHT first
+        # to prefer standard broadcast semantics of prepending 1s)
+        for i in range(len(t_shape)):
             test_shape = list(t_shape)
             test_shape[i] = 1
             test_numel = 1
