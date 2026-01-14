@@ -1475,6 +1475,26 @@ class PallasKernel(SIMDKernel):
                     shape = dims
                 except (ValueError, AttributeError):
                     pass
+        elif "jnp.transpose(" in load_expr:
+            # Check if load_expr includes a transpose - permute the shape
+            # e.g., "jnp.transpose(in_ptr0[...], axes=(1, 0,))" -> permute (8, 16) to (16, 8)
+            import re
+
+            match = re.search(
+                r"jnp\.transpose\([^,]+,\s*axes=\(([^)]+)\)", load_expr
+            )
+            if match:
+                try:
+                    axes_str = match.group(1)
+                    axes = tuple(
+                        int(a.strip().rstrip(","))
+                        for a in axes_str.split(",")
+                        if a.strip().rstrip(",")
+                    )
+                    # Permute the shape: axes[i] = which original dim goes to output dim i
+                    shape = tuple(buf_shape[a] for a in axes)
+                except (ValueError, IndexError):
+                    pass
         else:
             # Check if this is an indirect load (embedding lookup)
             # For indirect indexing, the effective shape is the canonical output shape
@@ -1486,17 +1506,23 @@ class PallasKernel(SIMDKernel):
                     shape = tuple(canonical)
             else:
                 # For direct indexing, check if buffer shape needs to match canonical
+                # BUT preserve buffer shapes with singleton dimensions (e.g., (1, 10))
+                # as these are meaningful for broadcasting.
                 canonical = self._get_canonical_output_shape()
                 if canonical is not None and list(canonical) != list(buf_shape):
-                    buf_numel = 1
-                    for s in buf_shape:
-                        buf_numel *= s
-                    canonical_numel = 1
-                    for s in canonical:
-                        canonical_numel *= s
-                    # If numels match, track canonical shape as the effective shape
-                    if buf_numel == canonical_numel:
-                        shape = tuple(canonical)
+                    # Don't replace buffer shape if it has singleton dimensions
+                    # These indicate explicit broadcast structure (e.g., (1, 10) for row broadcast)
+                    has_singletons = 1 in buf_shape
+                    if not has_singletons:
+                        buf_numel = 1
+                        for s in buf_shape:
+                            buf_numel *= s
+                        canonical_numel = 1
+                        for s in canonical:
+                            canonical_numel *= s
+                        # If numels match, track canonical shape as the effective shape
+                        if buf_numel == canonical_numel:
+                            shape = tuple(canonical)
 
         self.var_shapes[var_name] = shape
 
@@ -1840,21 +1866,16 @@ class PallasKernel(SIMDKernel):
         # For transpose: var_lengths are in reversed output order, so we need to
         #   reverse output_to_input to get actual axes.
         #
-        # The heuristic: check if output_to_input is already identity (no transpose needed)
-        # or if reversed(output_to_input) is identity (contiguous but variables reversed)
+        # Check if output_to_input is identity (no transpose needed)
         identity_perm = list(range(ndim))
-
-        # If output_to_input is identity, no transpose needed
         if output_to_input == identity_perm:
             return None
 
-        # If reversed output_to_input is identity, also no transpose needed
-        # (this happens when iteration variables are in reversed order but access is contiguous)
+        # Non-identity permutation means we need a transpose.
+        # Determine actual axes based on var_lengths ordering.
         reversed_output = list(reversed(output_to_input))
-        if reversed_output == identity_perm:
-            return None
 
-        # We have a real transpose. Now determine the correct axes.
+        # Determine the correct axes for the transpose.
         # If var_lengths are in reversed order compared to a typical output shape,
         # we need to use reversed_output. Otherwise, use output_to_input directly.
         #
