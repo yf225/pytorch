@@ -668,6 +668,317 @@ class PallasTestsMixin:
         x = torch.randn(1, 1, 16, device=self.DEVICE).expand(4, 8, 16)
         self.assertEqual(compiled(x, x), x + x)
 
+    def test_expand_clone(self):
+        """Test unsqueeze + expand + clone pattern (e.g. from repeat_kv in GQA).
+
+        This pattern creates a view with stride=0 in the expanded dimension,
+        and clone() needs to copy the data correctly to a contiguous tensor.
+        """
+
+        def fn(x):
+            # unsqueeze + expand pattern from repeat_kv in grouped query attention
+            # x: (2, 16, 2, 16) -> unsqueeze -> (2, 16, 2, 1, 16) -> expand -> (2, 16, 2, 2, 16)
+            return x[:, :, :, None, :].expand(2, 16, 2, 2, 16).contiguous()
+
+        x = torch.randn(2, 16, 2, 16, device=self.DEVICE)
+        expected = fn(x)
+        compiled = self._compile(fn)
+        result = compiled(x)
+        self.assertEqual(result.shape, expected.shape)
+        self.assertEqual(result, expected)
+
+    def test_rope_repeat_kv(self):
+        """Test RoPE (rotary embeddings) + repeat_kv pattern from Llama3.
+
+        This combines the complex number operations from RoPE with the expand
+        pattern from repeat_kv in GQA. The complex ops create intermediate
+        reshapes that can cause issues with the expand broadcast logic.
+        """
+
+        def repeat_kv(x, n_rep):
+            bs, slen, n_kv_heads, head_dim = x.shape
+            return (
+                x[:, :, :, None, :]
+                .expand(bs, slen, n_kv_heads, n_rep, head_dim)
+                .reshape(bs, slen, n_kv_heads * n_rep, head_dim)
+            )
+
+        def apply_rotary_emb(xk, freqs_cis):
+            # Reshape for complex: (bs, seq, heads, dim) -> (bs, seq, heads, dim//2, 2)
+            xk_ = torch.view_as_complex(xk.float().reshape(*xk.shape[:-1], -1, 2))
+            # Complex multiply with freqs
+            xk_out = torch.view_as_real(xk_ * freqs_cis).flatten(3)
+            return xk_out.type_as(xk)
+
+        def fn(xk, freqs_cis):
+            # Apply RoPE then repeat_kv
+            xk = apply_rotary_emb(xk, freqs_cis)
+            return repeat_kv(xk, 2)
+
+        batch, seq, n_kv_heads, head_dim = 2, 16, 2, 16
+
+        xk = torch.randn(batch, seq, n_kv_heads, head_dim, device=self.DEVICE)
+
+        # Create freqs_cis (complex tensor for rotary embeddings)
+        theta = 500000.0
+        freqs = 1.0 / (theta ** (torch.arange(0, head_dim, 2)[: (head_dim // 2)].float() / head_dim))
+        t = torch.arange(seq, dtype=torch.float32)
+        freqs = torch.outer(t, freqs)
+        freqs_cis = torch.polar(torch.ones_like(freqs), freqs)  # complex64
+        freqs_cis = freqs_cis.view(1, seq, 1, head_dim // 2).to(self.DEVICE)
+
+        expected = fn(xk, freqs_cis)
+        compiled = self._compile(fn)
+        result = compiled(xk, freqs_cis)
+        self.assertEqual(result.shape, expected.shape)
+        self.assertEqual(result, expected)
+
+    def test_expand_merged_dims(self):
+        """Test expand where input has merged dimensions that don't match target.
+
+        This tests the case where input shape like (64, 1, 16) needs to expand
+        to (2, 16, 2, 2, 16). The input dimensions don't directly match any
+        target dimensions (64 != 2, 16, etc), so the expand helper must find
+        which target dims to set to 1.
+
+        This pattern occurs in Llama3's repeat_kv when combined with RoPE:
+        - RoPE uses complex ops which create extern fallbacks
+        - The kernel then receives flattened input (64, 1, 16) from the extern
+        - repeat_kv wants to expand to (2, 16, 2, 2, 16)
+        """
+        batch, seq, n_kv_heads, head_dim = 2, 16, 2, 16
+        dim = n_kv_heads * head_dim
+        n_rep = 2
+
+        wk = torch.nn.Linear(dim, n_kv_heads * head_dim, bias=False).to(self.DEVICE)
+        wv = torch.nn.Linear(dim, n_kv_heads * head_dim, bias=False).to(self.DEVICE)
+
+        def repeat_kv(x, n_rep):
+            bs, slen, n_kv_heads, head_dim = x.shape
+            return (
+                x[:, :, :, None, :]
+                .expand(bs, slen, n_kv_heads, n_rep, head_dim)
+                .reshape(bs, slen, n_kv_heads * n_rep, head_dim)
+            )
+
+        def fn(x, freqs_cis):
+            xk = wk(x).view(batch, seq, n_kv_heads, head_dim)
+            xv = wv(x).view(batch, seq, n_kv_heads, head_dim)
+
+            # RoPE with complex ops (creates extern fallback)
+            shape = [d if i == 1 or i == xk.ndim - 1 else 1
+                     for i, d in enumerate((batch, seq, n_kv_heads, head_dim // 2))]
+            freqs_cis_reshaped = freqs_cis.view(*shape)
+            xk_ = torch.view_as_complex(xk.float().reshape(*xk.shape[:-1], -1, 2))
+            xk_out = torch.view_as_real(xk_ * freqs_cis_reshaped).flatten(3)
+            xk = xk_out.type_as(xk)
+
+            # repeat_kv creates the problematic expand pattern
+            xk = repeat_kv(xk, n_rep)
+            xv = repeat_kv(xv, n_rep)
+            return xk, xv
+
+        x = torch.randn(batch, seq, dim, device=self.DEVICE)
+
+        # Create freqs_cis
+        theta = 500000.0
+        freqs = 1.0 / (theta ** (torch.arange(0, head_dim, 2)[: (head_dim // 2)].float() / head_dim))
+        t = torch.arange(seq, dtype=torch.float32)
+        freqs = torch.outer(t, freqs)
+        freqs_cis = torch.polar(torch.ones_like(freqs), freqs).to(self.DEVICE)
+
+        with torch.no_grad():
+            expected = fn(x, freqs_cis)
+        compiled = self._compile(fn)
+        with torch.no_grad():
+            result = compiled(x, freqs_cis)
+        for i, (e, r) in enumerate(zip(expected, result)):
+            self.assertEqual(r.shape, e.shape)
+            self.assertEqual(r, e)
+
+    def test_transpose_noncontiguous_input(self):
+        """Test transpose on already non-contiguous input.
+
+        This tests the pattern that occurs in attention:
+        1. Input is already transposed (non-contiguous)
+        2. Another transpose is done inside the compiled function
+        3. The result should match eager execution
+
+        The issue is that when a non-contiguous tensor is passed in and
+        then transposed again, the Pallas backend must correctly handle
+        the complex stride pattern.
+        """
+        if self.DEVICE == "cuda":
+            self.skipTest(
+                "non-contiguous access not supported in Pallas GPU (Mosaic) backend"
+            )
+
+        torch.manual_seed(42)
+        # Create a 4D tensor and transpose it (simulating attention pattern)
+        a = torch.randn(2, 4, 16, 16, device=self.DEVICE)
+        a_t = a.transpose(1, 2)  # (2, 16, 4, 16) with strides (1024, 16, 256, 1)
+
+        # The compiled function does another transpose
+        def fn(x):
+            return x.transpose(-2, -1) * 1.0
+
+        with torch.no_grad():
+            expected = fn(a_t)
+        compiled = self._compile(fn)
+        with torch.no_grad():
+            result = compiled(a_t)
+        self.assertEqual(result, expected)
+
+    def test_rope_transpose_contiguous(self):
+        """Test RoPE followed by transpose and contiguous.
+
+        This is a key pattern from Llama3 attention:
+        1. Apply rotary embeddings (view_as_complex, multiply, view_as_real)
+        2. Transpose dims 1 and 2
+        3. Make contiguous
+
+        The challenge is that view_as_real produces a 5D tensor (e.g., [2, 16, 4, 8, 2])
+        which needs to be reshaped and permuted to [2, 4, 16, 16].
+        """
+        if self.DEVICE == "cuda":
+            self.skipTest(
+                "complex ops not supported in Pallas GPU (Mosaic) backend"
+            )
+
+        torch.manual_seed(42)
+
+        def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0):
+            freqs = 1.0 / (
+                theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim)
+            )
+            t = torch.arange(end, device=freqs.device, dtype=torch.float32)
+            freqs = torch.outer(t, freqs)
+            freqs_cis = torch.polar(torch.ones_like(freqs), freqs)
+            return freqs_cis
+
+        def reshape_for_broadcast(freqs_cis, x):
+            ndim = x.ndim
+            shape = [d if i == 1 or i == ndim - 1 else 1 for i, d in enumerate(x.shape)]
+            return freqs_cis.view(*shape)
+
+        def apply_rotary_emb_single(xq, freqs_cis):
+            xq_ = torch.view_as_complex(xq.float().reshape(*xq.shape[:-1], -1, 2))
+            freqs_cis = reshape_for_broadcast(freqs_cis, xq_)
+            xq_out = torch.view_as_real(xq_ * freqs_cis).flatten(3)
+            return xq_out.type_as(xq)
+
+        bsz, seqlen = 2, 16
+        dim = 64
+        n_heads = 4
+        head_dim = dim // n_heads
+
+        wq = torch.nn.Linear(dim, n_heads * head_dim, bias=False)
+        freqs_cis = precompute_freqs_cis(head_dim, 64, 500000.0)[:seqlen]
+
+        x = torch.randn(bsz, seqlen, dim, device=self.DEVICE)
+
+        def fn(x):
+            xq = wq(x)
+            xq = xq.view(bsz, seqlen, n_heads, head_dim)
+            xq = apply_rotary_emb_single(xq, freqs_cis)
+            xq = xq.transpose(1, 2)
+            xq = xq.contiguous()
+            return xq
+
+        with torch.no_grad():
+            expected = fn(x)
+        compiled = self._compile(fn)
+        with torch.no_grad():
+            result = compiled(x)
+        self.assertEqual(result, expected)
+
+    def test_rope_repeat_kv_transpose(self):
+        """Test RoPE + repeat_kv (GQA) + transpose pattern from Llama3.
+
+        This tests the full attention preparation pattern:
+        1. Apply rotary embeddings to q and k
+        2. Repeat k and v for grouped query attention
+        3. Transpose all tensors from (batch, seq, heads, dim) to (batch, heads, seq, dim)
+        4. Make contiguous
+        """
+        if self.DEVICE == "cuda":
+            self.skipTest(
+                "complex ops not supported in Pallas GPU (Mosaic) backend"
+            )
+
+        torch.manual_seed(42)
+
+        def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0):
+            freqs = 1.0 / (
+                theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim)
+            )
+            t = torch.arange(end, device=freqs.device, dtype=torch.float32)
+            freqs = torch.outer(t, freqs)
+            freqs_cis = torch.polar(torch.ones_like(freqs), freqs)
+            return freqs_cis
+
+        def reshape_for_broadcast(freqs_cis, x):
+            ndim = x.ndim
+            shape = [d if i == 1 or i == ndim - 1 else 1 for i, d in enumerate(x.shape)]
+            return freqs_cis.view(*shape)
+
+        def apply_rotary_emb(xq, xk, freqs_cis):
+            xq_ = torch.view_as_complex(xq.float().reshape(*xq.shape[:-1], -1, 2))
+            xk_ = torch.view_as_complex(xk.float().reshape(*xk.shape[:-1], -1, 2))
+            freqs_cis = reshape_for_broadcast(freqs_cis, xq_)
+            xq_out = torch.view_as_real(xq_ * freqs_cis).flatten(3)
+            xk_out = torch.view_as_real(xk_ * freqs_cis).flatten(3)
+            return xq_out.type_as(xq), xk_out.type_as(xk)
+
+        def repeat_kv(x: torch.Tensor, n_rep: int) -> torch.Tensor:
+            bs, slen, n_kv_heads, head_dim = x.shape
+            if n_rep == 1:
+                return x
+            return (
+                x[:, :, :, None, :]
+                .expand(bs, slen, n_kv_heads, n_rep, head_dim)
+                .reshape(bs, slen, n_kv_heads * n_rep, head_dim)
+            )
+
+        bsz, seqlen = 2, 16
+        dim = 64
+        n_heads = 4
+        n_kv_heads = 2
+        n_rep = n_heads // n_kv_heads
+        head_dim = dim // n_heads
+
+        wq = torch.nn.Linear(dim, n_heads * head_dim, bias=False)
+        wk = torch.nn.Linear(dim, n_kv_heads * head_dim, bias=False)
+        wv = torch.nn.Linear(dim, n_kv_heads * head_dim, bias=False)
+        freqs_cis = precompute_freqs_cis(head_dim, 64, 500000.0)[:seqlen]
+
+        x = torch.randn(bsz, seqlen, dim, device=self.DEVICE)
+
+        def fn(x):
+            xq, xk, xv = wq(x), wk(x), wv(x)
+            xq = xq.view(bsz, seqlen, n_heads, head_dim)
+            xk = xk.view(bsz, seqlen, n_kv_heads, head_dim)
+            xv = xv.view(bsz, seqlen, n_kv_heads, head_dim)
+            xq, xk = apply_rotary_emb(xq, xk, freqs_cis=freqs_cis)
+
+            keys = repeat_kv(xk, n_rep)
+            values = repeat_kv(xv, n_rep)
+
+            xq = xq.transpose(1, 2).contiguous()
+            keys = keys.transpose(1, 2).contiguous()
+            values = values.transpose(1, 2).contiguous()
+
+            return xq, keys, values
+
+        with torch.no_grad():
+            expected = fn(x)
+        compiled = self._compile(fn)
+        with torch.no_grad():
+            result = compiled(x)
+
+        for i, (r, e) in enumerate(zip(result, expected)):
+            self.assertEqual(r, e, msg=f"Output {i} mismatch")
+
     def test_stride_multiple_inputs(self):
         """Test multiple strided inputs and broadcasting."""
         if self.DEVICE == "cuda":
@@ -1626,6 +1937,113 @@ class PallasTestsMixin:
 
         self.assertEqual(result, expected)
 
+    def test_embedding_rmsnorm_residual(self):
+        """Minimal repro for embedding + rmsnorm + residual add issue.
+
+        Tests embedding lookup followed by RMSNorm and residual connection.
+        The issue occurs when an intermediate buffer has flattened shape (32, 64)
+        while embedding output has multi-dim shape (2, 16, 64).
+
+        This pattern appears in transformer models like Llama3 where:
+        - Embedding output: (batch, seq, dim)
+        - Intermediate from previous layer: might be (batch*seq, dim) flattened
+        - These get added together in residual connections
+        """
+
+        class EmbeddingRMSNormResidual(torch.nn.Module):
+            def __init__(self, vocab_size: int, dim: int, eps: float = 1e-5):
+                super().__init__()
+                self.embedding = torch.nn.Embedding(vocab_size, dim)
+                self.weight = torch.nn.Parameter(torch.ones(dim))
+                self.eps = eps
+                # Linear layer that produces intermediate (could flatten internally)
+                self.proj = torch.nn.Linear(dim, dim, bias=False)
+
+            def forward(self, tokens: torch.Tensor):
+                # Embedding lookup: (batch, seq) -> (batch, seq, dim)
+                h = self.embedding(tokens)
+                # RMSNorm: reduction over last dim
+                h_norm = h * torch.rsqrt(h.pow(2).mean(-1, keepdim=True) + self.eps)
+                h_scaled = h_norm * self.weight
+                # Residual add with projection (may trigger shape mismatch)
+                return h + self.proj(h_scaled)
+
+        model = EmbeddingRMSNormResidual(vocab_size=256, dim=64)
+        model.eval()
+        if self.DEVICE != "cpu":
+            model = model.to(self.DEVICE)
+
+        # Input: (batch=2, seq=16) token indices
+        x = torch.randint(0, 256, (2, 16), device=self.DEVICE)
+
+        with torch.no_grad():
+            expected = model(x)
+
+        compiled_model = self._compile(model)
+        with torch.no_grad():
+            result = compiled_model(x)
+
+        self.assertEqual(result, expected)
+
+    def test_transformer_block_minimal(self):
+        """Minimal repro for transformer block broadcasting issue.
+
+        Pattern that fails:
+            h = emb(tokens)
+            h = h + proj(norm(h))   # Residual with linear inside
+            h = final_norm(h)       # This triggers broadcasting error
+
+        The issue is that the intermediate buffer from the linear projection
+        has shape (batch*seq, dim) = (32, 64) while the embedding output has
+        shape (batch, seq, dim) = (2, 16, 64). When the final norm tries to
+        operate on the result, JAX sees incompatible shapes.
+
+        This is the core pattern from Llama3 and other transformers where
+        each transformer block has:
+        - RMSNorm -> Attention/Linear -> Residual
+        - RMSNorm -> FFN -> Residual
+        - Final RMSNorm at the end of the model
+        """
+
+        class RMSNorm(torch.nn.Module):
+            def __init__(self, dim: int, eps: float = 1e-5):
+                super().__init__()
+                self.eps = eps
+                self.weight = torch.nn.Parameter(torch.ones(dim))
+
+            def forward(self, x):
+                output = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+                return output * self.weight
+
+        class TransformerBlockMinimal(torch.nn.Module):
+            def __init__(self, vocab_size: int = 256, dim: int = 64, eps: float = 1e-5):
+                super().__init__()
+                self.embedding = torch.nn.Embedding(vocab_size, dim)
+                self.norm1 = RMSNorm(dim, eps)
+                self.proj = torch.nn.Linear(dim, dim, bias=False)
+                self.norm2 = RMSNorm(dim, eps)
+
+            def forward(self, tokens: torch.Tensor) -> torch.Tensor:
+                h = self.embedding(tokens)  # (batch, seq, dim)
+                h = h + self.proj(self.norm1(h))  # Residual with linear
+                return self.norm2(h)  # Final norm triggers error
+
+        model = TransformerBlockMinimal()
+        model.eval()
+        if self.DEVICE != "cpu":
+            model = model.to(self.DEVICE)
+
+        x = torch.randint(0, 256, (2, 16), device=self.DEVICE)
+
+        with torch.no_grad():
+            expected = model(x)
+
+        compiled_model = self._compile(model)
+        with torch.no_grad():
+            result = compiled_model(x)
+
+        self.assertEqual(result, expected)
+
     def test_llama3(self):
         """Test Llama 3 model architecture.
 
@@ -1746,9 +2164,9 @@ class PallasTestsMixin:
                 keys = repeat_kv(xk, self.n_rep)
                 values = repeat_kv(xv, self.n_rep)
 
-                xq = xq.transpose(1, 2)  # (bs, n_heads, seqlen, head_dim)
-                keys = keys.transpose(1, 2)
-                values = values.transpose(1, 2)
+                xq = xq.transpose(1, 2).contiguous()  # (bs, n_heads, seqlen, head_dim)
+                keys = keys.transpose(1, 2).contiguous()
+                values = values.transpose(1, 2).contiguous()
 
                 scores = torch.matmul(xq, keys.transpose(2, 3)) / math.sqrt(self.head_dim)
                 if mask is not None:
