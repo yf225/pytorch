@@ -619,7 +619,7 @@ class AsyncCompile:
             Pallas kernels are Python code that uses JAX and Pallas APIs.
             We use the PyCodeCache to write the source code to a file and load it.
         """
-        from torch._inductor.codegen.pallas import MAIN_SUFFIX, PallasKernelWrapper
+        from torch._inductor.codegen.pallas_v2 import MAIN_SUFFIX, PallasKernelWrapper
 
         kernel_code_log.info("Pallas Kernel:\n%s", source_code)
 

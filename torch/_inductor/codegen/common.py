@@ -510,7 +510,7 @@ def init_backend_registration() -> None:
     from .cuda_combined_scheduling import CUDACombinedScheduling
     from .halide import HalideScheduling
     from .mps import MetalScheduling
-    from .pallas import PallasScheduling
+    from .pallas_v2 import PallasScheduling
     from .python_wrapper_mtia import PythonWrapperMtia
     from .triton import TritonScheduling
     from .wrapper import PythonWrapperCodegen
