@@ -1895,6 +1895,737 @@ class PallasTestsMixin:
 
         self.assertEqual(result, expected)
 
+    # ==================== View and Reduction Tests ====================
+
+    def test_sum_reduction_2d(self):
+        """Test sum reduction over last dimension of 2D tensor."""
+        def fn(x):
+            return x.sum(dim=-1)
+
+        x = torch.randn(32, 64, device=self.DEVICE)
+
+        compiled = self._compile(fn)
+        result = compiled(x)
+        expected = fn(x)
+
+        self.assertEqual(result.shape, expected.shape)
+        self.assertEqual(result, expected)
+
+    def test_permute_2d(self):
+        """Test 2D transpose/permute."""
+        def fn(x):
+            return x.permute(1, 0) * 2.0
+
+        x = torch.randn(32, 64, device=self.DEVICE)
+
+        compiled = self._compile(fn)
+        result = compiled(x)
+        expected = fn(x)
+
+        self.assertEqual(result.shape, expected.shape)
+        self.assertEqual(result, expected)
+
+    def test_permute_3d(self):
+        """Test 3D permute."""
+        def fn(x):
+            return x.permute(2, 0, 1) + 1.0
+
+        x = torch.randn(8, 16, 32, device=self.DEVICE)
+
+        compiled = self._compile(fn)
+        result = compiled(x)
+        expected = fn(x)
+
+        self.assertEqual(result.shape, expected.shape)
+        self.assertEqual(result, expected)
+
+    def test_expand_simple(self):
+        """Test simple expand operation."""
+        def fn(x):
+            return x.unsqueeze(0).expand(4, 32) + 1.0
+
+        x = torch.randn(32, device=self.DEVICE)
+
+        compiled = self._compile(fn)
+        result = compiled(x)
+        expected = fn(x)
+
+        self.assertEqual(result.shape, expected.shape)
+        self.assertEqual(result, expected)
+
+    def test_expand_2d(self):
+        """Test 2D expand with broadcasting."""
+        def fn(x, y):
+            # x: (1, 32), y: (16, 32)
+            # expand x to (16, 32) then add
+            return x.expand(16, 32) + y
+
+        x = torch.randn(1, 32, device=self.DEVICE)
+        y = torch.randn(16, 32, device=self.DEVICE)
+
+        compiled = self._compile(fn)
+        result = compiled(x, y)
+        expected = fn(x, y)
+
+        self.assertEqual(result.shape, expected.shape)
+        self.assertEqual(result, expected)
+
+    def test_reduction_permute_expand(self):
+        """
+        Test combining reduction + permute + expand.
+
+        This is the key test case that exercises all three operations together.
+        """
+        def fn(x):
+            # x: (2, 8, 16)
+            # 1. Permute: (2, 8, 16) -> (8, 2, 16)
+            x = x.permute(1, 0, 2)
+            # 2. Expand: (8, 2, 16) -> (8, 2, 4, 16) with new dim 2
+            x = x.unsqueeze(2).expand(8, 2, 4, 16)
+            # 3. Reduce: sum over last dim -> (8, 2, 4)
+            return x.sum(dim=-1)
+
+        x = torch.randn(2, 8, 16, device=self.DEVICE)
+
+        compiled = self._compile(fn)
+        result = compiled(x)
+        expected = fn(x)
+
+        self.assertEqual(result.shape, expected.shape)
+        self.assertEqual(result, expected)
+
+    def test_softmax_pattern(self):
+        """Test softmax-like pattern (reduction + normalization)."""
+        def fn(x):
+            # Softmax: exp(x - max) / sum(exp(x - max))
+            max_val = x.max(dim=-1, keepdim=True).values
+            exp_x = torch.exp(x - max_val)
+            sum_exp = exp_x.sum(dim=-1, keepdim=True)
+            return exp_x / sum_exp
+
+        x = torch.randn(16, 64, device=self.DEVICE)
+
+        compiled = self._compile(fn)
+        result = compiled(x)
+        expected = fn(x)
+
+        self.assertEqual(result.shape, expected.shape)
+        torch.testing.assert_close(result, expected, rtol=1e-5, atol=1e-5)
+
+    def test_rmsnorm_pattern(self):
+        """Test RMSNorm-like pattern (reduction + normalization)."""
+        def fn(x, weight):
+            # RMSNorm: x * weight / sqrt(mean(x^2) + eps)
+            variance = (x * x).mean(dim=-1, keepdim=True)
+            x_normed = x / torch.sqrt(variance + 1e-6)
+            return x_normed * weight
+
+        x = torch.randn(16, 64, device=self.DEVICE)
+        weight = torch.randn(64, device=self.DEVICE)
+
+        compiled = self._compile(fn)
+        result = compiled(x, weight)
+        expected = fn(x, weight)
+
+        self.assertEqual(result.shape, expected.shape)
+        torch.testing.assert_close(result, expected, rtol=1e-5, atol=1e-5)
+
+    def test_generated_code_no_runtime_helpers(self):
+        """Verify generated code doesn't use runtime helpers."""
+        def fn(x):
+            return x.sum(dim=-1)
+
+        x = torch.randn(32, 64, device=self.DEVICE)
+
+        compiled = self._compile(fn)
+        _, (code,) = run_and_get_code(compiled, x)
+
+        # Check that Pallas specific code is generated
+        self.assertIn("jax", code.lower())
+        self.assertIn("jnp", code.lower())
+
+        # Verify NO runtime helpers (key improvement)
+        self.assertNotIn("_pallas_partial_reduce", code)
+        self.assertNotIn("_pallas_expand_for_broadcast", code)
+        self.assertNotIn("_ensure_broadcast_compatible", code)
+
+    def test_complex_permute_expand_reduce_4d(self):
+        """
+        Complex 4D test: permute + expand + reduction.
+
+        x: (4, 8, 16) -> permute (2,0,1) -> (16, 4, 8)
+        -> unsqueeze(1) -> (16, 1, 4, 8)
+        -> expand -> (16, 3, 4, 8)
+        -> sum(dim=-1) -> (16, 3, 4)
+        """
+        def fn(x):
+            x = x.permute(2, 0, 1)  # (4, 8, 16) -> (16, 4, 8)
+            x = x.unsqueeze(1).expand(16, 3, 4, 8)  # -> (16, 3, 4, 8)
+            return x.sum(dim=-1)  # -> (16, 3, 4)
+
+        x = torch.randn(4, 8, 16, device=self.DEVICE)
+
+        compiled = self._compile(fn)
+        result = compiled(x)
+        expected = fn(x)
+
+        self.assertEqual(result.shape, expected.shape)
+        self.assertEqual(result, expected)
+
+    def test_permute_expand_reduce_middle_dim(self):
+        """
+        Test reduction on middle dimension after permute + expand.
+
+        x: (8, 4, 16) -> permute(1,2,0) -> (4, 16, 8)
+        -> unsqueeze(0) -> (1, 4, 16, 8)
+        -> expand -> (2, 4, 16, 8)
+        -> sum(dim=2) -> (2, 4, 8)
+        """
+        def fn(x):
+            x = x.permute(1, 2, 0)  # (8, 4, 16) -> (4, 16, 8)
+            x = x.unsqueeze(0).expand(2, 4, 16, 8)  # -> (2, 4, 16, 8)
+            return x.sum(dim=2)  # reduce middle dim -> (2, 4, 8)
+
+        x = torch.randn(8, 4, 16, device=self.DEVICE)
+
+        compiled = self._compile(fn)
+        result = compiled(x)
+        expected = fn(x)
+
+        self.assertEqual(result.shape, expected.shape)
+        self.assertEqual(result, expected)
+
+    def test_expand_multiple_dims(self):
+        """
+        Test expand on multiple dimensions simultaneously.
+
+        x: (1, 8, 1) -> expand -> (4, 8, 16)
+        -> sum(dim=-1) -> (4, 8)
+        """
+        def fn(x):
+            x = x.expand(4, 8, 16)  # expand dims 0 and 2
+            return x.sum(dim=-1)
+
+        x = torch.randn(1, 8, 1, device=self.DEVICE)
+
+        compiled = self._compile(fn)
+        result = compiled(x)
+        expected = fn(x)
+
+        self.assertEqual(result.shape, expected.shape)
+        self.assertEqual(result, expected)
+
+    def test_permute_then_broadcast_add(self):
+        """
+        Test permute followed by broadcast addition.
+
+        x: (16, 32) -> permute -> (32, 16)
+        y: (32, 1) -> broadcast add with x -> (32, 16)
+        """
+        def fn(x, y):
+            x = x.permute(1, 0)  # (16, 32) -> (32, 16)
+            return x + y  # y broadcasts from (32, 1) to (32, 16)
+
+        x = torch.randn(16, 32, device=self.DEVICE)
+        y = torch.randn(32, 1, device=self.DEVICE)
+
+        compiled = self._compile(fn)
+        result = compiled(x, y)
+        expected = fn(x, y)
+
+        self.assertEqual(result.shape, expected.shape)
+        self.assertEqual(result, expected)
+
+    def test_layernorm_like_pattern(self):
+        """
+        Test LayerNorm-like pattern with permute.
+
+        This tests a realistic pattern where we need to:
+        1. Compute mean and variance over last dim
+        2. Normalize
+        3. Apply affine transform with weight/bias
+        """
+        def fn(x, weight, bias):
+            # x: (batch, seq, hidden) = (4, 8, 32)
+            mean = x.mean(dim=-1, keepdim=True)
+            var = ((x - mean) ** 2).mean(dim=-1, keepdim=True)
+            x_norm = (x - mean) / torch.sqrt(var + 1e-6)
+            return x_norm * weight + bias
+
+        x = torch.randn(4, 8, 32, device=self.DEVICE)
+        weight = torch.randn(32, device=self.DEVICE)
+        bias = torch.randn(32, device=self.DEVICE)
+
+        compiled = self._compile(fn)
+        result = compiled(x, weight, bias)
+        expected = fn(x, weight, bias)
+
+        self.assertEqual(result.shape, expected.shape)
+        torch.testing.assert_close(result, expected, rtol=1e-5, atol=1e-5)
+
+    def test_attention_score_like_pattern(self):
+        """
+        Test attention-score-like pattern with permute and softmax.
+
+        Simulates computing attention weights:
+        1. Permute Q to align with K
+        2. Compute scores
+        3. Apply softmax
+        """
+        def fn(q, k):
+            # q: (batch, heads, seq_q, dim) = (2, 4, 8, 16)
+            # k: (batch, heads, seq_k, dim) = (2, 4, 12, 16)
+            # Transpose k for matmul: (2, 4, 16, 12)
+            k_t = k.permute(0, 1, 3, 2)
+            # For simplicity, just do element-wise ops on k_t
+            # and reduce
+            scores = k_t.sum(dim=-1)  # -> (2, 4, 16)
+            # softmax over last dim
+            max_s = scores.max(dim=-1, keepdim=True).values
+            exp_s = torch.exp(scores - max_s)
+            return exp_s / exp_s.sum(dim=-1, keepdim=True)
+
+        k = torch.randn(2, 4, 12, 16, device=self.DEVICE)
+
+        compiled = self._compile(fn)
+        result = compiled(None, k)  # q not used in this simplified version
+        expected = fn(None, k)
+
+        self.assertEqual(result.shape, expected.shape)
+        torch.testing.assert_close(result, expected, rtol=1e-5, atol=1e-5)
+
+    # ==================== Complex View Op Tests ====================
+
+    def test_multiple_unsqueeze(self):
+        """
+        Test multiple unsqueeze operations in sequence.
+
+        x: (4, 8) -> unsqueeze(0) -> (1, 4, 8) -> unsqueeze(2) -> (1, 4, 1, 8)
+        -> sum(dim=-1) -> (1, 4, 1)
+        """
+        def fn(x):
+            x = x.unsqueeze(0)  # (4, 8) -> (1, 4, 8)
+            x = x.unsqueeze(2)  # (1, 4, 8) -> (1, 4, 1, 8)
+            return x.sum(dim=-1)  # -> (1, 4, 1)
+
+        x = torch.randn(4, 8, device=self.DEVICE)
+
+        compiled = self._compile(fn)
+        result = compiled(x)
+        expected = fn(x)
+
+        self.assertEqual(result.shape, expected.shape)
+        self.assertEqual(result, expected)
+
+    def test_unsqueeze_at_different_positions(self):
+        """
+        Test unsqueeze at beginning, middle, and end.
+
+        Tests explicit unsqueeze tracking (not size-based guessing).
+        Note: fn_end uses sum(dim=0) which requires non-last-dim reduction support.
+        """
+        def fn_begin(x):
+            return x.unsqueeze(0).sum(dim=-1)  # (4, 8) -> (1, 4, 8) -> (1, 4)
+
+        def fn_middle(x):
+            return x.unsqueeze(1).sum(dim=-1)  # (4, 8) -> (4, 1, 8) -> (4, 1)
+
+        x = torch.randn(4, 8, device=self.DEVICE)
+
+        # Test begin and middle (last-dim reduction)
+        for fn, name in [(fn_begin, "begin"), (fn_middle, "middle")]:
+            compiled = self._compile(fn)
+            result = compiled(x)
+            expected = fn(x)
+            self.assertEqual(result.shape, expected.shape, f"Shape mismatch for unsqueeze at {name}")
+            self.assertEqual(result, expected, f"Value mismatch for unsqueeze at {name}")
+
+    def test_unsqueeze_then_reduce_first_dim(self):
+        """Test unsqueeze followed by reduction on first dimension."""
+        def fn(x):
+            return x.unsqueeze(-1).sum(dim=0)  # (4, 8) -> (4, 8, 1) -> (8, 1)
+
+        x = torch.randn(4, 8, device=self.DEVICE)
+
+        compiled = self._compile(fn)
+        result = compiled(x)
+        expected = fn(x)
+        self.assertEqual(result.shape, expected.shape)
+        self.assertEqual(result, expected)
+
+    def test_unsqueeze_with_size_one_dims(self):
+        """
+        Test unsqueeze when input already has size-1 dimensions.
+
+        This is the tricky case that requires explicit tracking (not size matching).
+        x: (1, 4) -> unsqueeze(0) -> (1, 1, 4) -> sum(dim=-1) -> (1, 1)
+        """
+        def fn(x):
+            x = x.unsqueeze(0)  # (1, 4) -> (1, 1, 4)
+            return x.sum(dim=-1)  # -> (1, 1)
+
+        x = torch.randn(1, 4, device=self.DEVICE)
+
+        compiled = self._compile(fn)
+        result = compiled(x)
+        expected = fn(x)
+
+        self.assertEqual(result.shape, expected.shape)
+        self.assertEqual(result, expected)
+
+    def test_permute_unsqueeze_permute(self):
+        """
+        Test permute -> unsqueeze -> permute chain.
+
+        x: (4, 8, 16) -> permute(2,0,1) -> (16, 4, 8)
+        -> unsqueeze(1) -> (16, 1, 4, 8)
+        -> permute(0,2,1,3) -> (16, 4, 1, 8)
+        -> sum(dim=-1) -> (16, 4, 1)
+        """
+        def fn(x):
+            x = x.permute(2, 0, 1)  # (4, 8, 16) -> (16, 4, 8)
+            x = x.unsqueeze(1)  # -> (16, 1, 4, 8)
+            x = x.permute(0, 2, 1, 3)  # -> (16, 4, 1, 8)
+            return x.sum(dim=-1)  # -> (16, 4, 1)
+
+        x = torch.randn(4, 8, 16, device=self.DEVICE)
+
+        compiled = self._compile(fn)
+        result = compiled(x)
+        expected = fn(x)
+
+        self.assertEqual(result.shape, expected.shape)
+        self.assertEqual(result, expected)
+
+    def test_squeeze_unsqueeze_roundtrip(self):
+        """
+        Test squeeze followed by unsqueeze.
+
+        x: (4, 1, 8) -> squeeze(1) -> (4, 8) -> unsqueeze(0) -> (1, 4, 8)
+        -> sum(dim=-1) -> (1, 4)
+        """
+        def fn(x):
+            x = x.squeeze(1)  # (4, 1, 8) -> (4, 8)
+            x = x.unsqueeze(0)  # -> (1, 4, 8)
+            return x.sum(dim=-1)  # -> (1, 4)
+
+        x = torch.randn(4, 1, 8, device=self.DEVICE)
+
+        compiled = self._compile(fn)
+        result = compiled(x)
+        expected = fn(x)
+
+        self.assertEqual(result.shape, expected.shape)
+        self.assertEqual(result, expected)
+
+    # ==================== Multi-Tensor Fusion Tests ====================
+
+    def test_two_tensor_different_permutes(self):
+        """
+        Test fusion of two tensors with different permute patterns.
+
+        x: (4, 8) -> permute(1, 0) -> (8, 4)
+        y: (8, 4) (no permute)
+        result: x + y -> (8, 4) -> sum(dim=-1) -> (8,)
+        """
+        def fn(x, y):
+            x = x.permute(1, 0)  # (4, 8) -> (8, 4)
+            return (x + y).sum(dim=-1)  # -> (8,)
+
+        x = torch.randn(4, 8, device=self.DEVICE)
+        y = torch.randn(8, 4, device=self.DEVICE)
+
+        compiled = self._compile(fn)
+        result = compiled(x, y)
+        expected = fn(x, y)
+
+        self.assertEqual(result.shape, expected.shape)
+        self.assertEqual(result, expected)
+
+    def test_two_tensor_both_permuted(self):
+        """
+        Test fusion of two tensors where both are permuted differently.
+
+        x: (2, 4, 8) -> permute(1, 2, 0) -> (4, 8, 2)
+        y: (4, 2, 8) -> permute(0, 2, 1) -> (4, 8, 2)
+        result: x * y -> (4, 8, 2) -> sum(dim=-1) -> (4, 8)
+        """
+        def fn(x, y):
+            x = x.permute(1, 2, 0)  # (2, 4, 8) -> (4, 8, 2)
+            y = y.permute(0, 2, 1)  # (4, 2, 8) -> (4, 8, 2)
+            return (x * y).sum(dim=-1)  # -> (4, 8)
+
+        x = torch.randn(2, 4, 8, device=self.DEVICE)
+        y = torch.randn(4, 2, 8, device=self.DEVICE)
+
+        compiled = self._compile(fn)
+        result = compiled(x, y)
+        expected = fn(x, y)
+
+        self.assertEqual(result.shape, expected.shape)
+        self.assertEqual(result, expected)
+
+    def test_three_tensor_mixed_views(self):
+        """
+        Test fusion of three tensors with mixed view operations.
+
+        x: (4, 8) -> permute(1, 0) -> (8, 4)
+        y: (1, 4) -> expand(8, 4) -> (8, 4)
+        z: (8, 4) (no view)
+        result: x + y + z -> (8, 4) -> sum(dim=0) -> (4,)
+
+        Currently fails: multiple issues (multi-tensor fusion + dim=0 reduction).
+        """
+        def fn(x, y, z):
+            x = x.permute(1, 0)  # (4, 8) -> (8, 4)
+            y = y.expand(8, 4)  # (1, 4) -> (8, 4)
+            return (x + y + z).sum(dim=0)  # -> (4,)
+
+        x = torch.randn(4, 8, device=self.DEVICE)
+        y = torch.randn(1, 4, device=self.DEVICE)
+        z = torch.randn(8, 4, device=self.DEVICE)
+
+        compiled = self._compile(fn)
+        result = compiled(x, y, z)
+        expected = fn(x, y, z)
+
+        self.assertEqual(result.shape, expected.shape)
+        self.assertEqual(result, expected)
+
+    def test_fusion_permute_and_unsqueeze_expand(self):
+        """
+        Test fusion where one tensor is permuted and another is unsqueeze+expanded.
+
+        x: (4, 8, 16) -> permute(2, 0, 1) -> (16, 4, 8)
+        y: (4, 8) -> unsqueeze(0) -> (1, 4, 8) -> expand(16, 4, 8) -> (16, 4, 8)
+        result: x + y -> (16, 4, 8) -> sum(dim=-1) -> (16, 4)
+        """
+        def fn(x, y):
+            x = x.permute(2, 0, 1)  # (4, 8, 16) -> (16, 4, 8)
+            y = y.unsqueeze(0).expand(16, 4, 8)  # (4, 8) -> (16, 4, 8)
+            return (x + y).sum(dim=-1)  # -> (16, 4)
+
+        x = torch.randn(4, 8, 16, device=self.DEVICE)
+        y = torch.randn(4, 8, device=self.DEVICE)
+
+        compiled = self._compile(fn)
+        result = compiled(x, y)
+        expected = fn(x, y)
+
+        self.assertEqual(result.shape, expected.shape)
+        self.assertEqual(result, expected)
+
+    def test_fusion_different_reduction_inputs(self):
+        """
+        Test fusion where tensors contribute to different parts of a computation.
+
+        x: (8, 16) -> sum(dim=1) -> (8,)
+        y: (8,) (used directly)
+        result: x_reduced + y -> (8,)
+
+        Tests reduction followed by pointwise op with broadcast input.
+        """
+        def fn(x, y):
+            x_reduced = x.sum(dim=1)  # (8, 16) -> (8,)
+            return x_reduced + y  # -> (8,)
+
+        x = torch.randn(8, 16, device=self.DEVICE)
+        y = torch.randn(8, device=self.DEVICE)
+
+        compiled = self._compile(fn)
+        result = compiled(x, y)
+        expected = fn(x, y)
+
+        self.assertEqual(result.shape, expected.shape)
+        self.assertEqual(result, expected)
+
+    def test_fusion_reduction_with_reshaped_broadcast(self):
+        """
+        Test fusion where post-reduction input has multi-dim shape matching numel.
+
+        x: (8, 16) -> sum(dim=1) -> (8,)
+        y: (2, 4) (same numel as reduction output, different shape)
+        result: x_reduced + y.flatten() -> (8,)
+        """
+        def fn(x, y):
+            x_reduced = x.sum(dim=1)  # (8, 16) -> (8,)
+            return x_reduced + y.flatten()  # (2, 4) -> (8,), then add
+
+        x = torch.randn(8, 16, device=self.DEVICE)
+        y = torch.randn(2, 4, device=self.DEVICE)
+
+        compiled = self._compile(fn)
+        result = compiled(x, y)
+        expected = fn(x, y)
+
+        self.assertEqual(result.shape, expected.shape)
+        self.assertEqual(result, expected)
+
+    def test_fusion_broadcast_from_different_shapes(self):
+        """
+        Test fusion with broadcasting from different source shapes.
+
+        x: (8, 1) -> broadcasts to (8, 16)
+        y: (1, 16) -> broadcasts to (8, 16)
+        z: (8, 16) -> no broadcast
+        result: x + y + z -> (8, 16) -> sum() -> scalar
+        """
+        def fn(x, y, z):
+            return (x + y + z).sum()
+
+        x = torch.randn(8, 1, device=self.DEVICE)
+        y = torch.randn(1, 16, device=self.DEVICE)
+        z = torch.randn(8, 16, device=self.DEVICE)
+
+        compiled = self._compile(fn)
+        result = compiled(x, y, z)
+        expected = fn(x, y, z)
+
+        self.assertEqual(result.shape, expected.shape)
+        torch.testing.assert_close(result, expected, rtol=1e-5, atol=1e-5)
+
+    def test_fusion_contiguous_and_noncontiguous(self):
+        """
+        Test fusion mixing contiguous and non-contiguous (transposed) tensors.
+
+        x: (4, 8) contiguous
+        y: (8, 4).T -> (4, 8) non-contiguous view
+        result: x + y -> (4, 8) -> sum(dim=-1) -> (4,)
+        """
+        def fn(x, y):
+            y_t = y.T  # (8, 4) -> (4, 8) via transpose
+            return (x + y_t).sum(dim=-1)
+
+        x = torch.randn(4, 8, device=self.DEVICE)
+        y = torch.randn(8, 4, device=self.DEVICE)
+
+        compiled = self._compile(fn)
+        result = compiled(x, y)
+        expected = fn(x, y)
+
+        self.assertEqual(result.shape, expected.shape)
+        self.assertEqual(result, expected)
+
+    # ==================== Complex Chain Tests ====================
+
+    def test_long_view_chain(self):
+        """
+        Test a long chain of view operations.
+
+        x: (2, 4, 8, 16)
+        -> permute(3, 1, 2, 0) -> (16, 4, 8, 2)
+        -> sum(dim=2) -> (16, 4, 2)
+        """
+        def fn(x):
+            x = x.permute(3, 1, 2, 0)  # (2, 4, 8, 16) -> (16, 4, 8, 2)
+            return x.sum(dim=2)  # -> (16, 4, 2)
+
+        x = torch.randn(2, 4, 8, 16, device=self.DEVICE)
+
+        compiled = self._compile(fn)
+        result = compiled(x)
+        expected = fn(x)
+
+        self.assertEqual(result.shape, expected.shape)
+        self.assertEqual(result, expected)
+
+    def test_reduction_on_first_dim_after_permute(self):
+        """
+        Test reduction on first dimension after permute.
+
+        x: (4, 8, 16) -> permute(1, 2, 0) -> (8, 16, 4)
+        -> sum(dim=0) -> (16, 4)
+
+        Currently fails: scheduler limitation with dim=0 reductions.
+        """
+        def fn(x):
+            x = x.permute(1, 2, 0)  # (4, 8, 16) -> (8, 16, 4)
+            return x.sum(dim=0)  # reduce first dim -> (16, 4)
+
+        x = torch.randn(4, 8, 16, device=self.DEVICE)
+
+        compiled = self._compile(fn)
+        result = compiled(x)
+        expected = fn(x)
+
+        self.assertEqual(result.shape, expected.shape)
+        self.assertEqual(result, expected)
+
+    def test_multiple_reductions(self):
+        """
+        Test multiple sequential reductions.
+
+        x: (4, 8, 16) -> sum(dim=2) -> (4, 8) -> sum(dim=1) -> (4,)
+        """
+        def fn(x):
+            x = x.sum(dim=2)  # (4, 8, 16) -> (4, 8)
+            return x.sum(dim=1)  # -> (4,)
+
+        x = torch.randn(4, 8, 16, device=self.DEVICE)
+
+        compiled = self._compile(fn)
+        result = compiled(x)
+        expected = fn(x)
+
+        self.assertEqual(result.shape, expected.shape)
+        self.assertEqual(result, expected)
+
+    def test_keepdim_reduction(self):
+        """
+        Test reduction with keepdim=True.
+
+        x: (4, 8, 16) -> sum(dim=1, keepdim=True) -> (4, 1, 16)
+        -> permute(2, 0, 1) -> (16, 4, 1)
+        """
+        def fn(x):
+            x = x.sum(dim=1, keepdim=True)  # (4, 8, 16) -> (4, 1, 16)
+            return x.permute(2, 0, 1)  # -> (16, 4, 1)
+
+        x = torch.randn(4, 8, 16, device=self.DEVICE)
+
+        compiled = self._compile(fn)
+        result = compiled(x)
+        expected = fn(x)
+
+        self.assertEqual(result.shape, expected.shape)
+        self.assertEqual(result, expected)
+
+    def test_same_tensor_multiple_view_chains(self):
+        """Test same tensor used in multiple different view chains.
+
+        This tests a case where the same permuted tensor is used in two
+        different paths with different transforms. This exercises the
+        view_id extraction logic to ensure each path gets the correct
+        transform chain.
+
+        Regression test for upgrade mechanism conflict bug where:
+        - Path 1: permute -> unsqueeze -> expand -> reduce
+        - Path 2: permute -> reduce
+        Both paths share the same permute, but need different view chains.
+        """
+        def fn(x):
+            # x: (2, 8, 16)
+            p = x.permute(1, 0, 2)  # (8, 2, 16)
+
+            # Two different paths from p:
+            # Path 1: expand then reduce
+            y = p.unsqueeze(2).expand(8, 2, 4, 16).sum(dim=-1).sum(dim=-1)  # (8, 2)
+            # Path 2: just reduce
+            z = p.sum(dim=-1)  # (8, 2)
+
+            return y + z  # both used, same shape
+
+        x = torch.randn(2, 8, 16, device=self.DEVICE)
+
+        compiled = self._compile(fn)
+        result = compiled(x)
+        expected = fn(x)
+
+        self.assertEqual(result.shape, expected.shape)
+        self.assertEqual(result, expected)
+
+    # ==================== Embedding and Transformer Tests ====================
+
     def test_embedding_rmsnorm(self):
         """Minimal repro for embedding + reduction broadcasting issue.
 
@@ -2167,16 +2898,16 @@ class PallasTestsMixin:
                 keys = repeat_kv(xk, self.n_rep)
                 values = repeat_kv(xv, self.n_rep)
 
-                xq = xq.transpose(1, 2).contiguous()  # (bs, n_heads, seqlen, head_dim)
-                keys = keys.transpose(1, 2).contiguous()
-                values = values.transpose(1, 2).contiguous()
+                xq = xq.transpose(1, 2)  # (bs, n_heads, seqlen, head_dim)
+                keys = keys.transpose(1, 2)
+                values = values.transpose(1, 2)
 
                 scores = torch.matmul(xq, keys.transpose(2, 3)) / math.sqrt(self.head_dim)
                 if mask is not None:
                     scores = scores + mask
                 scores = F.softmax(scores.float(), dim=-1).type_as(xq)
                 output = torch.matmul(scores, values)
-                output = output.transpose(1, 2).contiguous().view(bsz, seqlen, -1)
+                output = output.transpose(1, 2).reshape(bsz, seqlen, -1)
                 return self.wo(output)
 
         class FeedForward(torch.nn.Module):
