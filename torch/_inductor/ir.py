@@ -659,6 +659,187 @@ class PallasViewTracker:
         finally:
             PallasViewTracker.set_outer_view_id(old_view_id)
 
+    @staticmethod
+    def propagate_view_id_to_var(var, overwrite: bool = True) -> None:
+        """Propagate outer_view_id context to var.index_source_view_id.
+
+        Consolidates the repeated try/except pattern used in common.py and
+        index_propagation.py for setting index_source_view_id on CSE variables.
+
+        Args:
+            var: Variable to set index_source_view_id on
+            overwrite: If False, only set if attribute not already present
+        """
+        if not PallasViewTracker.is_active():
+            return
+        outer_view_id = PallasViewTracker.get_outer_view_id()
+        if outer_view_id is None:
+            return
+        if not overwrite and hasattr(var, 'index_source_view_id') and var.index_source_view_id is not None:
+            return
+        try:
+            var.index_source_view_id = outer_view_id
+        except (AttributeError, TypeError):
+            pass
+
+    @staticmethod
+    def strip_markers(expr: "Expr") -> "Expr":
+        """Replace PallasStride/PALLAS_EXPAND_STRIDE markers with their numeric values.
+
+        Consolidates the repeated pattern in sizevars.py for stripping Pallas
+        markers from expressions before stride/offset analysis.
+
+        Args:
+            expr: SymPy expression potentially containing PallasStride markers
+
+        Returns:
+            Expression with all Pallas markers replaced by their stride values
+        """
+        if not expr.has(PallasStride) and PALLAS_EXPAND_STRIDE not in expr.free_symbols:
+            return expr
+        expr = expr.subs(PALLAS_EXPAND_STRIDE, 0)
+        for ps in list(expr.atoms(PallasStride)):
+            expr = expr.subs(ps, ps.args[0])  # args[0] is stride_value
+        return expr
+
+    @staticmethod
+    def register_index_source(
+        shape: list,
+        iter_dims: Optional[list] = None,
+        indexed_dim: Optional[int] = None,
+        broadcast_dims: Optional[list] = None,
+        source_node: Optional["IRNode"] = None,
+        include_self_ref: bool = False,
+        output_shape: Optional[list] = None,
+    ) -> int:
+        """Register an index_source entry and return its view_id.
+
+        Consolidates the repeated pattern in lowering.py for creating index_source
+        entries that track index tensor metadata for gather operations.
+
+        Args:
+            shape: Shape of the index tensor
+            iter_dims: Which iteration dimensions index into this tensor
+            indexed_dim: Which dim of the source tensor this indexes
+            broadcast_dims: Dims with size 1 (broadcast, don't index)
+            source_node: Optional IRNode to inherit view chain from
+            include_self_ref: If True, include view_id in transform dict for lookup
+            output_shape: Output shape for the entry (defaults to None)
+
+        Returns:
+            The new view_id for this index_source entry
+        """
+        view_id = PallasViewTracker.next_view_id()
+
+        transform: dict = {"op": "index_source", "shape": list(shape)}
+        if iter_dims is not None:
+            transform["iter_dims"] = iter_dims
+        if indexed_dim is not None:
+            transform["indexed_dim"] = indexed_dim
+        if broadcast_dims is not None:
+            transform["broadcast_dims"] = broadcast_dims
+        if include_self_ref:
+            transform["view_id"] = view_id
+
+        source_view_id = PallasViewTracker.find_inner_view_id(source_node) if source_node else None
+
+        PallasViewTracker.store_entry(view_id, {
+            "transforms": [transform],
+            "source_view_id": source_view_id,
+            "output_shape": output_shape,
+        })
+        return view_id
+
+    @staticmethod
+    def unwrap_tensor(tensor):
+        """Unwrap TensorBox/StorageBox layers to get underlying IR node.
+
+        Consolidates the repeated pattern for unwrapping tensor wrappers
+        before registry lookups.
+
+        Args:
+            tensor: A TensorBox, StorageBox, or IR node
+
+        Returns:
+            The innermost data node, or None if unwrapping fails
+        """
+        if tensor is None:
+            return None
+        try:
+            while hasattr(tensor, 'data'):
+                tensor = tensor.data
+            return tensor
+        except (AttributeError, TypeError):
+            return None
+
+    @staticmethod
+    def wrap_loader(inner_loader, view_id):
+        """Wrap a loader to set view_id context during execution.
+
+        Consolidates the repeated pattern for creating simple wrapped loaders
+        that set PallasViewTracker context.
+
+        Args:
+            inner_loader: The original loader function
+            view_id: The view_id to set as context
+
+        Returns:
+            Wrapped loader with pallas_view_id attribute set
+        """
+        def wrapped(idx):
+            with PallasViewTracker.context(view_id):
+                return inner_loader(idx)
+        wrapped.pallas_view_id = view_id
+        return wrapped
+
+    @staticmethod
+    def load_and_indirect_index(loader, idx, size, check=True, wrap_neg=True):
+        """Load index tensor and call indirect_indexing with proper context.
+
+        Consolidates the pattern of calling a loader and then indirect_indexing,
+        ensuring both run with the same view_id context.
+
+        Args:
+            loader: Index loader function (may have .pallas_view_id attribute)
+            idx: Index tuple to pass to loader
+            size: Size for indirect_indexing bounds check
+            check: Whether to check bounds in indirect_indexing
+            wrap_neg: Whether to wrap negative indices
+
+        Returns:
+            Result of ops.indirect_indexing
+        """
+        view_id = getattr(loader, 'pallas_view_id', None)
+        if view_id is not None:
+            with PallasViewTracker.context(view_id):
+                result = loader(idx)
+                return ops.indirect_indexing(result, size, check=check, wrap_neg=wrap_neg)
+        result = loader(idx)
+        return ops.indirect_indexing(result, size, check=check, wrap_neg=wrap_neg)
+
+    @staticmethod
+    def create_flip_entry(dims: list, output_shape: list, source_view_id=None) -> int:
+        """Create a flip transform entry and return its view_id.
+
+        Consolidates the repeated pattern for creating flip entries in
+        index_impl_helper() and rev().
+
+        Args:
+            dims: List of dimensions being flipped
+            output_shape: Shape of the output (unchanged by flip)
+            source_view_id: Optional view_id of prior transforms in chain
+
+        Returns:
+            The new view_id for this flip entry
+        """
+        view_id = PallasViewTracker.next_view_id()
+        PallasViewTracker.store_entry(view_id, {
+            "transforms": [{"op": "flip", "dims": [int(d) for d in dims]}],
+            "source_view_id": source_view_id,
+            "output_shape": list(output_shape),
+        })
+        return view_id
+
     # === Loader/Indexer Helpers ===
     @staticmethod
     def make_aware_loader(

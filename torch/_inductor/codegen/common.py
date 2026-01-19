@@ -1990,6 +1990,8 @@ class CSE(Generic[CSEVariableType, AugmentedKeyT]):
         dtype: Optional[torch.dtype] = None,
         shape: BlockShapeType = None,
     ) -> CSEVariableType:
+        from ..ir import PallasViewTracker  # Local import to avoid circular dependency
+
         if isinstance(expr, OpsValue):
             expr = expr.value
 
@@ -2001,13 +2003,7 @@ class CSE(Generic[CSEVariableType, AugmentedKeyT]):
             expr.bounds = expr.bounds.tighten(bounds)
             expr.use_count += 1
             # PALLAS: Propagate view_id for CSEVariable inputs used in index context
-            try:
-                from ..ir import PallasViewTracker
-                outer_view_id = PallasViewTracker.get_outer_view_id()
-                if outer_view_id is not None and not hasattr(expr, 'index_source_view_id'):
-                    expr.index_source_view_id = outer_view_id
-            except (ImportError, AttributeError):
-                pass
+            PallasViewTracker.propagate_view_id_to_var(expr, overwrite=False)
             return cast(CSEVariableType, expr)
         elif isinstance(expr, IndentedBuffer):
             cache_key = expr.getvalue()
@@ -2025,15 +2021,7 @@ class CSE(Generic[CSEVariableType, AugmentedKeyT]):
             var = self.newvar(bounds, dtype, shape)
             self.put(cache_key, var)
             # PALLAS: Propagate index_source_view_id from context if set
-            # This enables computed indices (from Pointwise ops) to be tracked
-            # The context is set by wrap_index_loader in lowering.py during index computation
-            try:
-                from ..ir import PallasViewTracker
-                outer_view_id = PallasViewTracker.get_outer_view_id()
-                if outer_view_id is not None:
-                    var.index_source_view_id = outer_view_id
-            except (ImportError, AttributeError):
-                pass  # Not in Pallas context or function not available
+            PallasViewTracker.propagate_view_id_to_var(var)
             if write:
                 if V.kernel.current_node:
                     V.kernel.current_node.codegen_originating_info(
@@ -2071,16 +2059,8 @@ class CSE(Generic[CSEVariableType, AugmentedKeyT]):
         else:
             var.bounds = var.bounds.tighten(bounds)
             var.use_count += 1
-            # PALLAS: Also propagate view_id for cached variables
-            # This handles the case where a variable was created earlier without context,
-            # but is now being used inside wrap_index_loader context
-            try:
-                from ..ir import PallasViewTracker
-                outer_view_id = PallasViewTracker.get_outer_view_id()
-                if outer_view_id is not None and not hasattr(var, 'index_source_view_id'):
-                    var.index_source_view_id = outer_view_id
-            except (ImportError, AttributeError):
-                pass
+            # PALLAS: Propagate view_id for cached variables used in index context
+            PallasViewTracker.propagate_view_id_to_var(var, overwrite=False)
 
         return var
 
@@ -2794,23 +2774,15 @@ class CSEProxy(DefaultHandler):
         check: bool = True,
         wrap_neg: bool = True,
     ) -> sympy.Symbol:
+        from ..ir import PallasViewTracker  # Local import to avoid circular dependency
+
         if isinstance(size, int):
             size = sympy.Integer(size)
         assert isinstance(size, sympy.Expr), (type(size), size)
         # Skip CSE since this doesn't return an expression
 
-        # PALLAS: If var doesn't have index_source_view_id but context is set,
-        # propagate the view_id from context. This handles the case where var
-        # (e.g., tmp3) was created by earlier FX nodes before the context was set
-        # inside bind_set_indirect_shim's set_indirect function.
-        if not hasattr(var, 'index_source_view_id') or getattr(var, 'index_source_view_id', None) is None:
-            try:
-                from ..ir import PallasViewTracker
-                context_view_id = PallasViewTracker.get_outer_view_id()
-                if context_view_id is not None:
-                    var.index_source_view_id = context_view_id
-            except (ImportError, AttributeError):
-                pass
+        # PALLAS: Propagate view_id from context if var doesn't have one yet
+        PallasViewTracker.propagate_view_id_to_var(var, overwrite=False)
 
         if var.bounds.lower < 0:
             if wrap_neg:

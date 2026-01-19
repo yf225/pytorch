@@ -249,20 +249,6 @@ class PallasKernel(SIMDKernel):
     overrides = PallasKernelOverrides  # type: ignore[assignment]
     kexpr: Callable[[sympy.Expr], str] = pallas_pexpr  # Use Pallas expression printer
 
-    # Map PyTorch dtypes to JAX/Pallas dtype strings
-    DTYPE_TO_JAX = {
-        torch.float32: "jnp.float32",
-        torch.float64: "jnp.float64",
-        torch.float16: "jnp.float16",
-        torch.bfloat16: "jnp.bfloat16",
-        torch.int32: "jnp.int32",
-        torch.int64: "jnp.int64",
-        torch.int16: "jnp.int16",
-        torch.int8: "jnp.int8",
-        torch.uint8: "jnp.uint8",
-        torch.bool: "jnp.bool_",
-    }
-
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.stores: list[tuple[str, str]] = []
@@ -286,8 +272,8 @@ class PallasKernel(SIMDKernel):
 
     def dtype_to_str(self, dtype: torch.dtype) -> str:
         """Convert PyTorch dtype to JAX/Pallas dtype string."""
-        if dtype in self.DTYPE_TO_JAX:
-            return self.DTYPE_TO_JAX[dtype]
+        if dtype in _PALLAS_DTYPE_MAP:
+            return _PALLAS_DTYPE_MAP[dtype]
         raise NotImplementedError(f"Unsupported dtype for Pallas: {dtype}")
 
     def _safe_int(self, val):
@@ -380,6 +366,56 @@ class PallasKernel(SIMDKernel):
         expr = self._get_rnumel_expr()
         val = self._safe_int(expr)
         return max(val, 1) if val is not None else None
+
+    def _get_numel_rnumel_info(self) -> dict:
+        """Get cached numel/rnumel information for codegen.
+
+        Returns dict with keys:
+            numel_expr: sympy expression for non-reduction dims product
+            rnumel_expr: sympy expression for reduction dims product
+            numel_val: concrete int or None if symbolic
+            rnumel_val: concrete int or None if symbolic
+            numel_str: string for codegen (via rename_indexing + kexpr)
+            rnumel_str: string for codegen (via rename_indexing + kexpr)
+        """
+        if hasattr(self, '_numel_rnumel_cache'):
+            return self._numel_rnumel_cache
+
+        numel_expr = self._get_numel_expr()
+        rnumel_expr = self._get_rnumel_expr()
+
+        numel_renamed = self.rename_indexing(numel_expr)
+        rnumel_renamed = self.rename_indexing(rnumel_expr)
+
+        self._numel_rnumel_cache = {
+            'numel_expr': numel_expr,
+            'rnumel_expr': rnumel_expr,
+            'numel_val': self._safe_int(numel_expr),
+            'rnumel_val': self._safe_int(rnumel_expr),
+            'numel_str': self.kexpr(numel_renamed),
+            'rnumel_str': self.kexpr(rnumel_renamed),
+        }
+        return self._numel_rnumel_cache
+
+    def _get_shape_str_for_reshape(self, inside_reduction: Optional[bool] = None) -> str:
+        """Get consistent shape string for reshape operations.
+
+        Args:
+            inside_reduction: Override self.inside_reduction if provided
+
+        Returns:
+            Shape string like "numel_str, rnumel_str" or "numel_str"
+        """
+        info = self._get_numel_rnumel_info()
+        in_red = inside_reduction if inside_reduction is not None else self.inside_reduction
+        rnumel_val = info['rnumel_val']
+
+        if rnumel_val is None or rnumel_val > 1:
+            if in_red:
+                return f"{info['numel_str']}, {info['rnumel_str']}"
+            else:
+                return f"{info['numel_str']}, 1"
+        return info['numel_str']
 
     def _get_buffer_shape(self, name: str):
         """Get buffer shape. May contain None for symbolic dimensions."""
@@ -1782,6 +1818,119 @@ class PallasKernel(SIMDKernel):
         # Permutation: non-reduction positions first, then reduction positions
         return perm
 
+    def _apply_transforms_core(
+        self,
+        var: str,
+        name: str,
+        chain: list[dict],
+        use_kexpr: bool = False,
+        track_dim_map: bool = False,
+    ) -> tuple[str, list, Optional[list[Optional[int]]]]:
+        """
+        Core transform application logic used by multiple methods.
+
+        Args:
+            var: Input variable name
+            name: Buffer name
+            chain: List of transform dicts
+            use_kexpr: If True, use rename_indexing/kexpr for sympy support
+            track_dim_map: If True, track dimension mapping
+
+        Returns:
+            (expr, current_shape, dim_map or None)
+        """
+        buf_shape = self._get_buffer_shape(name)
+
+        def shape_to_str(shape_list):
+            if use_kexpr:
+                parts = []
+                for s in shape_list:
+                    if isinstance(s, sympy.Basic):
+                        renamed = self.rename_indexing(s)
+                        parts.append(self.kexpr(renamed))
+                    else:
+                        parts.append(str(s))
+                return ", ".join(parts)
+            return ", ".join(str(s) for s in shape_list)
+
+        expr = f"{var}[...]"
+        current_shape = list(buf_shape)
+        dim_map: Optional[list[Optional[int]]] = list(range(len(buf_shape))) if track_dim_map else None
+
+        for transform in chain:
+            op = transform["op"]
+
+            if op == "permute":
+                dims = transform["dims"]
+                perm_str = ", ".join(str(d) for d in dims)
+                expr = f"jnp.transpose({expr}, ({perm_str},))"
+                current_shape = [current_shape[d] for d in dims]
+                if dim_map is not None:
+                    dim_map = [dim_map[d] for d in dims]
+
+            elif op == "unsqueeze":
+                dim = transform["dim"]
+                current_shape.insert(dim, 1)
+                if dim_map is not None:
+                    dim_map.insert(dim, None)
+                expr = f"{expr}.reshape({shape_to_str(current_shape)})"
+
+            elif op == "reshape":
+                to_shape = transform["to_shape"]
+                expr = f"{expr}.reshape({shape_to_str(to_shape)})"
+                current_shape = list(to_shape)
+                if dim_map is not None:
+                    dim_map = list(range(len(to_shape)))
+
+            elif op == "expand":
+                expand_dims = transform.get("expand_dims", [])
+                target_shape = transform.get("target_shape", [])
+                intermediate_shape = list(target_shape)
+                for ed in expand_dims:
+                    intermediate_shape[ed] = 1
+                if len(current_shape) != len(intermediate_shape):
+                    expr = f"{expr}.reshape({shape_to_str(intermediate_shape)})"
+                    current_shape = list(intermediate_shape)
+                    if dim_map is not None:
+                        for ed in sorted(expand_dims, reverse=True):
+                            dim_map.insert(ed, None)
+                expr = f"jnp.broadcast_to({expr}, ({shape_to_str(target_shape)},))"
+                current_shape = list(target_shape)
+
+            elif op == "slice":
+                dim = transform["dim"]
+                start = transform.get("start", 0)
+                end = transform.get("end", current_shape[dim])
+                step = transform.get("step", 1)
+                slices = []
+                for i in range(len(current_shape)):
+                    if i == dim:
+                        slices.append(f"{start}:{end}" if step == 1 else f"{start}:{end}:{step}")
+                    else:
+                        slices.append(":")
+                expr = f"{expr}[{', '.join(slices)}]"
+                current_shape[dim] = (end - start + step - 1) // step
+
+            elif op == "flip":
+                dims = transform["dims"]
+                if len(dims) == 1:
+                    expr = f"jnp.flip({expr}, axis={dims[0]})"
+                else:
+                    expr = f"jnp.flip({expr}, axis=({', '.join(str(d) for d in dims)},))"
+
+            elif op == "squeeze":
+                dim = transform["dim"]
+                if dim < len(current_shape):
+                    current_shape.pop(dim)
+                    if dim_map is not None and dim < len(dim_map):
+                        dim_map.pop(dim)
+                    expr = f"jnp.squeeze({expr}, axis={dim})"
+
+            elif op in ("index_source", "gather_indices", "unfold"):
+                pass  # Skip markers
+
+        return expr, current_shape, dim_map
+
     def _apply_view_chain_transforms(
         self,
         var: str,
@@ -1796,101 +1945,8 @@ class PallasKernel(SIMDKernel):
 
         Unlike _build_load_from_view_chain, this does NOT do final reshape to iteration space.
         """
-        buf_shape = self._get_buffer_shape(name)
-
-        # Helper to convert shape dim (possibly symbolic) to kernel expression
-        def dim_to_kexpr(s):
-            if isinstance(s, sympy.Basic):
-                renamed = self.rename_indexing(s)
-                return self.kexpr(renamed)
-            return str(s)
-
-        def shape_to_str(shape_list):
-            return ", ".join(dim_to_kexpr(s) for s in shape_list)
-
-        # Build expression by applying transforms step by step
-        expr = f"{var}[...]"
-        current_shape = list(buf_shape)
-
-        for transform in chain:
-            op = transform["op"]
-
-            if op == "permute":
-                dims = transform["dims"]
-                perm_str = ", ".join(str(d) for d in dims)
-                expr = f"jnp.transpose({expr}, ({perm_str},))"
-                current_shape = [current_shape[d] for d in dims]
-
-            elif op == "unsqueeze":
-                dim = transform["dim"]
-                # Insert 1 at position
-                current_shape.insert(dim, 1)
-                expr = f"{expr}.reshape({shape_to_str(current_shape)})"
-
-            elif op == "reshape":
-                to_shape = transform["to_shape"]
-                expr = f"{expr}.reshape({shape_to_str(to_shape)})"
-                current_shape = list(to_shape)
-
-            elif op == "expand":
-                expand_dims = transform.get("expand_dims", [])
-                target_shape = transform.get("target_shape", [])
-
-                # Reshape to intermediate if needed
-                intermediate_shape = list(target_shape)
-                for ed in expand_dims:
-                    intermediate_shape[ed] = 1
-
-                if len(current_shape) != len(intermediate_shape):
-                    expr = f"{expr}.reshape({shape_to_str(intermediate_shape)})"
-                    current_shape = list(intermediate_shape)
-
-                # Broadcast
-                expr = f"jnp.broadcast_to({expr}, ({shape_to_str(target_shape)},))"
-                current_shape = list(target_shape)
-
-            elif op == "slice":
-                dim = transform["dim"]
-                start = transform.get("start", 0)
-                end = transform.get("end", current_shape[dim])
-                step = transform.get("step", 1)
-
-                # Build slice expression
-                slices = []
-                for i in range(len(current_shape)):
-                    if i == dim:
-                        if step == 1:
-                            slices.append(f"{start}:{end}")
-                        else:
-                            slices.append(f"{start}:{end}:{step}")
-                    else:
-                        slices.append(":")
-                slice_str = ", ".join(slices)
-                expr = f"{expr}[{slice_str}]"
-
-                # Update shape
-                new_size = (end - start + step - 1) // step
-                current_shape[dim] = new_size
-
-            elif op == "flip":
-                dims = transform["dims"]
-                dims_str = ", ".join(str(d) for d in dims)
-                if len(dims) == 1:
-                    expr = f"jnp.flip({expr}, axis={dims[0]})"
-                else:
-                    expr = f"jnp.flip({expr}, axis=({dims_str},))"
-
-            elif op == "squeeze":
-                dim = transform["dim"]
-                if dim < len(current_shape):
-                    current_shape.pop(dim)
-                    expr = f"jnp.squeeze({expr}, axis={dim})"
-
-            # Skip index_source, gather_indices, unfold - these are markers not transforms
-            elif op in ("index_source", "gather_indices", "unfold"):
-                pass
-
-        return expr, current_shape
+        expr, shape, _ = self._apply_transforms_core(var, name, chain, use_kexpr=True)
+        return expr, shape
 
     def _build_load_from_view_chain(
         self,
@@ -1917,115 +1973,10 @@ class PallasKernel(SIMDKernel):
             numel_expr: Sympy expression for numel (for dynamic shapes)
             rnumel_expr: Sympy expression for rnumel (for dynamic shapes)
         """
-        buf_shape = self._get_buffer_shape(name)
-
-        # Build expression by applying transforms step by step
-        expr = f"{var}[...]"
-        current_shape = list(buf_shape)
-        dim_map = list(range(len(buf_shape)))  # tracks which buf dim is at each position
-
-        for transform in chain:
-            op = transform["op"]
-
-            if op == "permute":
-                dims = transform["dims"]
-                perm_str = ", ".join(str(d) for d in dims)
-                expr = f"jnp.transpose({expr}, ({perm_str},))"
-                current_shape = [current_shape[d] for d in dims]
-                dim_map = [dim_map[d] for d in dims]
-
-            elif op == "unsqueeze":
-                dim = transform["dim"]
-                # Reshape to insert 1 at position
-                current_shape.insert(dim, 1)
-                dim_map.insert(dim, None)
-                shape_str = ", ".join(str(s) for s in current_shape)
-                expr = f"{expr}.reshape({shape_str})"
-
-            elif op == "reshape":
-                # Apply reshape transform (e.g., from flatten, view_as_real + flatten)
-                from_shape = transform.get("from_shape", current_shape)
-                to_shape = transform["to_shape"]
-                shape_str = ", ".join(str(s) for s in to_shape)
-                expr = f"{expr}.reshape({shape_str})"
-                current_shape = list(to_shape)
-                # dim_map tracking is complex for reshape that changes ndim;
-                # reset to simple mapping since reduction permutation logic
-                # will need to re-analyze after reshape
-                dim_map = list(range(len(to_shape)))
-
-            elif op == "expand":
-                # Broadcast to target shape
-                expand_dims = transform.get("expand_dims", [])
-                target_shape = transform.get("target_shape", [])
-
-                # First, insert 1s at expand positions if needed
-                # Compute intermediate shape with 1s where we'll broadcast
-                intermediate_shape = list(target_shape)
-                for ed in expand_dims:
-                    intermediate_shape[ed] = 1
-
-                # Reshape to intermediate if needed (to insert 1s)
-                if len(current_shape) != len(intermediate_shape):
-                    inter_str = ", ".join(str(s) for s in intermediate_shape)
-                    expr = f"{expr}.reshape({inter_str})"
-                    current_shape = list(intermediate_shape)
-                    # Update dim_map to account for new dimensions
-                    for ed in sorted(expand_dims, reverse=True):
-                        dim_map.insert(ed, None)
-
-                # Now broadcast
-                target_str = ", ".join(str(s) for s in target_shape)
-                expr = f"jnp.broadcast_to({expr}, ({target_str},))"
-                current_shape = list(target_shape)
-
-            elif op == "slice":
-                # Strided slice: x[start:end:step]
-                dim = transform["dim"]
-                start = transform.get("start", 0)
-                end = transform.get("end", current_shape[dim])
-                step = transform.get("step", 1)
-
-                # Build slice expression for this dimension
-                # Use Python slice syntax: [start:end:step]
-                slices = []
-                for i in range(len(current_shape)):
-                    if i == dim:
-                        if step == 1:
-                            slices.append(f"{start}:{end}")
-                        else:
-                            slices.append(f"{start}:{end}:{step}")
-                    else:
-                        slices.append(":")
-                slice_str = ", ".join(slices)
-                expr = f"{expr}[{slice_str}]"
-
-                # Update current_shape for the sliced dimension
-                old_size = current_shape[dim]
-                new_size = (end - start + step - 1) // step  # ceiling division
-                current_shape[dim] = new_size
-
-            elif op == "flip":
-                # Flip (reverse) along specified dimensions
-                dims = transform["dims"]
-                # Use jnp.flip for reversing
-                dims_str = ", ".join(str(d) for d in dims)
-                if len(dims) == 1:
-                    expr = f"jnp.flip({expr}, axis={dims[0]})"
-                else:
-                    expr = f"jnp.flip({expr}, axis=({dims_str},))"
-                # Shape doesn't change for flip
-
-            elif op == "squeeze":
-                # Squeeze (remove) a dimension of size 1
-                dim = transform["dim"]
-                # Remove the dimension from shape
-                if dim < len(current_shape):
-                    current_shape.pop(dim)
-                    if dim < len(dim_map):
-                        dim_map.pop(dim)
-                    # Use squeeze to remove the dimension
-                    expr = f"jnp.squeeze({expr}, axis={dim})"
+        # Use unified transform helper (with dim_map tracking for reduction permutation)
+        expr, current_shape, dim_map = self._apply_transforms_core(
+            var, name, chain, use_kexpr=False, track_dim_map=True
+        )
 
         # Check if we need to transpose for non-last-dim reduction
         # Get reduction positions and permute if needed
@@ -2167,30 +2118,14 @@ class PallasKernel(SIMDKernel):
         var = self.args.input(name)
         dtype = V.graph.get_dtype(name)
 
-        # Get numel/rnumel as sympy expressions (may be symbolic)
-        # Note: Don't use Max(1, ...) as it generates code JAX can't trace.
-        # numel >= 1 is guaranteed for real tensor iterations.
-        numel_raw = sympy.Integer(1)
-        for tree in self.range_trees:
-            if not tree.is_reduction:
-                numel_raw = numel_raw * tree.numel
-        numel_raw = V.graph.sizevars.simplify(numel_raw)
-
-        rnumel_raw = sympy.Integer(1)
-        for tree in self.range_trees:
-            if tree.is_reduction:
-                rnumel_raw = rnumel_raw * tree.numel
-        rnumel_raw = V.graph.sizevars.simplify(rnumel_raw)
-
-        # Convert to kernel parameters and strings via rename_indexing
-        numel_renamed = self.rename_indexing(numel_raw)
-        rnumel_renamed = self.rename_indexing(rnumel_raw)
-        numel_str = self.kexpr(numel_renamed)
-        rnumel_str = self.kexpr(rnumel_renamed)
-
-        # Get concrete values if available (for comparisons)
-        numel_val = self._safe_int(numel_raw)
-        rnumel_val = self._safe_int(rnumel_raw)
+        # Get numel/rnumel info via centralized helper (with caching)
+        info = self._get_numel_rnumel_info()
+        numel_raw = info['numel_expr']
+        rnumel_raw = info['rnumel_expr']
+        numel_str = info['numel_str']
+        rnumel_str = info['rnumel_str']
+        numel_val = info['numel_val']
+        rnumel_val = info['rnumel_val']
 
         # Get buffer shape and compute buf_numel
         buf = V.graph.get_buffer(name)
@@ -2216,13 +2151,7 @@ class PallasKernel(SIMDKernel):
             iter_numel = numel_val * rnumel_val
 
         # Generate shape string for reshape operations
-        if rnumel_val is None or rnumel_val > 1:
-            if self.inside_reduction:
-                shape_str = f"{numel_str}, {rnumel_str}"
-            else:
-                shape_str = f"{numel_str}, 1"
-        else:
-            shape_str = numel_str
+        shape_str = self._get_shape_str_for_reshape()
 
         # Compute shape for result tracking (use raw values for internal tracking)
         if rnumel_val is None or rnumel_val > 1:
@@ -2790,27 +2719,11 @@ class PallasKernel(SIMDKernel):
                             else:
                                 x_vars.append((var, entry))
 
-                # Get numel/rnumel - may be symbolic
-                # Note: Don't use Max(1, ...) as it generates code JAX can't trace.
-                # numel >= 1 is guaranteed for real tensor iterations.
-                numel_raw = sympy.Integer(1)
-                for tree in self.range_trees:
-                    if not tree.is_reduction:
-                        numel_raw = numel_raw * tree.numel
-
-                rnumel_raw = sympy.Integer(1)
-                for tree in self.range_trees:
-                    if tree.is_reduction:
-                        rnumel_raw = rnumel_raw * tree.numel
-
-                # Rename symbolic sizes to kernel parameters
-                numel_renamed = self.rename_indexing(numel_raw)
-                rnumel_renamed = self.rename_indexing(rnumel_raw)
-                numel_str = self.kexpr(numel_renamed)
-                rnumel_str = self.kexpr(rnumel_renamed)
-
-                # Check if we have reduction
-                rnumel_val = self._safe_int(rnumel_raw)
+                # Get numel/rnumel info via centralized helper (with caching)
+                info = self._get_numel_rnumel_info()
+                numel_str = info['numel_str']
+                rnumel_str = info['rnumel_str']
+                rnumel_val = info['rnumel_val']
                 has_reduction = rnumel_val is None or rnumel_val > 1
 
                 if has_reduction:

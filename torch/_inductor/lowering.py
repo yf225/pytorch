@@ -131,6 +131,37 @@ inplaceable_foreach_ops: dict[torch._ops.OpOverload, torch._ops.OpOverload] = {}
 quantized_decomposed = torch.ops.quantized_decomposed
 
 
+def _compute_gather_layout(
+    tensor_indices: list, tensor_size: Optional[list] = None
+) -> tuple:
+    """Compute layout parameters for gather/scatter operations.
+
+    Consolidates the repeated pattern for determining how tensor indices
+    map to output dimensions in gather operations.
+
+    Args:
+        tensor_indices: List of indices that have tensor indexing
+        tensor_size: Size of the broadcast tensor result (optional)
+
+    Returns:
+        If tensor_size provided: (start_offset, rank, non_consecutive)
+        Otherwise: (start_offset, non_consecutive)
+        - start_offset: Where gather result appears in output
+        - rank: Number of dimensions in gather result (if tensor_size provided)
+        - non_consecutive: Whether tensor indices are non-consecutive
+    """
+    non_consecutive = False
+    for prev, curr in itertools.pairwise(tensor_indices):
+        if curr - prev != 1:
+            non_consecutive = True
+            break
+    first_idx = tensor_indices[0]
+    start_offset = 0 if non_consecutive else first_idx
+    if tensor_size is not None:
+        return start_offset, len(tensor_size), non_consecutive
+    return start_offset, non_consecutive
+
+
 def cur_node_has_non_foreach_users() -> bool:
     for node in V.graph.current_node.users:
         for user in node.users:
@@ -3770,18 +3801,10 @@ def gather(x, dim, index, sparse_grad=False):
     # This enables explicit tracking instead of dtype-based heuristics
     # Similar to how unfold propagates view_id through the loader chain
     # Store index tensor shape for proper broadcasting in gather operations
-    index_source_view_id = ir.PallasViewTracker.next_view_id()
-    ir.PallasViewTracker.store_entry(index_source_view_id, {
-        "transforms": [{"op": "index_source", "shape": list(index.get_size())}],
-        "source_view_id": None,  # Standalone metadata entry
-        "output_shape": None,
-    })
+    index_source_view_id = ir.PallasViewTracker.register_index_source(list(index.get_size()))
 
-    def index_loader(idx):
-        # Set outer_view_id context so make_indexer() embeds it in PallasStride
-        # This context is set at loader call time (codegen), not make_loader time
-        with ir.PallasViewTracker.context(index_source_view_id):
-            return inner_index_loader(idx)
+    # Wrap index loader to set view_id context during codegen
+    index_loader = ir.PallasViewTracker.wrap_loader(inner_index_loader, index_source_view_id)
 
     def fn(idx):
         idx = list(idx)
@@ -3823,16 +3846,9 @@ def embedding(weight, indices, padding_idx=-1, scale_grad_by_freq=False, sparse=
     # This follows the same pattern as index_impl_helper for robust tracking
 
     # 1. Create index_source entry for the indices tensor
-    index_source_view_id = ir.PallasViewTracker.next_view_id()
-    ir.PallasViewTracker.store_entry(index_source_view_id, {
-        "transforms": [{
-            "op": "index_source",
-            "shape": list(indices.get_size()),
-            "view_id": index_source_view_id,  # Self-reference for lookup
-        }],
-        "source_view_id": None,  # Standalone metadata entry
-        "output_shape": None,
-    })
+    index_source_view_id = ir.PallasViewTracker.register_index_source(
+        list(indices.get_size()), include_self_ref=True
+    )
 
     # 2. Create gather chain for the weight tensor access
     # This explicitly tracks: output_shape, source_shape, indexed_dims, etc.
@@ -3865,30 +3881,18 @@ def embedding(weight, indices, padding_idx=-1, scale_grad_by_freq=False, sparse=
         "output_shape": list(new_size),
     })
 
-    def indices_loader(idx):
-        # Set outer_view_id context so make_indexer() embeds it in PallasStride
-        # This context is set at loader call time (codegen), not make_loader time
-        # NOTE: Do NOT restore context here - let it persist through indirect_indexing
-        ir.PallasViewTracker.set_outer_view_id(index_source_view_id)
-        return inner_indices_loader(idx)
-
-    # Create weight loader wrapper that sets gather_view_id context
-    def weight_loader_wrapper(idx):
-        with ir.PallasViewTracker.context(gather_view_id):
-            return weight_loader(idx)
+    # Wrap weight loader to set gather_view_id context
+    weight_loader_wrapper = ir.PallasViewTracker.wrap_loader(weight_loader, gather_view_id)
 
     def fn(idx):
         assert len(idx) == len(new_size), f"{idx} != {new_size}"
-        # Save the outer view_id context before we modify it
-        # This ensures we restore it after codegen for this kernel is done
-        with ir.PallasViewTracker.context(ir.PallasViewTracker.get_outer_view_id()):
-            # Context is set in indices_loader and persists through indirect_indexing
-            var_index = indices_loader(idx[:indices_ndim])
-            # indirect_indexing will pick up index_source_view_id from context
+        # Phase 1: Load indices and compute indirect index with index_source context
+        with ir.PallasViewTracker.context(index_source_view_id):
+            var_index = inner_indices_loader(idx[:indices_ndim])
             indirect_index = ops.indirect_indexing(var_index, weight_size[0])
-            # Now we can restore/change context for the weight load
-            weight_idx = [indirect_index] + [*idx[indices_ndim:]]
-            return weight_loader_wrapper(weight_idx)
+        # Phase 2: Load weight with gather context (wrap_loader handles internally)
+        weight_idx = [indirect_index] + [*idx[indices_ndim:]]
+        return weight_loader_wrapper(weight_idx)
 
     return Pointwise.create(
         device=weight.get_device(),
@@ -3980,29 +3984,16 @@ def index_output_size_and_inner_fn(
                 loader = indices_loaders[i]
                 assert loader is not None
                 size = indexed_size[i]
-                # PALLAS: Set view_id context around ops.indirect_indexing call
-                # The loader.pallas_view_id was set by wrap_index_loader
-                pallas_view_id = getattr(loader, 'pallas_view_id', None)
-                loader_result = loader(idx[start_offset : start_offset + rank])
-                if pallas_view_id is not None:
-                    with ir.PallasViewTracker.context(pallas_view_id):
-                        new_index.append(
-                            ops.indirect_indexing(
-                                loader_result,
-                                size,
-                                check=check,
-                                wrap_neg=wrap_neg,
-                            )
-                        )
-                else:
-                    new_index.append(
-                        ops.indirect_indexing(
-                            loader_result,
-                            size,
-                            check=check,
-                            wrap_neg=wrap_neg,
-                        )
+                # PALLAS: Load and indirect_index with proper context
+                new_index.append(
+                    ir.PallasViewTracker.load_and_indirect_index(
+                        loader,
+                        idx[start_offset : start_offset + rank],
+                        size,
+                        check=check,
+                        wrap_neg=wrap_neg,
                     )
+                )
         new_index = [
             *new_index,
             *idx[next_idx:],
@@ -4105,12 +4096,9 @@ def index_impl_helper(x, indices, check, wrap_neg=True):
     # Create flip view entry if any flip patterns detected
     flip_view_id = None
     if flip_dims:
-        flip_view_id = ir.PallasViewTracker.next_view_id()
-        ir.PallasViewTracker.store_entry(flip_view_id, {
-            "transforms": [{"op": "flip", "dims": [d for d, _ in flip_dims]}],
-            "source_view_id": None,  # Standalone flip entry
-            "output_shape": list(x.get_size()),  # Flip doesn't change shape
-        })
+        flip_view_id = ir.PallasViewTracker.create_flip_entry(
+            [d for d, _ in flip_dims], x.get_size()
+        )
 
     indices, tensor_indices = check_and_broadcast_indices(indices, x.get_device())
     assert len(tensor_indices) > 0, "Must have at least one valid idx"
@@ -4121,15 +4109,8 @@ def index_impl_helper(x, indices, check, wrap_neg=True):
     # Compute iter_dims for index sources - needed for proper broadcasting in Pallas
     # The index tensors contribute dimensions [start_offset, start_offset + rank) to the output
     # Check if tensor indices are non-consecutive (affects output layout)
-    non_consecutive_tensors = False
-    for previous, current in itertools.pairwise(tensor_indices):
-        if current - previous != 1:
-            non_consecutive_tensors = True
-            break
-
+    start_offset, rank, non_consecutive_tensors = _compute_gather_layout(tensor_indices, tensor_size)
     first_tensor_index = tensor_indices[0]
-    rank = len(tensor_size)
-    start_offset = 0 if non_consecutive_tensors else first_tensor_index
     # Compute actual output dimension indices for gather result
     actual_iter_dims = list(range(start_offset, start_offset + rank))
 
@@ -4228,11 +4209,7 @@ def index_impl_helper(x, indices, check, wrap_neg=True):
 
         # If we found a view_id to reuse, wrap the loader to set the context
         if reused_view_id is not None:
-            def wrapped_reused_loader(idx, _reused_view_id=reused_view_id, _inner_loader=inner_loader):
-                with ir.PallasViewTracker.context(_reused_view_id):
-                    return _inner_loader(idx)
-            wrapped_reused_loader.pallas_view_id = reused_view_id
-            return wrapped_reused_loader
+            return ir.PallasViewTracker.wrap_loader(inner_loader, reused_view_id)
 
         # Each index tensor gets its own view_id with its ORIGINAL shape (pre-broadcast)
         # Link to existing transforms via source_view_id
@@ -4240,21 +4217,15 @@ def index_impl_helper(x, indices, check, wrap_neg=True):
         # Also track which dims are broadcast (size 1) - these don't need iteration variable indexing
         broadcast_dims = [i for i in range(len(original_size))
                          if isinstance(original_size[i], (int, sympy.Integer)) and int(original_size[i]) == 1]
-        loader_view_id = ir.PallasViewTracker.next_view_id()
-        # Find source view_id from index_tensor (if it has prior transforms)
-        source_view_id = ir.PallasViewTracker.find_inner_view_id(index_tensor) if index_tensor is not None else None
-        ir.PallasViewTracker.store_entry(loader_view_id, {
-            "transforms": [{
-                "op": "index_source",
-                "shape": original_size,  # Original shape for broadcasting
-                "iter_dims": iter_dims,  # Which iteration dimensions index into this
-                "broadcast_dims": broadcast_dims,  # Dims with size 1 (broadcast, don't index)
-                "indexed_dim": indexed_dim,  # Which dim of the source tensor this indexes
-                "view_id": loader_view_id,  # Store view_id in entry for reuse by later gathers
-            }],
-            "source_view_id": source_view_id,  # Link to prior transforms on index_tensor
-            "output_shape": list(original_size) if original_size else None,
-        })
+        loader_view_id = ir.PallasViewTracker.register_index_source(
+            original_size,
+            iter_dims=iter_dims,
+            indexed_dim=indexed_dim,
+            broadcast_dims=broadcast_dims,
+            source_node=index_tensor,
+            include_self_ref=True,
+            output_shape=list(original_size) if original_size else None,
+        )
 
         # Track this view_id for the indexed dim - used for explicit tracking in gather
         index_tensor_view_ids[indexed_dim] = loader_view_id
@@ -4264,18 +4235,11 @@ def index_impl_helper(x, indices, check, wrap_neg=True):
         # reused in later gather operations. Without this, the CRITICAL FIX above
         # can't detect that this tensor already has an index_source chain.
         # Use the registry since IR nodes are frozen dataclasses.
-        if index_tensor is not None:
-            try:
-                # Unwrap TensorBox/StorageBox to get the actual IR node
-                tensor_data = index_tensor
-                while hasattr(tensor_data, 'data'):
-                    tensor_data = tensor_data.data
-                # Check if already registered
-                existing = ir.PallasViewTracker.get_node_view_id(id(tensor_data))
-                if existing is None:
-                    ir.PallasViewTracker.set_node_view_id(id(tensor_data), loader_view_id)
-            except (AttributeError, TypeError):
-                pass
+        unwrapped = ir.PallasViewTracker.unwrap_tensor(index_tensor)
+        if unwrapped is not None:
+            existing = ir.PallasViewTracker.get_node_view_id(id(unwrapped))
+            if existing is None:
+                ir.PallasViewTracker.set_node_view_id(id(unwrapped), loader_view_id)
 
         def wrapped_loader(idx):
             with ir.PallasViewTracker.context(loader_view_id):
@@ -4539,37 +4503,22 @@ def index_put_impl_(self, indices, values, accumulate, check, may_realize=False)
             start_offset: Starting index in iteration space for this tensor
             rank: Number of dimensions this tensor spans in iteration
         """
-        loader_view_id = ir.PallasViewTracker.next_view_id()
         # Store iter_dims to know which iteration dimensions index into this tensor
         # e.g., iter_dims=[0] means iteration dimension 0 indexes into this tensor
         iter_dims = list(range(start_offset, start_offset + rank))
-        ir.PallasViewTracker.store_entry(loader_view_id, {
-            "transforms": [{
-                "op": "index_source",
-                "shape": list(original_size),
-                "iter_dims": iter_dims,  # Which iteration dimensions index into this
-            }],
-            "source_view_id": None,  # Standalone metadata entry
-            "output_shape": list(original_size),
-        })
+        loader_view_id = ir.PallasViewTracker.register_index_source(
+            list(original_size),
+            iter_dims=iter_dims,
+            output_shape=list(original_size),
+        )
 
-        def wrapped_loader(idx):
-            with ir.PallasViewTracker.context(loader_view_id):
-                return inner_loader(idx)
-
-        return wrapped_loader
+        return ir.PallasViewTracker.wrap_loader(inner_loader, loader_view_id)
 
     # We can use the first one since they are all required to be the same size
     tensor_size = list(indices[tensor_indices[0]].get_size())
-    rank = len(tensor_size)
 
     # Compute start_offset for Pallas view chain (same logic as in index_output_size_and_inner_fn)
-    non_consecutive_tensors = False
-    for previous, current in itertools.pairwise(tensor_indices):
-        if current - previous != 1:
-            non_consecutive_tensors = True
-    first_tensor_index = tensor_indices[0]
-    start_offset = 0 if non_consecutive_tensors else first_tensor_index
+    start_offset, rank, _ = _compute_gather_layout(tensor_indices, tensor_size)
 
     indices_loaders = []
     for i, idx in enumerate(indices):
@@ -4985,40 +4934,20 @@ def rev(x, dims):
     if is_pallas:
         # Find source view_id from x (if it has prior transforms like slice, permute)
         source_view_id = ir.PallasViewTracker.find_inner_view_id(x)
+        # Create flip entry linked to existing transforms
+        pallas_view_id = ir.PallasViewTracker.create_flip_entry(dims, sizes, source_view_id)
 
-        # Create entry with flip transform linked to existing transforms
-        pallas_view_id = ir.PallasViewTracker.next_view_id()
-        ir.PallasViewTracker.store_entry(pallas_view_id, {
-            "transforms": [{"op": "flip", "dims": [int(d) for d in dims]}],
-            "source_view_id": source_view_id,  # Link to prior transforms on x
-            "output_shape": list(sizes),  # Flip doesn't change shape
-        })
+    def loader(idx):
+        idx = list(idx)
+        assert len(idx) == len(sizes)
+        for dim in dims:
+            idx[dim] = (sizes[dim] - 1) - idx[dim]
 
-        def loader(idx):
-            idx = list(idx)
-            assert len(idx) == len(sizes)
-            for dim in dims:
-                idx[dim] = (sizes[dim] - 1) - idx[dim]
-
-            # Set outer_view_id context so PallasStride markers get the correct view_id
-            old_view_id = ir.PallasViewTracker.get_outer_view_id()
-            if old_view_id is None:
-                ir.PallasViewTracker.set_outer_view_id(pallas_view_id)
-                try:
-                    result = x_loader(idx)
-                finally:
-                    ir.PallasViewTracker.set_outer_view_id(None)
-            else:
-                result = x_loader(idx)
-            return result
-    else:
-        def loader(idx):
-            idx = list(idx)
-            assert len(idx) == len(sizes)
-            for dim in dims:
-                idx[dim] = (sizes[dim] - 1) - idx[dim]
-
-            return x_loader(idx)
+        # Set outer_view_id context so PallasStride markers get the correct view_id
+        if pallas_view_id is not None and ir.PallasViewTracker.get_outer_view_id() is None:
+            with ir.PallasViewTracker.context(pallas_view_id):
+                return x_loader(idx)
+        return x_loader(idx)
 
     return Pointwise.create(
         device=x.get_device(),
