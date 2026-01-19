@@ -2000,6 +2000,14 @@ class CSE(Generic[CSEVariableType, AugmentedKeyT]):
             # with the loose ValueRanges.unknown(), so we need to tighten the bounds
             expr.bounds = expr.bounds.tighten(bounds)
             expr.use_count += 1
+            # PALLAS: Propagate view_id for CSEVariable inputs used in index context
+            try:
+                from ..ir import PallasViewTracker
+                outer_view_id = PallasViewTracker.get_outer_view_id()
+                if outer_view_id is not None and not hasattr(expr, 'index_source_view_id'):
+                    expr.index_source_view_id = outer_view_id
+            except (ImportError, AttributeError):
+                pass
             return cast(CSEVariableType, expr)
         elif isinstance(expr, IndentedBuffer):
             cache_key = expr.getvalue()
@@ -2016,6 +2024,16 @@ class CSE(Generic[CSEVariableType, AugmentedKeyT]):
         if not var:
             var = self.newvar(bounds, dtype, shape)
             self.put(cache_key, var)
+            # PALLAS: Propagate index_source_view_id from context if set
+            # This enables computed indices (from Pointwise ops) to be tracked
+            # The context is set by wrap_index_loader in lowering.py during index computation
+            try:
+                from ..ir import PallasViewTracker
+                outer_view_id = PallasViewTracker.get_outer_view_id()
+                if outer_view_id is not None:
+                    var.index_source_view_id = outer_view_id
+            except (ImportError, AttributeError):
+                pass  # Not in Pallas context or function not available
             if write:
                 if V.kernel.current_node:
                     V.kernel.current_node.codegen_originating_info(
@@ -2053,6 +2071,16 @@ class CSE(Generic[CSEVariableType, AugmentedKeyT]):
         else:
             var.bounds = var.bounds.tighten(bounds)
             var.use_count += 1
+            # PALLAS: Also propagate view_id for cached variables
+            # This handles the case where a variable was created earlier without context,
+            # but is now being used inside wrap_index_loader context
+            try:
+                from ..ir import PallasViewTracker
+                outer_view_id = PallasViewTracker.get_outer_view_id()
+                if outer_view_id is not None and not hasattr(var, 'index_source_view_id'):
+                    var.index_source_view_id = outer_view_id
+            except (ImportError, AttributeError):
+                pass
 
         return var
 
@@ -2603,16 +2631,44 @@ class CSEProxy(DefaultHandler):
         if name == "masked" and backend == "triton":
             output_dtype = value.dtype
             output_shape = value.shape
+        elif name == "masked" and backend == "pallas":
+            # For Pallas, compute shape from iteration space
+            # masked returns jnp.where(mask, body_result, other) which has iteration space shape
+            dtype_op = getattr(dtype_handler, name)
+            output_dtype = dtype_op(*args, **kwargs)
+            numel = V.kernel._get_numel()
+            rnumel = V.kernel._get_rnumel()
+            if rnumel > 1:
+                if V.kernel.inside_reduction:
+                    output_shape = (numel, rnumel)
+                else:
+                    output_shape = (numel, 1)
+            else:
+                output_shape = (numel,)
         elif name == "masked" and backend == "cpp":
             output_dtype = V.interpreter.current_node.meta.get(
                 OptimizationContext.key, None
             ).dtype
             # TODO: fix me
             output_shape = None
-        elif backend in ("triton", "cpp", "mps"):
+        elif backend in ("triton", "cpp", "mps", "pallas"):
             dtype_op = getattr(dtype_handler, name)
             output_dtype = dtype_op(*args, **kwargs)
             output_shape = shape_op(*args, **kwargs)
+
+            # PALLAS: index_expr returns the iteration space shape, not None
+            # This enables proper shape propagation through operations that use index expressions.
+            if backend == "pallas" and name == "index_expr" and output_shape is None:
+                # Get iteration space shape from kernel
+                numel = V.kernel._get_numel()
+                rnumel = V.kernel._get_rnumel()
+                if rnumel > 1:
+                    if V.kernel.inside_reduction:
+                        output_shape = (numel, rnumel)
+                    else:
+                        output_shape = (numel, 1)
+                else:
+                    output_shape = (numel,)
 
         if backend in ("triton", "cpp"):
             # maybe there are some exceptions on mps?
@@ -2653,6 +2709,17 @@ class CSEProxy(DefaultHandler):
             )
 
             csevar.update_on_args(name, args, kwargs)
+
+            # PALLAS: Propagate index_source_view_id through arithmetic operations
+            # If any input arg has index_source_view_id, the output should inherit it
+            # This ensures operations like (index_tensor + 1) preserve index semantics
+            if backend == "pallas":
+                for arg in args:
+                    if isinstance(arg, CSEVariable):
+                        view_id = getattr(arg, 'index_source_view_id', None)
+                        if view_id is not None:
+                            csevar.index_source_view_id = view_id
+                            break
 
             if (
                 config.test_configs.runtime_triton_dtype_assert
@@ -2732,6 +2799,19 @@ class CSEProxy(DefaultHandler):
         assert isinstance(size, sympy.Expr), (type(size), size)
         # Skip CSE since this doesn't return an expression
 
+        # PALLAS: If var doesn't have index_source_view_id but context is set,
+        # propagate the view_id from context. This handles the case where var
+        # (e.g., tmp3) was created by earlier FX nodes before the context was set
+        # inside bind_set_indirect_shim's set_indirect function.
+        if not hasattr(var, 'index_source_view_id') or getattr(var, 'index_source_view_id', None) is None:
+            try:
+                from ..ir import PallasViewTracker
+                context_view_id = PallasViewTracker.get_outer_view_id()
+                if context_view_id is not None:
+                    var.index_source_view_id = context_view_id
+            except (ImportError, AttributeError):
+                pass
+
         if var.bounds.lower < 0:
             if wrap_neg:
                 stm = ops.add(var, ops.index_expr(size, torch.long))
@@ -2757,6 +2837,9 @@ class CSEProxy(DefaultHandler):
                     pos = var.bounds & ValueRanges(0, int_oo)
                     new_bounds = new_bounds | pos
 
+            # Save attributes from old var before creating new one
+            old_index_source_view_id = getattr(var, 'index_source_view_id', None)
+
             var = self.kernel.cse.generate(
                 self.kernel.compute,
                 stm,
@@ -2765,7 +2848,22 @@ class CSEProxy(DefaultHandler):
                 shape=var.shape,
             )
 
+            # Propagate index_source_view_id for Pallas gather shape tracking
+            if old_index_source_view_id is not None:
+                var.index_source_view_id = old_index_source_view_id
+
         sympy_var = self.parent_handler.indirect_indexing(var, size, check)
+
+        # PALLAS: Track mapping from sympy symbol name to view_id for explicit tracking
+        # This enables _load_gather to look up indexed_dim via view_id without stride matching
+        view_id = getattr(var, 'index_source_view_id', None)
+        if view_id is not None and hasattr(self.kernel, '_index_source_vars'):
+            sympy_var_name = str(sympy_var)
+            # Store the mapping: sympy_symbol_name -> {view_id, ...}
+            if sympy_var_name not in self.kernel._index_source_vars:
+                self.kernel._index_source_vars[sympy_var_name] = {}
+            self.kernel._index_source_vars[sympy_var_name]["view_id"] = view_id
+
         if generate_assert(check):
             assert_lower = not (var.bounds.lower >= 0)
             # value ranges cannot x < s when x and s are symbols

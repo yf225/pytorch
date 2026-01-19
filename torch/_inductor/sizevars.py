@@ -705,6 +705,22 @@ class SizeVarAllocator:
         stride of -10 because the index wraps around after the first element
 
         """
+        # Replace PallasStride markers with their stride values
+        # PallasStride(stride_value, dim_index, ...) -> stride_value
+        from .ir import PallasStride, PALLAS_EXPAND_STRIDE
+
+        def _replace_pallas_stride(expr: Expr) -> Expr:
+            if not expr.has(PallasStride) and PALLAS_EXPAND_STRIDE not in expr.free_symbols:
+                return expr
+            # Replace PALLAS_EXPAND_STRIDE with 0 (expand dimension has stride 0)
+            expr = expr.subs(PALLAS_EXPAND_STRIDE, 0)
+            # Replace PallasStride(stride, dim, ...) with stride
+            for ps in list(expr.atoms(PallasStride)):
+                expr = expr.subs(ps, ps.args[0])  # args[0] is stride_value
+            return expr
+
+        index = _replace_pallas_stride(index)
+
         strides = []
         index = self.simplify(index)
         # remove any offset
@@ -940,6 +956,14 @@ class SizeVarAllocator:
 
     def offset_var(self, index: Expr, vars: Sequence[sympy.Symbol]) -> Expr:
         """Extract offset part of an indexing expression"""
+        # Replace PallasStride markers with their stride values
+        from .ir import PallasStride, PALLAS_EXPAND_STRIDE
+
+        if index.has(PallasStride) or PALLAS_EXPAND_STRIDE in index.free_symbols:
+            index = index.subs(PALLAS_EXPAND_STRIDE, 0)
+            for ps in list(index.atoms(PallasStride)):
+                index = index.subs(ps, ps.args[0])
+
         index = self.simplify(index)
         return sympy_subs(index, {v: sympy.S.Zero for v in vars if v != 0})
 

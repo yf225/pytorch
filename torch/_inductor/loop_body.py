@@ -485,19 +485,40 @@ class LoopBody:
         self.indexing = None
         return result
 
-    def bind_set_indirect_shim(self, var, size, check, wrap_neg):
-        def set_indirect(new_var):
-            self.replace_indirect(
-                var, V.ops.indirect_indexing(new_var, size, check, wrap_neg)
-            )
+    def bind_set_indirect_shim(self, var, size, check, wrap_neg, pallas_view_id=None):
+        # PALLAS: Capture current view_id context from trace time
+        # This allows us to restore the context during codegen so that
+        # CSE.generate and CSEProxy.indirect_indexing see the correct view_id
+        # The context is set around ops.indirect_indexing in lowering.py's fn()
+        from . import ir
+        # Use passed pallas_view_id (from clone) or capture from context
+        context_view_id = ir.PallasViewTracker.get_outer_view_id()
+        captured_view_id = pallas_view_id if pallas_view_id is not None else context_view_id
 
+        def set_indirect(new_var):
+            # PALLAS: Restore view_id context during codegen
+            # This ensures computed indices (from Pointwise ops like iota + arithmetic)
+            # are properly tracked in _index_source_vars for gather shape mapping
+            from . import ir as ir_module
+            with ir_module.PallasViewTracker.context(captured_view_id):
+                self.replace_indirect(
+                    var, V.ops.indirect_indexing(new_var, size, check, wrap_neg)
+                )
+
+        # PALLAS: Custom clone that preserves captured_view_id through cloning
+        # The clone is called during _init_with_copy in LoopBody, which happens
+        # outside the wrap_index_loader context. We pass the captured_view_id
+        # explicitly to preserve it.
         set_indirect.clone = functools.partial(  # type: ignore[attr-defined]
             LoopBody.bind_set_indirect_shim,
             var=var,
             size=size,
             check=check,
             wrap_neg=wrap_neg,
+            pallas_view_id=captured_view_id,  # Pass through cloning!
         )
+        # Store captured_view_id for external access if needed
+        set_indirect.captured_view_id = captured_view_id  # type: ignore[attr-defined]
         return set_indirect
 
     def bind_scan_shim(self, combine_fn):
@@ -776,6 +797,9 @@ class CaptureIndexing(WrapperHandler):
         """
 
         var = self.body.add_indirect(size)
+        # PALLAS: The view_id context is now set by the caller (in lowering.py's fn())
+        # around the ops.indirect_indexing call, so bind_set_indirect_shim will capture
+        # the correct context.
         set_indirect = self.body.bind_set_indirect_shim(var, size, check, wrap_neg)
         self.tracer.create_proxy(
             "call_module",

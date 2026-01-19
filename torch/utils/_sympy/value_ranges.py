@@ -1095,6 +1095,20 @@ class SymPyValueRangeAnalysis:
         # pyrefly: ignore [bad-argument-type]
         return ValueRanges.increasing_map(x, TruncToFloat)
 
+    @staticmethod
+    def pallas_stride(stride, dim, view_id=None, iter_var_pos=None):
+        """Handle PallasStride marker - returns the stride value's range."""
+        # PallasStride(stride, dim[, view_id[, iter_var_pos]]) evaluates to stride for range analysis
+        # view_id and iter_var_pos are metadata for codegen and don't affect range analysis
+        return ValueRanges.wrap(stride) if isinstance(stride, ValueRanges) else ValueRanges.wrap(stride)
+
+    @staticmethod
+    def pallas_view_id_marker(view_id):
+        """Handle PallasViewIdMarker - always returns 0 (marker for view_id only)."""
+        # PallasViewIdMarker(view_id) evaluates to 0 for range analysis
+        # It only carries view_id metadata for codegen
+        return ValueRanges.wrap(0)
+
 
 def bound_sympy(
     expr: sympy.Expr, ranges: dict[sympy.Symbol, ValueRanges] | None = None

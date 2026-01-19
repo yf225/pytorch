@@ -2182,12 +2182,12 @@ class rocm:
     contiguous_threshold: int = 16
 
 
-# Backend to use for CPU codegen either "cpp" or "triton" (experimental) or "halide" (experimental) or "pallas" (experimental)
-cpu_backend: Literal["cpp", "triton", "halide", "pallas"] = "cpp"
+# Backend to use for CPU codegen either "cpp" or "triton" (experimental) or "halide" (experimental) or "pallas" (experimental) or "pallas_v0" (legacy)
+cpu_backend: Literal["cpp", "triton", "halide", "pallas", "pallas_v0"] = "cpp"
 
 # Backend to use for CUDA codegen either
-# "triton", "halide" (experimental) or "pallas" (experimental)
-cuda_backend: Literal["triton", "halide", "pallas"] = "triton"
+# "triton", "halide" (experimental), "pallas" (experimental), or "pallas_v0" (legacy)
+cuda_backend: Literal["triton", "halide", "pallas", "pallas_v0"] = "triton"
 
 # Backend to use for XPU codegen either "triton"
 xpu_backend: Literal["triton"] = "triton"

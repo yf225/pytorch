@@ -33,6 +33,7 @@ from torch._prims_common import dtype_to_type, is_integer_dtype
 from torch.utils._sympy.functions import FloorDiv, ModularIndexing, Where
 from torch.utils._sympy.value_ranges import bound_sympy, ValueRanges
 
+from . import ir
 from .ops_handler import DefaultHandler
 from .sizevars import statically_known_true
 from .utils import generate_assert
@@ -245,11 +246,27 @@ class IndexPropagation(DefaultHandler):
         if not isinstance(a, IndexPropVar):
             return a
 
+        # PALLAS: Preserve index_source_view_id through unwrapping
+        # This attribute is set by wrap_index_loader in lowering.py and is needed
+        # for tracking which indexed dimension each computed index corresponds to.
+        view_id = getattr(a, 'index_source_view_id', None)
+
         # Prefer the sympy representation if possible
         if a.is_symbolic:
-            return self.materialize_expr(a.value.expr, a.value.dtype)
+            result = self.materialize_expr(a.value.expr, a.value.dtype)
+        else:
+            result = a.value
 
-        return a.value
+        # Copy view_id to result for Pallas tracking (may not be needed anymore
+        # since context is now set around ops.indirect_indexing in lowering.py,
+        # but keeping for safety)
+        if view_id is not None and result is not None:
+            try:
+                result.index_source_view_id = view_id
+            except (AttributeError, TypeError):
+                pass  # Result doesn't support attribute setting
+
+        return result
 
     def wrap(self, a) -> IndexPropResult:
         if isinstance(a, (list, tuple)):
@@ -342,11 +359,18 @@ class IndexPropagation(DefaultHandler):
         check: bool = True,
         wrap_neg=True,
     ) -> Any:
-        if isinstance(index, IndexPropVar) and index.is_symbolic:
+        # PALLAS: Check if Pallas backend is active
+        # If so, we MUST use indirect variables (not direct sympy conversion) to preserve
+        # the view_id tracking needed for gather operations. The view_id links computed
+        # indices to their indexed dimensions in the source tensor.
+        is_pallas = ir.PallasViewTracker.is_active()
+
+        if isinstance(index, IndexPropVar) and index.is_symbolic and not is_pallas:
             # If we find something we can convert into a direct indexing we do so
             # We still need to (perhaps) wrap the expression and add bound checks
             # We want to do this "constant folding", as we don't allow to fuse
             # kernels into indirect indexing
+            # NOTE: For Pallas, we skip this conversion to preserve view_id tracking
 
             expr = sympy.sympify(index.value.expr)
 
