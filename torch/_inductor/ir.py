@@ -151,6 +151,100 @@ log = logging.getLogger(__name__)
 indent = functools.partial(textwrap.indent, prefix="  ")
 aten = torch.ops.aten
 
+# Marker symbol for Pallas expand dimensions (stride=0)
+# This symbol is used to mark dimensions that have stride=0 in the index expression
+# so that Pallas codegen can detect and handle expand patterns correctly.
+# Other backends ignore this symbol (it evaluates to 0).
+PALLAS_EXPAND_STRIDE = sympy.Symbol("__pallas_expand__", integer=True)
+
+
+class PallasStride(sympy.Function):
+    """
+    Marker that carries stride info for Pallas codegen.
+
+    PallasStride(stride_value, dim_index, iter_var_pos) preserves stride metadata
+    in the expression so Pallas can extract the access pattern at codegen time.
+
+    Args:
+        stride_value: The stride value for this dimension (or PALLAS_EXPAND_STRIDE for expand)
+        dim_index: The dimension index in the layout
+        iter_var_pos: Position of iteration variable in the buffer layout
+
+    For sympy interpretation, PallasStride evaluates to its stride value.
+    When stride_value is PALLAS_EXPAND_STRIDE, it represents stride=0 (expand dimension).
+
+    IMPORTANT: This function does NOT simplify by default - returning None preserves
+    the marker. Non-Pallas backends should use strip_pallas_stride() to convert to
+    plain stride values before evaluation.
+    """
+
+    @classmethod
+    def eval(cls, stride: Expr, dim: Expr, iter_var_pos: Expr) -> Optional[Expr]:
+        # Never simplify - always preserve the marker for Pallas codegen
+        # Non-Pallas backends will strip these markers before use
+        return None
+
+
+class PallasIndirectStride(sympy.Function):
+    """
+    Marker that carries stride info for indirect variables in Pallas codegen.
+
+    PallasIndirectStride(stride_value, dim_index, iter_var_pos) is similar to PallasStride
+    but specifically marks indirect variables (from ops.indirect_indexing).
+
+    This allows scatter detection and other analyses to use stride markers instead
+    of coefficient extraction for indirect variables.
+
+    Args:
+        stride_value: The stride value for this dimension
+        dim_index: The dimension index in the layout
+        iter_var_pos: Position of iteration variable in the buffer layout
+    """
+
+    @classmethod
+    def eval(cls, stride: Expr, dim: Expr, iter_var_pos: Expr) -> Optional[Expr]:
+        # Never simplify - always preserve the marker for Pallas codegen
+        return None
+
+
+def strip_pallas_stride(expr: Expr) -> Expr:
+    """Replace PallasStride and PallasIndirectStride markers with their numeric stride values.
+
+    This should be called by non-Pallas backends before using index expressions.
+
+    Args:
+        expr: SymPy expression potentially containing Pallas stride markers
+
+    Returns:
+        Expression with all Pallas markers replaced by their stride values
+    """
+    # Handle plain Python types (int, float) that don't have .has()
+    if not isinstance(expr, sympy.Basic):
+        return expr
+    has_markers = (
+        expr.has(PallasStride)
+        or expr.has(PallasIndirectStride)
+        or PALLAS_EXPAND_STRIDE in expr.free_symbols
+    )
+    if not has_markers:
+        return expr
+    # Replace PALLAS_EXPAND_STRIDE with 0
+    expr = expr.subs(PALLAS_EXPAND_STRIDE, 0)
+    # Replace PallasStride(stride, dim, pos) with stride
+    for ps in list(expr.atoms(PallasStride)):
+        stride_val = ps.args[0]
+        # If stride was PALLAS_EXPAND_STRIDE (now 0), use 0
+        if stride_val == 0 or stride_val == PALLAS_EXPAND_STRIDE:
+            expr = expr.subs(ps, Integer(0))
+        else:
+            expr = expr.subs(ps, stride_val)
+    # Replace PallasIndirectStride(stride, dim, pos) with stride
+    for ps in list(expr.atoms(PallasIndirectStride)):
+        stride_val = ps.args[0]
+        expr = expr.subs(ps, stride_val)
+    return expr
+
+
 """ [Note: Inductor IR]
 
 Inductor's IR is produced by executing 'lowering' code (see lowering.py).  Each
@@ -2022,20 +2116,79 @@ class Reduction(Loops):
         )
 
 
+def _is_pallas_backend_active() -> bool:
+    """Check if Pallas backend is active."""
+    try:
+        cpu_backend = getattr(config, "cpu_backend", None)
+        cuda_backend = getattr(config, "cuda_backend", None)
+        return cpu_backend in ("pallas", "pallas_v0") or cuda_backend in ("pallas", "pallas_v0")
+    except Exception:
+        return False
+
+
 def _fixed_indexer(
     size: Sequence[int],
     stride: Optional[Sequence[int]] = None,
     offset: Expr = Integer(0),
+    pallas_orig_dims: Optional[Sequence[int]] = None,
 ) -> Callable[[Sequence[Expr]], Expr]:
-    """A closure containing math to read a given element"""
+    """A closure containing math to read a given element.
+
+    For Pallas backend: we use PallasStride markers to preserve stride metadata
+    in the index expression. This allows Pallas codegen to:
+    1. Detect expand dimensions (stride=0 marked with PALLAS_EXPAND_STRIDE)
+    2. Detect permutations via dim_index and iter_var_pos fields
+
+    Args:
+        size: Tensor dimension sizes
+        stride: Tensor strides
+        offset: Base offset
+        pallas_orig_dims: For Pallas - mapping from current position to original dimension.
+                         pallas_orig_dims[i] = which original dimension is at position i.
+                         For permute(1, 0), this would be [1, 0].
+
+    Other backends use plain stride values and don't need the markers.
+    """
+    # Check if Pallas backend is active
+    is_pallas = _is_pallas_backend_active()
 
     def indexer(index: Sequence[int]) -> int:
         assert stride is not None and len(index) == len(stride)
         assert len(index) == len(size)
         result = offset
-        for idx, st, sz in zip(index, stride, size):
+        for dim_idx, (idx, st, sz) in enumerate(zip(index, stride, size)):
             if sz != 1:
-                result = result + idx * st
+                if is_pallas:
+                    # Use PallasStride markers to preserve dimension metadata
+                    # orig_dim: which original dimension this position came from
+                    # dim_idx: current buffer position (iter_var_pos)
+                    orig_dim = pallas_orig_dims[dim_idx] if pallas_orig_dims else dim_idx
+
+                    # Check if this is an indirect variable (name starts with "tmp")
+                    is_indirect = (
+                        isinstance(idx, sympy.Symbol) and str(idx).startswith("tmp")
+                    )
+
+                    if st == 0:
+                        # Expand dimension: use PALLAS_EXPAND_STRIDE as stride value
+                        result = result + idx * PallasStride(
+                            PALLAS_EXPAND_STRIDE, Integer(orig_dim), Integer(dim_idx)
+                        )
+                    elif is_indirect:
+                        # Indirect variable: use PallasIndirectStride marker
+                        st_expr = st if isinstance(st, sympy.Basic) else Integer(st)
+                        result = result + idx * PallasIndirectStride(
+                            st_expr, Integer(orig_dim), Integer(dim_idx)
+                        )
+                    else:
+                        # Regular dimension: use actual stride
+                        st_expr = st if isinstance(st, sympy.Basic) else Integer(st)
+                        result = result + idx * PallasStride(
+                            st_expr, Integer(orig_dim), Integer(dim_idx)
+                        )
+                elif st != 0:
+                    result = result + idx * st
+                # When st == 0 and not is_pallas, we don't add anything (stride 0 means no contribution)
         return result
 
     return indexer
@@ -3024,6 +3177,9 @@ class PermuteView(BaseView):
 
         if is_storage_and_layout(x):
             storage, old_layout = as_storage_and_layout(x)
+            # For Pallas: track which original dimension each position came from
+            # dims[i] = which original dimension is now at position i
+            pallas_orig_dims = list(dims) if _is_pallas_backend_active() else None
             new_layout = FixedLayout(
                 old_layout.device,
                 old_layout.dtype,
@@ -3031,6 +3187,7 @@ class PermuteView(BaseView):
                 [old_layout.stride[i] for i in dims],
                 old_layout.offset,
                 old_layout.is_pinned,
+                pallas_orig_dims,
             )
             return ReinterpretView(data=storage, layout=new_layout)
 
@@ -3688,6 +3845,7 @@ class Layout(OutputSpec):
         stride: Optional[Sequence[Expr]] = None,
         offset: Expr = Integer(0),
         is_pinned: bool = False,
+        pallas_orig_dims: Optional[Sequence[int]] = None,
     ) -> None:
         if stride is None:
             stride = FlexibleLayout.contiguous_strides(size)
@@ -3702,6 +3860,9 @@ class Layout(OutputSpec):
         self.is_pinned = is_pinned
         # is_pinned implies cpu
         assert (not self.is_pinned) or (self.device.type == "cpu")
+        # For Pallas: mapping from current position to original dimension
+        # Used by PallasStride markers to track permutations
+        self.pallas_orig_dims = list(pallas_orig_dims) if pallas_orig_dims is not None else None
 
     @property
     def size(self) -> Sequence[Expr]:
@@ -3962,7 +4123,7 @@ class FixedLayout(Layout):
 
     def make_indexer(self) -> Callable[[Sequence[Expr]], Expr]:
         """A closure containing math to read a given element"""
-        return _fixed_indexer(self.size, self.stride, self.offset)
+        return _fixed_indexer(self.size, self.stride, self.offset, self.pallas_orig_dims)
 
 
 class FlexibleLayout(Layout):
@@ -6185,6 +6346,9 @@ class ExternKernel(InputsKernel):
         index = V.graph.sizevars.simplify_with_ranges(index, var_ranges)
         strides = V.graph.sizevars.stride_vars(index, range_vars)
         offset = V.graph.sizevars.offset_var(index, range_vars)
+        # Strip PallasStride markers from computed strides before storing in Layout
+        strides = [strip_pallas_stride(s) for s in strides]
+        offset = strip_pallas_stride(offset)
         expected = sympy_dot(range_vars, strides) + offset
 
         if index != expected:

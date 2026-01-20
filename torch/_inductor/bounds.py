@@ -16,6 +16,7 @@ from torch.utils._sympy.value_ranges import (
 
 from ..utils._sympy.functions import PowByNatural
 from ..utils._sympy.numbers import int_oo
+from .ir import strip_pallas_stride
 from .loop_body import InterpreterShim, LoopBody, LoopBodyBlock
 from .ops_handler import DefaultHandler, ReductionType, StoreMode
 from .utils import cache_on_self, dominated_nodes
@@ -140,6 +141,9 @@ class BoundVars:
 
     def get_index(self, name: str) -> ValueRanges[Expr]:
         expr = self.loop_body.indexing_exprs[name]
+        # Strip Pallas markers (PallasStride, PALLAS_EXPAND_STRIDE) before bounds analysis
+        # These markers are only used by Pallas codegen and don't affect bounds computation
+        expr = strip_pallas_stride(expr)
         bound = self.replacement_vals.get(expr)
         if bound is None:
             bound = bound_sympy(expr, self.replacement_vals)

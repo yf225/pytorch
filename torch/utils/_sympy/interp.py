@@ -131,6 +131,11 @@ def _run_sympy_handler(analysis, args, expr, index_dtype=torch.int64):
     if isinstance(expr, ToFloat):
         return analysis.to_dtype(args[0], torch.float64)
 
+    # Handle PallasStride and PallasIndirectStride markers - return the stride value
+    # These are Pallas-specific markers that should evaluate to their first argument
+    if expr.func.__name__ in ("PallasStride", "PallasIndirectStride"):
+        return args[0]  # Return the stride value
+
     # These handlers are special because they take an extra dtype argument
     # specifying what they should convert to, and we need to appropriately set
     # this up when we convert from Sympy.  A reasonable default when you

@@ -114,7 +114,7 @@ from .fx_passes.joint_graph import joint_graph_passes
 from .fx_passes.post_grad import post_grad_passes, view_to_reshape
 from .fx_passes.pre_grad import pre_grad_passes
 from .graph import GraphLowering
-from .ir import get_device_type, IRNode
+from .ir import get_device_type, IRNode, strip_pallas_stride
 from .output_code import complex_memory_overlap  # noqa: F401
 from .triton_bundler import TritonBundler
 from .utils import (
@@ -1487,8 +1487,12 @@ class _InProcessFxCompile(FxCompile):
                                 and len(free_unbacked_symbols(out.get_stride())) == 0
                             ):
                                 # Convert to string for eval on the load path
+                                # Strip PallasStride markers before printing
                                 output_strides.append(
-                                    tuple(p.doprint(s) for s in out.get_layout().stride)
+                                    tuple(
+                                        p.doprint(strip_pallas_stride(s))
+                                        for s in out.get_layout().stride
+                                    )
                                 )
                             else:
                                 output_strides.append(None)

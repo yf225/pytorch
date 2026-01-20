@@ -134,6 +134,13 @@ class ExprPrinter(StrPrinter):
             f"_print_TruncToFloat not implemented for {type(self)}"
         )
 
+    # Handle Pallas stride markers by extracting the stride value (first arg)
+    def _print_PallasStride(self, expr: sympy.Expr) -> str:
+        return self._print(expr.args[0])
+
+    def _print_PallasIndirectStride(self, expr: sympy.Expr) -> str:
+        return self._print(expr.args[0])
+
 
 class PythonPrinter(ExprPrinter):
     def _print_ToFloat(self, expr: sympy.Expr) -> str:

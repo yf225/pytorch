@@ -33,6 +33,7 @@ from torch._prims_common import dtype_to_type, is_integer_dtype
 from torch.utils._sympy.functions import FloorDiv, ModularIndexing, Where
 from torch.utils._sympy.value_ranges import bound_sympy, ValueRanges
 
+from .ir import strip_pallas_stride
 from .ops_handler import DefaultHandler
 from .sizevars import statically_known_true
 from .utils import generate_assert
@@ -44,6 +45,9 @@ _ExprType = Union[sympy.Expr, float, int, bool]
 
 def _is_constant(val: _ExprType):
     if isinstance(val, sympy.Basic):
+        # Strip PallasStride markers before checking is_number
+        # PallasStride wraps numeric values but shouldn't be treated as constant
+        val = strip_pallas_stride(val)
         return val.is_number
     return isinstance(val, (int, float, bool))
 
