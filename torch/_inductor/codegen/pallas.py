@@ -937,6 +937,9 @@ class PallasKernel(SIMDKernel):
         # Track pending transpose permutation for TPU strided access
         # When non-None, _build_load_expr should apply jnp.transpose with this perm
         self._pending_transpose_perm: Optional[list[int]] = None
+        # Track CSE variable names that were loaded with iteration variable indexing
+        # These have the iteration shape and should NOT be reshaped in strided index
+        self._cse_vars_with_iter_shape: OrderedSet[str] = OrderedSet()
 
     def check_bounds(
         self, expr: sympy.Expr, size: sympy.Expr, lower: bool, upper: bool
@@ -2453,6 +2456,11 @@ class PallasKernel(SIMDKernel):
             self.expand_load_cse_name = str(cse_var)
             self._pending_expand_capture = False
 
+        # Track CSE variables that were loaded with iteration variable indexing
+        # These have the iteration shape and should NOT be reshaped in strided index
+        if needs_flatten and self._has_iteration_vars(index):
+            self._cse_vars_with_iter_shape.add(str(cse_var))
+
         return cse_var
 
     def _handle_mixed_indexing(self, index: sympy.Expr) -> str:
@@ -2633,7 +2641,17 @@ class PallasKernel(SIMDKernel):
             # Indirect variables typically correspond to the "outer" dimension
             # (the dimension with the largest coefficient in the index expression).
             # Reshape them with trailing 1s for proper broadcasting.
+            # EXCEPTION 1: If indirect_info is None, there's no PallasIndirectStride
+            # marker, meaning the indirect vars come from prior iteration-indexed
+            # computations and already have the iteration shape.
+            # EXCEPTION 2: If the indirect var was directly loaded with iteration indexing.
+            if indirect_info is None:
+                # No PallasIndirectStride - indirect vars already have iteration shape
+                return index_str
             for indirect_var in indirect_vars:
+                # Skip reshape if this var already has iteration shape
+                if indirect_var in self._cse_vars_with_iter_shape:
+                    continue
                 # Shape: (-1, 1, 1, ...) with total_num_dims-1 trailing 1s
                 trailing_ones = ", 1" * (total_num_dims - 1)
                 reshape_expr = f"jnp.asarray({indirect_var}).reshape(-1{trailing_ones})"
@@ -2663,7 +2681,16 @@ class PallasKernel(SIMDKernel):
                 index_str = index_str.replace(var_name, arange_expr)
 
         # Reshape indirect variables for 2D canonical form
+        # EXCEPTION 1: If indirect_info is None, indirect vars come from prior
+        # iteration-indexed computations and already have the iteration shape.
+        # EXCEPTION 2: If the indirect var was directly loaded with iteration indexing.
+        if indirect_info is None and has_indirect:
+            # No PallasIndirectStride - indirect vars already have iteration shape
+            return index_str
         for indirect_var in indirect_vars:
+            # Skip reshape if this var already has iteration shape
+            if indirect_var in self._cse_vars_with_iter_shape:
+                continue
             if use_2d:
                 # Flatten and add trailing dim: (numel, 1)
                 reshape_expr = f"jnp.asarray({indirect_var}).reshape(-1)[:, None]"
