@@ -1579,15 +1579,92 @@ class PallasKernel(SIMDKernel):
                 if perm is not None:
                     self._pending_transpose_perm = perm
 
+        # Check for shape mismatch or stride ordering mismatch
+        # When buffer shape doesn't match iteration shape, reshape won't work
+        # Example: input (32, 16) with iteration (16, 32) = transpose
+        # Also check for square matrices where shapes match but strides indicate transpose
+        shape_mismatch = False
+        if (
+            buf_numel == output_numel
+            and len(buf_size) == 2
+            and stride_info
+            and not skip_for_same_numel
+        ):
+            buf_shape = [self._safe_int(s) for s in buf_size]
+            if None not in buf_shape:
+                # Compute iteration 2D shape the same way as _compute_pw_2d_shape
+                # Find innermost variable (divisor=1, smallest length)
+                inner_length = None
+                inner_var = None
+                outer_var = None
+                pointwise_vars = [
+                    (var, entry)
+                    for var, entry in self.range_tree_nodes.items()
+                    if not entry.is_reduction
+                ]
+                for var_sym, entry in pointwise_vars:
+                    if entry.divisor == 1:
+                        entry_len = self._safe_int(entry.length)
+                        if entry_len is not None and entry_len > 1:
+                            if inner_length is None or entry_len < inner_length:
+                                inner_length = entry_len
+                                inner_var = var_sym
+                # Outer var is the one that's not inner
+                for var_sym, entry in pointwise_vars:
+                    if var_sym != inner_var and not entry.is_reduction:
+                        outer_var = var_sym
+                        break
+
+                if inner_length is not None and inner_length > 1:
+                    outer_length = buf_numel // inner_length
+                    iter_shape = [outer_length, inner_length]
+
+                    # Check 1: buffer shape vs iteration shape (non-square case)
+                    if (
+                        sorted(buf_shape) == sorted(iter_shape)
+                        and buf_shape != iter_shape
+                    ):
+                        shape_mismatch = True
+
+                    # Check 2: stride ordering (square case)
+                    # Extract actual stride coefficients from index expression for each var
+                    # For row-major iteration, inner var should have smaller stride than outer
+                    if not shape_mismatch and inner_var and outer_var:
+                        # Get coefficient of each variable in the index expression
+                        stripped = strip_pallas_stride(index)
+                        inner_coeff = stripped.coeff(inner_var) if hasattr(stripped, 'coeff') else None
+                        outer_coeff = stripped.coeff(outer_var) if hasattr(stripped, 'coeff') else None
+                        if (
+                            inner_coeff is not None
+                            and outer_coeff is not None
+                            and self._safe_int(inner_coeff) is not None
+                            and self._safe_int(outer_coeff) is not None
+                        ):
+                            inner_stride = self._safe_int(inner_coeff)
+                            outer_stride = self._safe_int(outer_coeff)
+                            # Normal: inner stride < outer stride
+                            # Transposed: inner stride > outer stride
+                            if inner_stride > outer_stride:
+                                shape_mismatch = True
+
         # Determine if strided indexing is needed
         # Skip strided indexing for symbolic strides - can't generate index pattern
         if (
             output_numel > 0
-            and (buf_numel != output_numel or not_all_vars_used or has_non_unit_strides)
+            and (
+                buf_numel != output_numel
+                or not_all_vars_used
+                or has_non_unit_strides
+                or shape_mismatch
+            )
             and len(used_vars) > 0
             and not skip_for_same_numel
             and not has_symbolic_stride
         ):
+            # If strided indexing handles shape mismatch (transpose), mark it
+            # so store doesn't apply transpose again
+            if shape_mismatch:
+                self.has_transposed_load = True
             return self._generate_strided_index(index), True
 
         return index_str, needs_flatten
