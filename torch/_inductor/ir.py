@@ -5236,14 +5236,14 @@ class TemplateBuffer(OperationBuffer):
         """Whether this template produces multiple outputs via MultiOutputLayout."""
         return isinstance(self.layout, MultiOutputLayout)
 
-    def can_fuse_multi_output_epilogue(self, snode: object) -> bool:
-        """Whether scheduler node can be fused as an epilogue of this multi-output template.
-
-        Returns ``False`` by default.  Subclasses may override to support
-        additional fusion patterns (e.g. epilogue fusion with multi-output
-        extraction and pointwise operations).
-        """
-        return False
+    def can_fuse_epilogue(
+        self, snode: "BaseSchedulerNode", scheduler: "Any" = None
+    ) -> bool:
+        """Return True if snode can be fused as a pointwise epilogue to this template."""
+        n2_node = getattr(snode, "node", None)
+        if not isinstance(n2_node, ComputedBuffer):
+            return False
+        return True
 
 
 class TritonTemplateBuffer(TemplateBuffer):
@@ -5279,6 +5279,11 @@ class TritonTemplateBuffer(TemplateBuffer):
             allowed_prologue_inps if allowed_prologue_inps else OrderedSet()
         )
 
+        # Fusion metadata — read by the scheduler and simd codegen.
+        self.fusable_outputs: "dict[str, str]" = {self.name: self.name}
+        self.all_inputs: "dict[str, str]" = {inp.get_name(): inp.get_name() for inp in self.inputs}
+        self.all_output_names: "set[str]" = set()
+
         self.subgraph_inps: Optional[list[Optional[Union[IRNode, sympy.Expr]]]] = None
         self.subgraph_outs: Optional[list[Optional[IRNode]]] = None
 
@@ -5312,9 +5317,281 @@ class TritonTemplateBuffer(TemplateBuffer):
     def get_allowed_prologue_inps(self) -> OrderedSet[str]:
         return self.allowed_prologue_inps
 
+
+    @classmethod
+    def realize_template_input(cls, tb: "TensorBox") -> "IRNode":
+        """Realize a TensorBox, preserving MultiOutput layout (unlike ExternKernel.realize_input)."""
+        if isinstance(tb, TensorBox) and isinstance(tb.data, MultiOutput):
+            return tb.data
+        result = ExternKernel.realize_input(tb)
+        if isinstance(result, StorageBox):
+            result = result.data
+        if isinstance(result.layout, FlexibleLayout):  # type: ignore[union-attr]
+            result.freeze_layout()
+        return result
+
+    def extract_read_writes(self, normalize: bool = False) -> dependencies.ReadWrites:
+        """Override for MultiOutputLayout: synthesize deps from inputs."""
+        if not isinstance(self.layout, MultiOutputLayout):
+            return super().extract_read_writes(normalize)
+        reads: OrderedSet[dependencies.Dep] = OrderedSet(
+            dependencies.StarDep(inp.get_name()) for inp in self.inputs
+        )
+        writes: OrderedSet[dependencies.Dep] = OrderedSet([
+            dependencies.MemoryDep(self.get_name(), sympy.Integer(0), var_names=(), size=()),
+        ])
+        return dependencies.ReadWrites(
+            reads=reads, writes=writes, index_exprs=OrderedSet(),
+            range_vars=None, var_ranges=None,
+        )
+
+    @classmethod
+    def build_multi_outputs(
+        cls,
+        template_buf: "TritonTemplateBuffer",
+        structured: object,
+        *,
+        direct_alias_at_leaf: "dict[int, IRNode] | None" = None,
+        on_tensor_leaf: "Callable[[str, MultiOutput, list[tuple[type, int]], int], None] | None" = None,
+        on_non_tensor_leaf: "Callable[[int], None] | None" = None,
+    ) -> "tuple[TensorBox, ...]":
+        """Walk a structured output tree, creating MultiOutput nodes for tensor leaves."""
+        seen_outputs: dict[int, TensorBox] = {}
+        leaf_counter = [0]
+        direct_alias = direct_alias_at_leaf or {}
+
+        def walk(output: object, indices: list[tuple[type, int]]) -> list[TensorBox]:
+            if isinstance(output, (list, tuple)):
+                results: list[TensorBox] = []
+                for i, item in enumerate(output):
+                    results.extend(walk(item, [*indices, (type(output), i)]))
+                return results
+            leaf_idx = leaf_counter[0]
+            leaf_counter[0] += 1
+            if isinstance(output, torch.Tensor):
+                if leaf_idx in direct_alias:
+                    return [TensorBox.create(direct_alias[leaf_idx])]
+                tid = id(output)
+                if tid in seen_outputs:
+                    return [seen_outputs[tid]]
+                mo = MultiOutput(FallbackKernel.tensor_to_layout(output), template_buf, indices)
+                if on_tensor_leaf is not None:
+                    on_tensor_leaf(mo.get_name(), mo, indices, leaf_idx)
+                tb = TensorBox(mo)
+                seen_outputs[tid] = tb
+                return [tb]
+            # Non-tensor leaf (int, SymInt, None, etc.)
+            if on_non_tensor_leaf is not None:
+                on_non_tensor_leaf(leaf_idx)
+            return []
+
+        return tuple(walk(structured, []))
+
     def __str__(self) -> str:
         out = f"TritonTemplateBuffer(layout={self.layout})"
         return out
+
+
+class ExternalTritonTemplateBuffer(TritonTemplateBuffer):
+    """Abstract base for external Triton kernel backends (e.g. Helion).
+
+    Subclasses implement ``_build_partial_render()``. Use ``create()`` to construct.
+    """
+
+    def __init__(
+        self,
+        layout: Layout,
+        inputs: "Sequence[IRNode]",
+        mutated_inputs: "Optional[Iterable[IRNode]]" = None,
+        allowed_prologue_inps: "Optional[OrderedSet[str]]" = None,
+    ) -> None:
+        self._multi_output_children: "dict[str, Any]" = {}
+        self._named_inputs: "dict[str, IRNode]" = {}  # param_name → IRNode, set by create()
+        self.removed_buffers: OrderedSet[str] = OrderedSet()
+        def _make_kernel_render(
+            tb: "TritonTemplateBuffer", hint_override: "Any" = None
+        ) -> "tuple[Any, Callable[[], Any]]":
+            from .select_algorithm import ExternalTritonTemplateKernel
+
+            kernel = ExternalTritonTemplateKernel(tb)
+
+            def render() -> Any:
+                n_dims = len(tb.get_size())
+                for epi_idx in range(len(tb.fusable_outputs)):
+                    kernel.store_output(
+                        indices=[f"x_epi{epi_idx}_{d}" for d in range(n_dims)],
+                        val=f"_kernel_val_{epi_idx}",
+                        mask=f"_tile_mask_{epi_idx}",
+                        indent_width=0,
+                    )
+                for param_name in tb._named_inputs:
+                    kernel.load_input(param_name)
+                return tb._build_partial_render(kernel)
+
+            return kernel, render
+
+        super().__init__(
+            layout=layout,
+            inputs=inputs,
+            make_kernel_render=_make_kernel_render,
+            mutated_inputs=mutated_inputs,
+            allowed_prologue_inps=allowed_prologue_inps,
+        )
+
+    def _build_partial_render(self, kernel: "Any") -> "Any":
+        """Build PartialRender after store_output()/load_input() have captured fusion data."""
+        raise NotImplementedError
+
+    def _build_call_args(
+        self,
+        call_order: "list[str]",
+        constant_repr: "dict[str, str]",
+        prologue_primary_sources: "dict[str, Optional[str]]",
+        extra_params: "list[tuple[str, str]]",
+    ) -> "tuple[list[str], list[str]]":
+        """Compute ``(call_preamble, call_args)`` for the kernel invocation."""
+        preamble: "list[str]" = []
+        reinterp_count = 0
+
+        def resolve_param(param_name: str) -> "Optional[str]":
+            nonlocal reinterp_count
+            node = self._named_inputs.get(param_name)
+            if node is None:
+                return constant_repr.get(param_name)
+
+            source_buf = prologue_primary_sources.get(param_name)
+
+            if isinstance(node, ReinterpretView):
+                base = source_buf if source_buf is not None else node.data.get_name()
+                preamble.append(
+                    f"reinterp_{reinterp_count} = reinterpret_tensor("
+                    f"{base}, {tuple(node.get_size())}, {tuple(node.get_stride())}, {node.layout.offset})"
+                )
+                result = f"reinterp_{reinterp_count}"
+                reinterp_count += 1
+                return result
+
+            return source_buf if source_buf is not None else node.get_name()  # type: ignore[union-attr]
+
+        call_args: "list[str]" = []
+        for param in call_order:
+            resolved = resolve_param(param)
+            if resolved is not None:
+                call_args.append(resolved)
+        call_args.extend(buf_name for _, buf_name in extra_params)
+        return preamble, call_args
+
+    @classmethod
+    def create(
+        cls,
+        realized_inputs: "dict[str, IRNode]",
+        structured_outputs: object,
+        mutated_input_names: "list[str]",
+        direct_aliases: "dict[int, IRNode]",
+        *,
+        on_tensor_leaf: "Optional[Callable[[str, Any, list[tuple[type, int]], int], None]]" = None,
+        on_non_tensor_leaf: "Optional[Callable[[int], None]]" = None,
+        **buffer_kwargs: Any,
+    ) -> "tuple[ExternalTritonTemplateBuffer, tuple[TensorBox, ...]]":
+        """Build an ExternalTritonTemplateBuffer and return ``(buf, outputs)``."""
+        inputs = list(realized_inputs.values())
+        dev = inputs[0].get_device() if inputs else torch.device("cuda")
+
+        mutated_nodes = (
+            [realized_inputs[n] for n in mutated_input_names if n in realized_inputs]
+            or None
+        )
+        mutated_inp_names = {
+            n.get_name() for n in (mutated_nodes or []) if hasattr(n, "get_name")
+        }
+        buf = cls(
+            layout=MultiOutputLayout(device=dev),
+            inputs=inputs,
+            mutated_inputs=mutated_nodes,
+            allowed_prologue_inps=OrderedSet(
+                inp.get_name() for inp in inputs  # type: ignore[union-attr]
+                if inp.get_name() not in mutated_inp_names
+            ),
+            **buffer_kwargs,
+        )
+        buf._named_inputs = dict(realized_inputs)
+        buf.all_inputs = {
+            n.get_name(): p for p, n in buf._named_inputs.items()  # type: ignore[union-attr]
+        }
+        for inp in mutated_nodes or []:
+            if hasattr(inp, "get_name"):
+                V.graph.never_reuse_buffers.add(inp.get_name())
+
+        flat, _ = (
+            pytree.tree_flatten(structured_outputs)
+            if structured_outputs is not None
+            else ([], None)
+        )
+        if not any(isinstance(leaf, torch.Tensor) for leaf in flat):
+            buf._multi_output_children = {}
+            buf.all_output_names = set()
+            return buf, ()
+
+        multi_output_children: "dict[str, Any]" = {}
+
+        def wrapped_on_tensor_leaf(mo_name, mo, indices, leaf_idx):
+            multi_output_children[mo_name] = mo
+            if on_tensor_leaf is not None:
+                on_tensor_leaf(mo_name, mo, indices, leaf_idx)
+
+        result = cls.build_multi_outputs(
+            buf,
+            structured_outputs,
+            direct_alias_at_leaf=direct_aliases,
+            on_tensor_leaf=wrapped_on_tensor_leaf,
+            on_non_tensor_leaf=on_non_tensor_leaf,
+        )
+        buf._multi_output_children = multi_output_children
+        buf.all_output_names = set(multi_output_children.keys())
+        return buf, result
+
+    @property
+    def dtype(self) -> torch.dtype:
+        # MultiOutputLayout has no dtype; infer from the first input.
+        return self.inputs[0].get_dtype() if self.inputs else torch.float32  # type: ignore[union-attr]
+
+    def should_allocate(self) -> bool:
+        return False
+
+    def get_size(self) -> "Sequence[sympy.Expr]":
+        if self._multi_output_children:
+            first_child = next(iter(self._multi_output_children.values()))
+            return first_child.get_size()
+        return []
+
+    def set_current_node(self, node: Any) -> "AbstractContextManager[None]":
+        return nullcontext()
+
+    def __str__(self) -> str:
+        return f"{type(self).__name__}(layout={self.layout})"
+
+
+@dataclasses.dataclass
+class KernelSource:
+    """Source, imports, and call-site args for an external kernel."""
+
+    source: str  # complete Triton kernel source
+    imports: "list[str]"  # statements for wrapper.add_import_once()
+    call_args: "list[str]" = dataclasses.field(default_factory=list)  # ordered arg list for the invocation
+    call_preamble: "list[str]" = dataclasses.field(default_factory=list)  # reinterpret_tensor lines before call
+
+
+@dataclasses.dataclass
+class CapturedEpilogueExpr:
+    """Result of tracing one epilogue, consumed by ``_build_partial_render``."""
+
+    fused_expr: str  # Triton expression using _kernel_val_{epi_idx} for the original output
+    fusion_loads: "dict[str, tuple[str, str]]"  # var_name -> (param_name, sympy_idx_str)
+    store_target: "Optional[str]"  # buffer the epilogue actually stores to (may differ from output buf)
+    index_symbols: "list[str]"  # ["_fidx_0", "_fidx_1", ...] used for remapping fusion_loads offsets
+    epi_idx: int  # index for _kernel_val_{i} naming
+    kernel_output_param: str  # param name of the kernel output this fuses onto
+    kernel_output_buf: str  # buffer name of the kernel output
 
 
 PrimitiveInfoType = Union[int, float, bool, str, list[Union[int, str, float, bool]]]
