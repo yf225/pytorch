@@ -1888,17 +1888,28 @@ class FusedSchedulerNode(BaseSchedulerNode):
             assert len(node2.read_writes.writes) == 1
             assert isinstance(next(iter(node2.read_writes.writes)), StarDep)
             name = next(iter(node2.read_writes.writes)).name
-            template_nodes = [node for node in node1.get_nodes() if node.is_template()]
-            assert len(template_nodes) == 1
-            template_node = template_nodes[0]
-            assert len(template_node.read_writes.writes) == 1
-            write = next(iter(template_node.read_writes.writes))
-            assert isinstance(write, MemoryDep)
+            # Use the MultiOutput child's actual FixedLayout to build a non-trivial
+            # MemoryDep.  This makes score_fusion_memory() return a positive value so
+            # choices.py and can_fuse_vertical() can naturally decide whether to fuse
+            # a downstream epilogue — instead of requiring manual index-match guards.
+            # Use the same prefix ("d") and squeeze logic as extract_read_writes() so
+            # that the MemoryDep symbols match what a downstream ComputedBuffer epilogue
+            # produces in its own read_writes.reads, enabling score_fusion_memory() to
+            # find a non-zero intersection.
+            from torch._inductor.dependencies import index_vars_squeeze
+
+            mo_size = node2.node.get_size()
+            (mo_vars,), var_ranges = index_vars_squeeze(mo_size, prefix="d")
+            mo_index = node2.node.get_layout().make_indexer()(mo_vars)
             node2.read_writes.writes = OrderedSet(
                 [
                     MemoryDep(
-                        name, write.index, write.var_names, write.size, write.mode
-                    ),
+                        name,
+                        mo_index,
+                        tuple(var_ranges.keys()),
+                        tuple(var_ranges.values()),
+                        None,
+                    )
                 ]
             )
         else:
@@ -5527,6 +5538,18 @@ class Scheduler:
             why("template epilogue not satisfied")
             return False
 
+        # Template-specific epilogue eligibility check.
+        # can_fuse_vertical() and the scheduler's dependency tracking handle
+        # index-match and other-user filtering naturally, now that
+        # FusedSchedulerNode.fuse() produces non-trivial MemoryDeps for MultiOutput
+        # children (score_fusion_memory() is > 0, so choices.py no longer rejects).
+        if node1.is_template():
+            template_buf = node1.get_template_node()
+            if template_buf is not None:
+                if not template_buf.can_fuse_epilogue(node2, self):
+                    why("template epilogue rejected by can_fuse_epilogue()")
+                    return False
+
         if (node1.get_buffer_names() & V.graph.no_fuse_buffer_names) or (
             node2.get_buffer_names() & V.graph.no_fuse_buffer_names
         ):
@@ -7027,20 +7050,31 @@ class BaseScheduling:  # noqa: docstring_linter
         """
         A Multi-Output Template (referenced in #144012) is a template node
         with MultiOutputLayout, and its output buffers are instances of MultiOutput.
-        In this context, we verify whether node1 represents the Multi-Output Template
-        and node2 corresponds to one of its outputs. If so, we further check if
-        backend supports this fusion.
+        This method handles only the structural guard: MultiOutput tuple-unpacking
+        nodes are scheduled adjacent to the template.
 
-        Delegates to ``TemplateBuffer.can_fuse_multi_output_epilogue`` which
-        TemplateBuffer subclasses may override to allow fusion of additional node types.
+        Pointwise epilogue fusion falls through to the standard can_fuse() path,
+        where ``TemplateBuffer.can_fuse_epilogue()`` is called for backend-specific
+        eligibility checks.
         """
         template_buf = node1.get_template_node()
         if not isinstance(template_buf, ir.TemplateBuffer):
             return False
         if not template_buf.is_multi_outputs_template():
             return False
-        if template_buf.can_fuse_multi_output_epilogue(node2):
-            return True
+
+        n2_node = getattr(node2, "node", None)
+
+        # MultiOutput nodes (tuple extraction from template's multi-output) are
+        # always eligible; they just unpack an element of the output tuple.
+        if isinstance(n2_node, ir.MultiOutput):
+            return (
+                len(n2_node.inputs) == 1
+                and n2_node.inputs[0].get_name() == template_buf.get_name()
+            )
+
+        # All other fusions (pointwise epilogues etc.) fall through to the
+        # standard can_fuse() path where can_fuse_epilogue() is called.
         return False
 
     def fuse(

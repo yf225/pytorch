@@ -556,6 +556,68 @@ class TritonTemplateKernel(TritonKernel):
     def _gen_tmp_var(self) -> str:
         return f"_tmp_var{next(self.tmp_var_ctr)}"
 
+    def configure_fusion_nodes(
+        self,
+        epilogue_nodes: list,
+        fusable_prologue: list,
+        output_param_mapping: dict,
+        input_param_mapping: dict,
+    ) -> None:
+        """No-op for standard templates; hook-based rendering handles fusion via render()."""
+        pass
+
+    def can_codegen_subgraph_nodes(self) -> bool:
+        """Whether simd.py should call node.codegen() inside set_subgraph_body blocks.
+
+        Standard templates return True: node.codegen() writes Triton ops into the
+        subgraph IndentedBuffer which is later substituted into the template source.
+
+        External templates (ExternalTritonTemplateKernel) return False: fusion
+        expressions are already captured by _trace_fusion_expr inside
+        set_subgraph_body.__enter__, so the node.codegen() call is unnecessary
+        and would fail (the kernel has no real range trees set up).
+        """
+        return True
+
+    def finalize_kernel_source(self, partial_code: Any, origins: Any = None) -> str:
+        """Finalize hook placeholders and return the complete Triton source string.
+
+        Called after the ``with kernel:`` block exits (i.e. after
+        remove_kernel_local_buffers() has run), so DeferredLine entries for
+        removed buffers are correctly suppressed.
+        """
+        with V.set_kernel_handler(self):
+            if not isinstance(partial_code, str):
+                # Computes flops for TritonTemplateKernels.
+                with ir.IRNode.current_origins(origins or set()):
+                    partial_code.finalize_hook("<DEF_KERNEL>")
+                partial_code.finalize_hook("<ARGDEFS>", strict=False)
+
+            for input_name in self.named_input_nodes:
+                partial_code.finalize_hook(
+                    f"<LOAD_INPUT_{input_name}>", strict=False
+                )
+
+            num_store_subgraphs = self.get_store_output_count()
+            for i in range(num_store_subgraphs):
+                subgraph_name = self._get_store_output_subgraph_name(i)
+                partial_code.finalize_hook(subgraph_name)
+
+            if isinstance(partial_code, str):
+                src_code = partial_code
+            else:
+                src_code = partial_code.finalize_remaining()
+
+            if config.benchmark_kernel:
+                num_gb = self.estimate_kernel_num_bytes() / 1e9
+                src_code = (
+                    f"{self.imports_for_benchmark_kernel()}\n"
+                    f"{src_code}\n"
+                    f"{self.codegen_kernel_benchmark(num_gb).getvalue()}"
+                )
+
+        return src_code
+
     def input_dependent_preserved_state(self) -> str:
         # Not adding self.args.output_buffers on purpose. But we do not need to reproduce it on a cache hit.
         # (never accessed).
@@ -1123,7 +1185,6 @@ class TritonTemplateKernel(TritonKernel):
                 if input_node.get_name() not in self.prologue_fused_inputs:
                     assert load_code is not None
                     self.body.writeline(load_code)
-
                 return textwrap.indent(self.body.getvalue(), " " * indent_width).strip()
 
         return self._register_hook(hook_key, hook)
@@ -1396,7 +1457,6 @@ class TritonTemplateKernel(TritonKernel):
                 # more stuff might have been added since the codegen_body above
                 self.codegen_body()
                 self.cse.invalidate(OrderedSet())
-
                 return textwrap.indent(self.body.getvalue(), " " * indent_width).strip()
 
         return self._register_hook(subgraph_name, hook)
@@ -1608,6 +1668,462 @@ class TritonTemplateKernel(TritonKernel):
                 return list(fixed_layout_copy.stride)
         # Already frozen or not a FlexibleLayout, just return current strides
         return node.get_stride()
+
+
+# Sentinel embedded in prologue tl.load() template expressions to mark where the
+# optional mask argument goes.  Substituted by _codegen_prologue_fusion at each site.
+_PROLOGUE_MASK_SENTINEL = "@MASK@"
+
+
+class ExternalTritonTemplateKernel(TritonTemplateKernel):
+    """Codegen kernel handle for external Triton template backends.
+
+    Lifecycle (unified path):
+    1. ``configure_fusion_nodes()`` — called BEFORE ``with kernel:`` in simd.py.
+       Stores raw eligibility data (_eligible_epilogue_data, _fusable_prologue_raw).
+       Pre-computes prologue extra inputs for multi-source prologues.
+    2. ``render()`` (closure in _make_kernel_render) — called inside ``with kernel:``.
+       Calls ``store_output()`` for each eligible epilogue and ``load_input()`` for
+       each named input; traces fusion expressions and registers PartialRender hooks.
+       Delegates to ``tb._build_partial_render(kernel)`` for AST gen + source.
+    3. ``set_subgraph_body()`` — trivial no-op; simd.py calls it but nothing to do
+       since all tracing was done in render().
+    4. ``finalize_kernel_source()`` — called after ``with kernel:`` exits.
+       Finalizes epilogue placeholder hooks in the PartialRender and sets kernel attrs.
+    """
+
+    def __init__(self, template_buffer: "ir.ExternalTritonTemplateBuffer") -> None:
+        class _RealOutputNode:
+            """Provides real output size/layout so range trees have correct numel."""
+            def get_size(self_inner) -> list:
+                return list(template_buffer.get_size())
+            def get_layout(self_inner):
+                return template_buffer.get_layout()
+            def get_name(self_inner) -> str:
+                return template_buffer.get_name()
+
+        super().__init__(
+            kernel_name="",
+            input_nodes=(),
+            output_node=_RealOutputNode(),
+            defines={},
+            num_stages=1,
+            num_warps=4,
+            grid_fn=None,
+            meta={},
+            call_sizes=[],
+        )
+        self._template_buffer = template_buffer
+        # Raw data stored by configure_fusion_nodes(); no specs, no tracing.
+        # (sched_node, ir_node, output_buf_name) — sched_node needed for codegen()
+        self._eligible_epilogue_data: "list[tuple[Any, Any, str]]" = []
+        self._fusable_prologue_raw: "list[tuple[Any, str, frozenset]]" = []
+        self._output_param_mapping: "dict[str, str]" = {}
+        # Set of accepted epilogue scheduler node ids.  Populated by
+        # configure_fusion_nodes(); used by _codegen_single_template() to
+        # partition epilogues into fusable (inline into template kernel)
+        # and unfusable (generate standalone kernels).
+        self._accepted_epilogue_snodes: "set[int]" = set()
+        # Extra inputs accumulated during tracing in store_output()/load_input().
+        self._epi_extra_inputs: "dict[str, str]" = {}   # buf_name -> param_name
+        self._pro_extra_inputs: "dict[str, str]" = {}   # secondary src -> param_name (multi-source)
+        # Captured trace results from store_output()/load_input().
+        self._captured_epilogue: "list[ir.CapturedEpilogueExpr]" = []
+        self._captured_prologue: "dict[str, ir.CapturedPrologueExpr]" = {}  # param_name -> data
+        # Precomputed ks metadata set during render() for use in finalize_kernel_source().
+        self._precomputed_ks_meta: "Optional[tuple]" = None
+        # Fields populated by finalize_kernel_source() and used by call_kernel / emit_kernel_override.
+        self.kernel_source: Optional[ir.KernelSource] = None
+        self.output_name: str = ""
+        self.multi_output_children: dict[str, Any] = {}
+        # Epilogue codegen interception state (active only during store_output).
+        self._epi_captured_store: "Optional[tuple]" = None  # (value, target_name) or None
+
+    def configure_fusion_nodes(
+        self,
+        epilogue_nodes: list,
+        fusable_prologue: list,
+        output_param_mapping: dict,
+        input_param_mapping: dict,
+    ) -> None:
+        """Store raw fusion data for use by store_output()/load_input() during render().
+
+        Called BEFORE ``with kernel:`` so that data is ready when render() runs.
+        Pre-computes the ordered eligible-epilogue list so store_output() can do an O(1)
+        eligibility check at its call site (mirroring how the standard Jinja path decides
+        per store site).  Tracing is fully deferred to store_output()/load_input().
+        """
+        from torch._inductor.dependencies import MemoryDep
+        from torch._inductor.ir import MultiOutput
+
+        self._fusable_prologue_raw = fusable_prologue
+        self._output_param_mapping = output_param_mapping
+
+        # Pre-compute ordered list of eligible epilogue (sched_node, ir_node, output_buf)
+        # tuples.  store_output() call #i uses _eligible_epilogue_data[i].
+        for epi_node in epilogue_nodes:
+            n2_node = getattr(epi_node, "node", None)
+            if isinstance(n2_node, MultiOutput):
+                continue
+            epi_deps = [
+                dep
+                for dep in epi_node.read_writes.reads
+                if isinstance(dep, MemoryDep) and dep.name in output_param_mapping
+            ]
+            if not epi_deps:
+                continue
+            self._eligible_epilogue_data.append((epi_node, n2_node, epi_deps[0].name))
+            self._accepted_epilogue_snodes.add(id(epi_node))
+
+        # Pre-register extra inputs from epilogue read_writes so that
+        # TritonKernel.load() can resolve them via self.args.input().
+        for epi_snode, _, _ in self._eligible_epilogue_data:
+            for dep in epi_snode.read_writes.reads:
+                if isinstance(dep, MemoryDep) and dep.name not in output_param_mapping:
+                    if dep.name not in self._epi_extra_inputs:
+                        param_name = f"_epi_input_{len(self._epi_extra_inputs)}"
+                        self._epi_extra_inputs[dep.name] = param_name
+                        self.args.input_buffers[dep.name] = param_name
+
+        # Pre-compute secondary source extra inputs for multi-source prologues.
+        seen_source_sets: "list[frozenset]" = []
+        for _, _buf, source_bufs in fusable_prologue:
+            if len(source_bufs) > 1 and source_bufs not in seen_source_sets:
+                seen_source_sets.append(source_bufs)
+                primary = next(iter(source_bufs))
+                for src in source_bufs:
+                    if src != primary and src not in self._pro_extra_inputs:
+                        self._pro_extra_inputs[src] = f"_pro_input_{len(self._pro_extra_inputs)}"
+
+    def store_output(  # type: ignore[override]
+        self,
+        indices: Any = (),
+        val: Any = "",
+        mask: Any = None,
+        **kwargs: Any,
+    ) -> str:
+        """Helion override: run epilogue node.codegen() through CSEProxy pipeline.
+
+        Called explicitly from render() for each eligible epilogue, mirroring how
+        the standard Jinja template calls store_output() for each store site.
+        Uses full node.codegen() instead of _trace_fusion_expr() for generality.
+        """
+        from torch._inductor.codegen.simd import IndentedBuffer
+        from torch._inductor.ir import CapturedEpilogueExpr
+
+        i = next(self.store_output_ctr)
+        subgraph_name = self._get_store_output_subgraph_name(i)
+
+        if i >= len(self._eligible_epilogue_data):
+            # No epilogue for this output — create minimal SubgraphInfo so
+            # simd.py's set_subgraph_body() doesn't fail on None.
+            self.subgraph_bodies[subgraph_name] = SubgraphInfo(body=IndentedBuffer())
+            return ""
+
+        epi_snode, n2_node, output_buf = self._eligible_epilogue_data[i]
+        output_param = self._output_param_mapping[output_buf]
+
+        # Save range tree state — entries cache their codegen via set_name()
+        # and persist across epilogues.  Each epilogue needs fresh entries so
+        # that indexing code (x0 = ..., etc.) is regenerated.
+        saved_rt_state = []
+        for tree in self.range_trees:
+            saved_rt_state.append({
+                "nodes": dict(tree.nodes),
+                "var_list": list(tree.var_list),
+                "var_ranges": dict(tree.var_ranges),
+            })
+        saved_rt_nodes = dict(self.range_tree_nodes)
+
+        with self.create_subgraph_body(subgraph_name, clear_cse=True):
+            # Clear range tree state so entries are recreated fresh
+            self.range_tree_nodes.clear()
+            for tree in self.range_trees:
+                tree.nodes.clear()
+                tree.var_list.clear()
+                tree.var_ranges.clear()
+
+            # Set template mask/shape for TritonTemplateKernel.indexing() override
+            self.template_mask = mask if mask else None
+            self.template_out_shape = val if val else None
+
+            # Pre-register kernel output value as CSE named variable.
+            # Always use float32 as the compute dtype: Triton convention is to
+            # upcast float16/bfloat16 to float32 for computation.  The bridge
+            # code in _codegen_epilogue_fusion handles the explicit .to(tl.float32).
+            kernel_val_name = f"_kernel_val_{i}"
+            # Block shape from non-reduction range trees (e.g., ("XBLOCK",))
+            block_shape = tuple(
+                f"{rt.prefix.upper()}BLOCK"
+                for rt in self.range_trees
+                if not rt.is_reduction
+            ) or ("XBLOCK",)
+            kernel_val = self.cse.namedvar(
+                kernel_val_name, dtype=torch.float32, shape=block_shape
+            )
+
+            # Pre-populate store_cache: when the epilogue inner_fn loads from the
+            # template output buffer, CSEProxy.load() finds it in the cache and
+            # returns the kernel value variable — no tl.load emitted.
+            self.cse.store_cache[output_buf] = kernel_val
+
+            # Set store interception sentinel
+            self._epi_captured_store = ("__uncaptured__", None)
+            try:
+                epi_snode.codegen(self.split_and_set_ranges(epi_snode.get_ranges()))
+            finally:
+                pass  # cleanup below
+
+            # Flush loads + compute into body (stores buffer should be empty
+            # because store() was intercepted).
+            self.codegen_body()
+
+        # Restore range tree state
+        self.range_tree_nodes = saved_rt_nodes
+        for tree, saved in zip(self.range_trees, saved_rt_state):
+            tree.nodes = saved["nodes"]
+            tree.var_list = saved["var_list"]
+            tree.var_ranges = saved["var_ranges"]
+
+        # Extract results from saved SubgraphInfo
+        store_value, store_target = self._epi_captured_store
+        self._epi_captured_store = None
+        fused_expr = str(store_value) if store_value != "__uncaptured__" else kernel_val_name
+
+        # Get preamble code from the subgraph body
+        preamble_code = self.subgraph_bodies[subgraph_name].body.getvalue()
+
+        # Rename codegen-generated variables to avoid collisions across multiple
+        # epilogues injected into the same kernel source.  Each
+        # create_subgraph_body(clear_cse=True) resets the tmp counter to 0,
+        # and all epilogues share the same range-tree variable names (xindex,
+        # xmask, x0, x1, etc.).  Prefix everything with _epi{i}_.
+        def _epi_rename(code: str, idx: int) -> str:
+            code = re.sub(r"\btmp(\d+)\b", f"_epi{idx}_tmp\\1", code)
+            code = re.sub(r"\bxindex\b", f"_epi{idx}_xindex", code)
+            code = re.sub(r"\bxmask\b", f"_epi{idx}_xmask", code)
+            code = re.sub(r"\bx(\d+)\b", f"_epi{idx}_x\\1", code)
+            return code
+        preamble_code = _epi_rename(preamble_code, i)
+        fused_expr = _epi_rename(fused_expr, i)
+
+        cap = CapturedEpilogueExpr(
+            fused_expr=fused_expr,
+            fusion_loads={},  # codegen handles loads directly
+            store_target=store_target if store_target != output_buf else None,
+            index_symbols=[],  # codegen handles indexing directly
+            epi_idx=i,
+            kernel_output_param=output_param,
+            kernel_output_buf=output_buf,
+        )
+        self._captured_epilogue.append(cap)
+
+        # Register hooks: preamble (multi-line code) and value (expression)
+        self.render_hooks[f"_helion_epi_preamble_{i}"] = lambda _code=preamble_code: _code
+        self.render_hooks[f"_helion_epi_{i}"] = lambda _e=fused_expr: _e
+        return ""
+
+    def load_input(  # type: ignore[override]
+        self,
+        input_name: str,
+        output_name: str = "",
+        indices: Any = (),
+        **kwargs: Any,
+    ) -> str:
+        """Helion override: set named_input_nodes + eligibility check + tracing.
+
+        Called explicitly from render() for each named input, mirroring how the
+        standard Jinja template calls load_input() for each load site.
+        Prologue tracing happens here (not in configure_fusion_nodes).
+        """
+        from torch._inductor.ir import CapturedPrologueExpr, _trace_fusion_expr
+
+        ir_node = self._template_buffer._named_inputs.get(input_name)
+        if ir_node is None:
+            return ""
+        self.named_input_nodes[input_name] = ir_node
+
+        # Eligibility check: is there a fusable prologue for this param's buffer?
+        input_buf = ir_node.get_name()
+        matching = [
+            (pn, ib, sb) for pn, ib, sb in self._fusable_prologue_raw
+            if ib == input_buf
+        ]
+        if not matching:
+            return ""   # regular (unfused) input — named_input_nodes set, no prologue
+
+        pro_node, _, source_bufs = matching[0]
+        primary_source = next(iter(source_bufs)) if source_bufs else None
+        pro_extra = self._pro_extra_inputs
+
+        def intercept_fn(src_name: str, sympy_index: object) -> str:
+            ptr = (
+                input_name
+                if src_name == primary_source
+                else pro_extra.get(src_name, src_name)
+            )
+            return f"tl.load({ptr} + {sympy_index}{_PROLOGUE_MASK_SENTINEL})"
+
+        fused_expr, _, _, index_syms = _trace_fusion_expr(
+            pro_node.node,
+            intercept_bufs=source_bufs,
+            intercept_fn=intercept_fn,
+            get_extra_input=lambda name: name,
+            var_prefix="_pro_",
+        )
+        cap = CapturedPrologueExpr(
+            fused_expr_template=fused_expr or "",
+            index_symbols=index_syms or [],
+            param_name=input_name,
+            primary_source_buf=primary_source,
+        )
+        self._captured_prologue[input_name] = cap
+
+        # Register Phase 2 hook: reads _prologue_indexing_ctx populated by
+        # _codegen_prologue_fusion() during AST gen, substitutes _fidx_k + @MASK@.
+        tb = self._template_buffer
+        sentinel = _PROLOGUE_MASK_SENTINEL
+
+        def prologue_hook(
+            _name: str = input_name,
+            _cap: Any = cap,
+            _tb: Any = tb,
+            _sentinel: str = sentinel,
+        ) -> str:
+            import re as _re
+            dim_exprs, mask_str = _tb._prologue_indexing_ctx.get(_name, ((), None))
+            fused = _cap.fused_expr_template
+            for k, dim_expr in enumerate(dim_exprs):
+                fused = _re.sub(rf"\b_fidx_{k}\b", f"({dim_expr})", fused)
+            mask_part = f", {mask_str}, other=0" if mask_str else ""
+            return fused.replace(_sentinel, mask_part)
+
+        self.render_hooks[f"_helion_pro_{input_name}"] = prologue_hook
+        return ""
+
+    def store(self, name: str, index: Any, value: Any, mode: Any = None) -> None:
+        """Override store to intercept epilogue stores during codegen.
+
+        When ``_epi_captured_store`` is not None, we are inside epilogue
+        codegen and the store should be captured (not emitted as tl.store).
+        The Helion AST handles the actual store.
+        """
+        if self._epi_captured_store is not None:
+            self._epi_captured_store = (value, name)
+            return  # Don't emit tl.store — Helion AST handles it
+        super().store(name, index, value, mode=mode)
+
+    @contextlib.contextmanager
+    def set_subgraph_body(self, body_name: str):  # type: ignore[override]
+        """Auto-create missing SubgraphInfo entries, then delegate to parent.
+
+        store_output() creates proper SubgraphInfo for epilogue subgraphs.
+        For other subgraphs (e.g., LOAD_INPUT from simd.py's prologue loop),
+        create a minimal entry on the fly so the parent's swap logic works.
+        """
+        if body_name not in self.subgraph_bodies:
+            from torch._inductor.codegen.simd import IndentedBuffer
+            self.subgraph_bodies[body_name] = SubgraphInfo(body=IndentedBuffer())
+        cm = TritonTemplateKernel.set_subgraph_body(self, body_name)
+        with cm:
+            yield
+
+    def finalize_kernel_source(self, partial_code: Any, origins: Any = None) -> str:
+        """Finalize epilogue + prologue placeholder hooks and set kernel attrs."""
+        # Preamble hooks: multi-line code that needs proper indentation.
+        # We handle these manually instead of via finalize_hook() because the
+        # replacement is multi-line and needs consistent indentation.
+        for i in range(len(self._captured_epilogue)):
+            key = f"_helion_epi_preamble_{i}"
+            if key in self.render_hooks and self.render_hooks[key] is not None:
+                preamble = self.render_hooks[key]()
+                if preamble.strip():
+                    src = partial_code._code
+                    idx = src.find(key)
+                    if idx >= 0:
+                        line_start = src.rfind("\n", 0, idx) + 1
+                        indent_str = src[line_start:idx]
+                        lines = preamble.rstrip("\n").split("\n")
+                        indented = ("\n" + indent_str).join(lines)
+                        partial_code._code = src.replace(key, indented)
+                    else:
+                        partial_code._code = src.replace(key, preamble)
+                else:
+                    # Empty preamble — remove the placeholder line entirely
+                    partial_code._code = partial_code._code.replace(key, "")
+                # Mark as finalized so finalize_remaining doesn't complain
+                if key in partial_code.replacement_hooks:
+                    partial_code.replacement_hooks[key] = None
+        # Value hooks: single-line expression, standard finalize_hook works.
+        for i in range(len(self._captured_epilogue)):
+            partial_code.finalize_hook(f"_helion_epi_{i}")
+        for name in self._captured_prologue:
+            partial_code.finalize_hook(f"_helion_pro_{name}", strict=False)
+        src = partial_code.finalize_remaining()
+
+        imports, call_args, call_preamble = self._precomputed_ks_meta  # type: ignore[misc]
+        tb = self._template_buffer
+        self.kernel_source = ir.KernelSource(
+            source=src, imports=imports, call_args=call_args, call_preamble=call_preamble,
+        )
+        self.output_name = tb.get_name()
+        self.multi_output_children = dict(tb._multi_output_children)
+        self.removed_buffers = OrderedSet(tb.removed_buffers)
+        return src
+
+    def can_codegen_subgraph_nodes(self) -> bool:
+        """Return False: epilogue codegen runs per-output inside store_output(),
+        not in the simd.py subgraph body loop (which runs ALL epilogues per body)."""
+        return False
+
+    def __enter__(self) -> "ExternalTritonTemplateKernel":
+        # Use Kernel.__enter__ to install CSEProxy + kernel handler.
+        # This enables the full codegen pipeline (CSEProxy → TritonKernelOverrides)
+        # needed by epilogue node.codegen() in store_output().
+        super(TritonTemplateKernel, self).__enter__()
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        super(TritonTemplateKernel, self).__exit__(exc_type, exc_val, exc_tb)
+
+    def call_kernel(self, name: str, template_buffer: Any = None) -> None:
+        """Emit kernel call using the kernel_source set by finalize_kernel_source()."""
+        assert self.kernel_source is not None
+        wrapper = V.graph.wrapper_code
+        for line in self.kernel_source.call_preamble:
+            wrapper.writeline(line)
+        wrapper.writeline(
+            f"{self.output_name} = {name}({', '.join(self.kernel_source.call_args)})"
+        )
+        for mo_name, mo in sorted(self.multi_output_children.items()):
+            if mo_name not in self.removed_buffers:
+                idx_str = self.output_name
+                for _, idx in mo.indices:
+                    idx_str = f"{idx_str}[{idx}]"
+                wrapper.writeline(f"{mo_name} = {idx_str}")
+
+    def emit_kernel_override(
+        self,
+        wrapper: Any,
+        src_code: str,
+        kernel_name: str,
+        node_schedule: Sequence[Any],
+        kernel_path: str,
+        get_kernel_metadata: Callable[..., tuple[str, str]],
+    ) -> bool:
+        """Override kernel emission using the kernel_source set by finalize_kernel_source()."""
+        assert self.kernel_source is not None
+        for imp in self.kernel_source.imports:
+            wrapper.add_import_once(imp)
+        origins, detailed = get_kernel_metadata(node_schedule, wrapper)
+        wrapper.header.writeline(f"# kernel path: {kernel_path}\n{origins}\n{detailed}")
+        for line in src_code.split("\n"):
+            s = line.strip()
+            if s.startswith(("from __future__", "import ", "from ")) or not s:
+                continue
+            wrapper.header.writeline(line)
+        wrapper.header.writeline("")
+        return True
 
 
 @functools.cache
