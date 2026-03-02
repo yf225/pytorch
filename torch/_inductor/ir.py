@@ -5160,8 +5160,8 @@ class ComputedBuffer(OperationBuffer):
 
 class TemplateBuffer(OperationBuffer):
     """
-    Represents a Triton (in the future other type) of template operator
-    that we can fuse an epilogue onto.
+    Represents a template operator that we can fuse an epilogue onto.
+    Supports Triton, Helion, and other backends.
     """
 
     def __init__(
@@ -5178,37 +5178,16 @@ class TemplateBuffer(OperationBuffer):
         # Annotations dict for storing metadata (e.g., KernelTemplateChoice)
         self.annotations: dict[str, Any] = {}
 
+        # Fusion metadata — subclasses that support fusion override these.
+        self.mutated_inputs: Optional[Iterable[IRNode]] = None
+        self.allowed_prologue_inps: OrderedSet[str] = OrderedSet()
+        self.fusable_outputs: dict[str, str] = {}
+        self.all_inputs: dict[str, str] = {}
+        self.all_output_names: set[str] = set()
+        self.outputs: list[Buffer] = [self]
+
     def get_read_writes(self) -> dependencies.ReadWrites:
         return self.extract_read_writes(normalize=True)
-
-    def extract_read_writes(self, normalize: bool = False) -> dependencies.ReadWrites:
-        name = self.get_name()
-        indexer = self.get_layout().make_indexer()
-
-        def dummy(index: Sequence[Any], rindex: Sequence[Any]) -> Any:
-            assert len(rindex) == 0
-            return ops.store(name, indexer(index), "fake")
-
-        deps = dependencies.extract_read_writes(
-            dummy, self.get_size(), (), normalize=normalize
-        )
-
-        for inp in self.inputs:
-            assert isinstance(inp, (ReinterpretView, Buffer)), type(inp)
-            assert isinstance(inp.layout, Layout), type(inp.layout)
-
-            indexer = inp.layout.make_indexer()
-
-            def dummy(index: Sequence[Any], rindex: Sequence[Any]) -> Any:
-                assert len(rindex) == 0
-                # pyrefly: ignore [missing-attribute]
-                return ops.load(inp.get_name(), indexer(index))
-
-            deps.reads |= dependencies.extract_read_writes(
-                dummy, inp.get_size(), (), normalize=normalize
-            ).reads
-
-        return deps
 
     def get_reduction_size(self) -> Sequence[Expr]:
         return sympy.S.One
@@ -5245,78 +5224,15 @@ class TemplateBuffer(OperationBuffer):
             return False
         return True
 
-
-class TritonTemplateBuffer(TemplateBuffer):
-    def __init__(
-        self,
-        layout: Layout,
-        inputs: Sequence[IRNode],
-        make_kernel_render: Optional[Callable[_P, _T]],
-        mutated_inputs: Optional[Iterable[IRNode]] = None,
-        allowed_prologue_inps: Optional[OrderedSet[str]] = None,
-    ) -> None:
-        """
-        NOTE:[TritonTemplates with multiple outputs]
-        We want the ability for TritonTemplates to output multiple tensors. Triton
-        kernels have no notion of outputs and this is done by creating tensors that
-        are then mutated by the kernel. Currently our STORE_OUTPUT codegen doesn't
-        support creating multinode outputs for triton templates.
-        We work around this by creating an extra input buffer during the lowering
-        and we mark them as mutated inputs.
-        """
-        super().__init__(layout, inputs, make_kernel_render)
-        self.mutated_inputs = mutated_inputs
-        self.outputs: list[Buffer] = [self]
-        if mutated_inputs is not None:
-            assert isinstance(self.inputs[0], IRNode), type(self.inputs[0])
-            device = self.inputs[0].get_device()
-            self.outputs += [
-                MutationOutput(NoneLayout(device=device), buf, self)
-                for buf in mutated_inputs
-            ]
-
-        self.allowed_prologue_inps = (
-            allowed_prologue_inps if allowed_prologue_inps else OrderedSet()
-        )
-
-        # Fusion metadata — read by the scheduler and simd codegen.
-        self.fusable_outputs: "dict[str, str]" = {self.name: self.name}
-        self.all_inputs: "dict[str, str]" = {inp.get_name(): inp.get_name() for inp in self.inputs}
-        self.all_output_names: "set[str]" = set()
-
-        self.subgraph_inps: Optional[list[Optional[Union[IRNode, sympy.Expr]]]] = None
-        self.subgraph_outs: Optional[list[Optional[IRNode]]] = None
-
-    @cache_on_self_and_args("TritonTemplateBuffer")
-    def get_free_symbol_uses(
-        self, unbacked_only: bool = False
-    ) -> OrderedSet[sympy.Symbol]:
-        res = super().get_free_symbol_uses(unbacked_only)
-        subgraph_outs = self.subgraph_outs if self.subgraph_outs else []
-        subgraph_inps = self.subgraph_inps if self.subgraph_inps else []
-
-        for inp in subgraph_inps:
-            if isinstance(inp, sympy.Expr):
-                res.update(get_free_symbols(inp, unbacked_only))
-            elif isinstance(inp, IRNode):
-                res.update(inp.get_free_symbol_uses(unbacked_only))
-            else:
-                assert inp is None
-
-        for out in subgraph_outs:
-            if isinstance(out, IRNode):
-                res.update(out.get_free_symbol_uses(unbacked_only))
-            else:
-                assert out is None
-
-        return res
-
-    def get_outputs(self) -> list[Buffer]:
-        return self.outputs
+    def supports_prologue_fusion(self) -> bool:
+        """Whether this template buffer supports prologue fusion."""
+        return bool(self.allowed_prologue_inps)
 
     def get_allowed_prologue_inps(self) -> OrderedSet[str]:
         return self.allowed_prologue_inps
 
+    def get_outputs(self) -> list[Buffer]:
+        return self.outputs
 
     @classmethod
     def realize_template_input(cls, tb: "TensorBox") -> "IRNode":
@@ -5332,23 +5248,50 @@ class TritonTemplateBuffer(TemplateBuffer):
 
     def extract_read_writes(self, normalize: bool = False) -> dependencies.ReadWrites:
         """Override for MultiOutputLayout: synthesize deps from inputs."""
-        if not isinstance(self.layout, MultiOutputLayout):
-            return super().extract_read_writes(normalize)
-        reads: OrderedSet[dependencies.Dep] = OrderedSet(
-            dependencies.StarDep(inp.get_name()) for inp in self.inputs
+        if isinstance(self.layout, MultiOutputLayout):
+            reads: OrderedSet[dependencies.Dep] = OrderedSet(
+                dependencies.StarDep(inp.get_name()) for inp in self.inputs
+            )
+            writes: OrderedSet[dependencies.Dep] = OrderedSet([
+                dependencies.MemoryDep(self.get_name(), sympy.Integer(0), var_names=(), size=()),
+            ])
+            return dependencies.ReadWrites(
+                reads=reads, writes=writes, index_exprs=OrderedSet(),
+                range_vars=None, var_ranges=None,
+            )
+
+        name = self.get_name()
+        indexer = self.get_layout().make_indexer()
+
+        def dummy(index: Sequence[Any], rindex: Sequence[Any]) -> Any:
+            assert len(rindex) == 0
+            return ops.store(name, indexer(index), "fake")
+
+        deps = dependencies.extract_read_writes(
+            dummy, self.get_size(), (), normalize=normalize
         )
-        writes: OrderedSet[dependencies.Dep] = OrderedSet([
-            dependencies.MemoryDep(self.get_name(), sympy.Integer(0), var_names=(), size=()),
-        ])
-        return dependencies.ReadWrites(
-            reads=reads, writes=writes, index_exprs=OrderedSet(),
-            range_vars=None, var_ranges=None,
-        )
+
+        for inp in self.inputs:
+            assert isinstance(inp, (ReinterpretView, Buffer)), type(inp)
+            assert isinstance(inp.layout, Layout), type(inp.layout)
+
+            indexer = inp.layout.make_indexer()
+
+            def dummy(index: Sequence[Any], rindex: Sequence[Any]) -> Any:
+                assert len(rindex) == 0
+                # pyrefly: ignore [missing-attribute]
+                return ops.load(inp.get_name(), indexer(index))
+
+            deps.reads |= dependencies.extract_read_writes(
+                dummy, inp.get_size(), (), normalize=normalize
+            ).reads
+
+        return deps
 
     @classmethod
     def build_multi_outputs(
         cls,
-        template_buf: "TritonTemplateBuffer",
+        template_buf: "TemplateBuffer",
         structured: object,
         *,
         direct_alias_at_leaf: "dict[int, IRNode] | None" = None,
@@ -5387,15 +5330,82 @@ class TritonTemplateBuffer(TemplateBuffer):
 
         return tuple(walk(structured, []))
 
+
+class TritonTemplateBuffer(TemplateBuffer):
+    def __init__(
+        self,
+        layout: Layout,
+        inputs: Sequence[IRNode],
+        make_kernel_render: Optional[Callable[_P, _T]],
+        mutated_inputs: Optional[Iterable[IRNode]] = None,
+        allowed_prologue_inps: Optional[OrderedSet[str]] = None,
+    ) -> None:
+        """
+        NOTE:[TritonTemplates with multiple outputs]
+        We want the ability for TritonTemplates to output multiple tensors. Triton
+        kernels have no notion of outputs and this is done by creating tensors that
+        are then mutated by the kernel. Currently our STORE_OUTPUT codegen doesn't
+        support creating multinode outputs for triton templates.
+        We work around this by creating an extra input buffer during the lowering
+        and we mark them as mutated inputs.
+        """
+        super().__init__(layout, inputs, make_kernel_render)
+        self.mutated_inputs = mutated_inputs
+        self.outputs = [self]
+        if mutated_inputs is not None:
+            assert isinstance(self.inputs[0], IRNode), type(self.inputs[0])
+            device = self.inputs[0].get_device()
+            self.outputs += [
+                MutationOutput(NoneLayout(device=device), buf, self)
+                for buf in mutated_inputs
+            ]
+
+        self.allowed_prologue_inps = (
+            allowed_prologue_inps if allowed_prologue_inps else OrderedSet()
+        )
+
+        # Fusion metadata — read by the scheduler and simd codegen.
+        self.fusable_outputs = {self.name: self.name}
+        self.all_inputs = {inp.get_name(): inp.get_name() for inp in self.inputs}
+        self.all_output_names: set[str] = set()
+
+        self.subgraph_inps: Optional[list[Optional[Union[IRNode, sympy.Expr]]]] = None
+        self.subgraph_outs: Optional[list[Optional[IRNode]]] = None
+
+    @cache_on_self_and_args("TritonTemplateBuffer")
+    def get_free_symbol_uses(
+        self, unbacked_only: bool = False
+    ) -> OrderedSet[sympy.Symbol]:
+        res = super().get_free_symbol_uses(unbacked_only)
+        subgraph_outs = self.subgraph_outs if self.subgraph_outs else []
+        subgraph_inps = self.subgraph_inps if self.subgraph_inps else []
+
+        for inp in subgraph_inps:
+            if isinstance(inp, sympy.Expr):
+                res.update(get_free_symbols(inp, unbacked_only))
+            elif isinstance(inp, IRNode):
+                res.update(inp.get_free_symbol_uses(unbacked_only))
+            else:
+                assert inp is None
+
+        for out in subgraph_outs:
+            if isinstance(out, IRNode):
+                res.update(out.get_free_symbol_uses(unbacked_only))
+            else:
+                assert out is None
+
+        return res
+
     def __str__(self) -> str:
         out = f"TritonTemplateBuffer(layout={self.layout})"
         return out
 
 
-class ExternalTritonTemplateBuffer(TritonTemplateBuffer):
-    """Abstract base for external Triton kernel backends (e.g. Helion).
+class HelionTemplateBuffer(TemplateBuffer):
+    """Abstract base for external template kernel backends (e.g. Helion).
 
     Subclasses implement ``_build_partial_render()``. Use ``create()`` to construct.
+    No Triton-specific inheritance — inherits directly from ``TemplateBuffer``.
     """
 
     def __init__(
@@ -5409,11 +5419,11 @@ class ExternalTritonTemplateBuffer(TritonTemplateBuffer):
         self._named_inputs: "dict[str, IRNode]" = {}  # param_name → IRNode, set by create()
         self.removed_buffers: OrderedSet[str] = OrderedSet()
         def _make_kernel_render(
-            tb: "TritonTemplateBuffer", hint_override: "Any" = None
+            tb: "HelionTemplateBuffer", hint_override: "Any" = None
         ) -> "tuple[Any, Callable[[], Any]]":
-            from .select_algorithm import ExternalTritonTemplateKernel
+            from .select_algorithm import HelionTemplateKernel
 
-            kernel = ExternalTritonTemplateKernel(tb)
+            kernel = HelionTemplateKernel(tb)
 
             def render() -> Any:
                 n_dims = len(tb.get_size())
@@ -5430,12 +5440,26 @@ class ExternalTritonTemplateBuffer(TritonTemplateBuffer):
 
             return kernel, render
 
+        # Call TemplateBuffer.__init__ directly (no TritonTemplateBuffer in chain)
         super().__init__(
             layout=layout,
             inputs=inputs,
             make_kernel_render=_make_kernel_render,
-            mutated_inputs=mutated_inputs,
-            allowed_prologue_inps=allowed_prologue_inps,
+        )
+
+        # Set fusion attributes
+        self.mutated_inputs = mutated_inputs
+        self.outputs = [self]
+        if mutated_inputs is not None:
+            assert isinstance(self.inputs[0], IRNode), type(self.inputs[0])
+            device = self.inputs[0].get_device()
+            self.outputs += [
+                MutationOutput(NoneLayout(device=device), buf, self)
+                for buf in mutated_inputs
+            ]
+
+        self.allowed_prologue_inps = (
+            allowed_prologue_inps if allowed_prologue_inps else OrderedSet()
         )
 
     def _build_partial_render(self, kernel: "Any") -> "Any":
@@ -5492,8 +5516,8 @@ class ExternalTritonTemplateBuffer(TritonTemplateBuffer):
         on_tensor_leaf: "Optional[Callable[[str, Any, list[tuple[type, int]], int], None]]" = None,
         on_non_tensor_leaf: "Optional[Callable[[int], None]]" = None,
         **buffer_kwargs: Any,
-    ) -> "tuple[ExternalTritonTemplateBuffer, tuple[TensorBox, ...]]":
-        """Build an ExternalTritonTemplateBuffer and return ``(buf, outputs)``."""
+    ) -> "tuple[HelionTemplateBuffer, tuple[TensorBox, ...]]":
+        """Build a HelionTemplateBuffer and return ``(buf, outputs)``."""
         inputs = list(realized_inputs.values())
         dev = inputs[0].get_device() if inputs else torch.device("cuda")
 

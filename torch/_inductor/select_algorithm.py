@@ -61,11 +61,13 @@ from .codegen.common import (
     WorkspaceArg,
     WorkspaceZeroMode,
 )
+from .codegen.simd import SIMDKernel
 from .codegen.simd_kernel_features import SIMDKernelFeatures
 from .codegen.subgraph import SubgraphChoiceCaller
 from .codegen.triton import (
     texpr,
     TMACompatibilityChecker,
+    TritonCSE,
     TritonKernel,
     TritonScheduling,
     TritonSymbols,
@@ -428,186 +430,27 @@ class ModificationWrapper(V.WrapperHandler):  # type: ignore[name-defined]
 RecordedEventsType = list[tuple[str, list[Any], dict[str, Any]]]
 
 
-class TritonTemplateKernel(TritonKernel):
+class TemplateFusionMixin:
+    """Backend-agnostic fusion orchestration protocol.
+
+    Provides fusion state management and hook infrastructure without any
+    dependency on range trees, texpr, TritonOverrides, or SIMD concepts.
+    Designed for cooperative MI: ``super().__init__(*args, **kwargs)`` passes
+    through to the next class in MRO.
     """
-    A specialized kernel class for Triton templates that handles code generation
-    for templated Triton kernels.
 
-    This class extends TritonKernel to provide additional functionality for
-    template-based kernel generation, including support for subgraphs, workspace
-    arguments, and prologue/epilogue fusion.
-    """
-
-    def __init__(
-        self,
-        kernel_name,
-        input_nodes: tuple[ir.IRNode, ...],
-        output_node,
-        defines,
-        num_stages,
-        num_warps,
-        grid_fn,
-        meta,
-        call_sizes,
-        num_consumer_groups=0,
-        num_buffers_warp_spec=0,
-        use_jit=False,
-        tma_store=False,
-        transpose_discontiguous_tensor_descriptors_override=None,
-        prefix_args=0,
-        suffix_args=0,
-        epilogue_fn=identity,
-        subgraphs: Optional[list[ir.ComputedBuffer]] = None,
-        workspace_arg: Optional[WorkspaceArg] = None,
-        prologue_loads_all_inputs=False,
-        hint_override: Optional[int] = None,
-        triton_meta: Optional[dict[str, object]] = None,
-        always_freeze_layout: bool = False,
-    ) -> None:
-        if tma_store:
-            pass
-        numel = sympy_product(output_node.get_size())
-        if tma_store:
-            assert len(output_node.get_size()) == 2, (
-                "TMA store only supported for 2D with templates"
-            )
-            tiling = {
-                "x": output_node.get_size()[0],
-                "y": output_node.get_size()[1],
-                "r0_": sympy.S.One,
-            }
-        else:
-            tiling = {
-                "x": numel,
-                "r0_": sympy.S.One,
-            }
-        super().__init__(
-            tiling,
-            features=SIMDKernelFeatures([], numel),
-            hint_override=hint_override,
-        )
-        if tma_store:
-            # By default `construct_range_trees` will return the range_trees in the order
-            # ["z", "y", "x", "r0_", "r1_"] (see simd.py:all_prefixes)
-            # and this order defines what the kernel block shape will be. So if the template
-            # input / output has requested e.g. ["x", "y"], `construct_range_trees` will still return the
-            # trees in the order ["y", "x"]. This would mean that the template would need to transpose
-            # the loaded value.
-            # The below sorts the range trees according to that required by the caller
-            prefix_to_range_tree = {rt.prefix: rt for rt in self.range_trees}
-            pw_sorted_range_trees = []
-            reduction_idx = None
-            for i, prefix in enumerate(tiling):
-                rt = prefix_to_range_tree[prefix]
-
-                if rt.is_reduction:
-                    reduction_idx = i
-                    break
-                rt.index = i
-                rt.grid_dim = i
-                rt.tensor_dim = i
-                pw_sorted_range_trees.append(rt)
-            self.range_trees = pw_sorted_range_trees + self.range_trees[reduction_idx:]
-
-        self.input_nodes = input_nodes
-        self.output_node = output_node
-        self.named_input_nodes = {}  # type: ignore[var-annotated]
-        self.defines = defines
-        self.kernel_name = kernel_name
-        self.use_jit = use_jit
-        self.tma_store = tma_store
-        self.transpose_discontiguous_tensor_descriptors_override = (
-            transpose_discontiguous_tensor_descriptors_override
-        )
-        self.num_stages = num_stages
-        self.num_warps = num_warps
-        self.num_consumer_groups = num_consumer_groups
-        self.num_buffers_warp_spec = num_buffers_warp_spec
-        self.grid_fn = grid_fn
-        self.meta = meta
-        self.call_sizes = call_sizes
-        # for templates with fixed epilogues
-        self.prefix_args = prefix_args
-        self.suffix_args = suffix_args
-        # pyrefly: ignore [invalid-type-var]
-        self.epilogue_fn = epilogue_fn
-        self.render_hooks = {}  # type: ignore[var-annotated]
-        self.triton_meta: Optional[dict[str, object]] = triton_meta
-        # For Templated Attention this can be a list of ir.Subgraph
-        self.subgraphs: Optional[list[ir.ComputedBuffer]] = subgraphs
-
-        # Some templates use extra global memory as a workspace
-        self.workspace_arg = workspace_arg
-        if workspace_arg is not None:
-            self.args.workspace_args.append(workspace_arg)
-
-        # The following attributes (body, template_mask, output_val) are all
-        # used for triton kernel codegen.
-        # They are swapped onto the TritonTemplateKernel object by
-        # `set_subgraph_body`
-        self.subgraph_bodies: dict[str, SubgraphInfo] = {}
-
-        # input buffers which we are allowed to prologue fuse into
-        self.prologue_supported_inputs: OrderedSet[str] = OrderedSet()
-
-        # input buffers which we are fusing into
-        self.prologue_fused_inputs: OrderedSet[str] = OrderedSet()
-        # input buffers which we are fusing into, which preserve a zero mask
-        self.prologue_fused_inputs_preserve_zero: OrderedSet[str] = OrderedSet()
-
-        # The following attributes are all used for triton kernel codegen.
-        # They are swapped onto the TritonTemplateKernel object by
-        # `set_subgraph_body`
-        # NB: the names here must match the fields in SubgraphInfo
-        self.body: IndentedBuffer = FakeIndentedBuffer()
-        self.compute: IndentedBuffer = FakeIndentedBuffer()
-        self.indexing_code: IndentedBuffer = FakeIndentedBuffer()
-        self.loads: IndentedBuffer = FakeIndentedBuffer()
-        self.stores: IndentedBuffer = FakeIndentedBuffer()
-        self.template_mask: Optional[str] = None
-        self.template_out_shape: Optional[Union[str, tuple[str]]] = None
-        self.ops_handler: Optional[V.WrapperHandler] = None  # type: ignore[name-defined]
-
-        # When caching is enabled, the generated code is not dependent on the input nodes names, or
-        # symbolic sizes names.
-        # However, some of the variables returned by generate_and_load that are computed during the
-        # triton template expansions (code generation) are dependent on those.
-        # In order to cache the code generation and avoid redoing it for similar inputs that varies only by
-        # input names or symbol names, we do a record and replay method.
-        # During template expansions we record all function calls that change input_dependent_preserved_state
-        # and replay them on a cache hit to regenerate them.
-        self.cached_replay_events: Optional[RecordedEventsType] = None
-
-        # Update each time an input is marked frozen, used to replay the freezing of inputs on a cache hit.
-        self.frozen_layouts_cnt = 0
-
-        # When prologue_loads_all_inputs is true, prologue_supported_inputs is populated during def_kernel
-        # by adding all inputs.
-        self.prologue_loads_all_inputs = prologue_loads_all_inputs
-
-        # When always_freeze_layout is True, get_stride_and_maybe_freeze_layout will
-        # always freeze the layout immediately, bypassing layout constraints.
-        # This is used by FlexAttention templates which require frozen layouts.
-        self.always_freeze_layout = always_freeze_layout
-
-        # Extra functions to be exposed during partial template rendering.
-        self.extra_template_env_fns: list[Callable[..., Any]] = []
-
-        # Fusion node data (populated by configure_fusion_nodes)
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Pure fusion state
         self._eligible_epilogue_data: list[tuple] = []
         self._fusable_prologue_raw: list[tuple] = []
         self._output_param_mapping: dict[str, str] = {}
         self._accepted_epilogue_snodes: set[int] = set()
         self._epi_extra_inputs: dict[str, str] = {}
-
-        # Tracking for intermediate variables
-        self.tmp_var_ctr = itertools.count()
-
-        # Per-output state saved by store_output(), consumed by _apply_template_epilogue().
         self._store_output_state: dict[int, tuple] = {}
-
-        # Fusion hooks for ordered finalization of PartialRender placeholders.
         self._fusion_hooks: list[FusionHook] = []
+        self.render_hooks: dict = {}
+        self.tmp_var_ctr = itertools.count()
 
     def _gen_tmp_var(self) -> str:
         return f"_tmp_var{next(self.tmp_var_ctr)}"
@@ -621,7 +464,7 @@ class TritonTemplateKernel(TritonKernel):
         return key
 
     # ------------------------------------------------------------------ #
-    # Virtual methods for store_output (overridden by External)
+    # Virtual methods (overridden by subclasses)
     # ------------------------------------------------------------------ #
 
     def _has_epilogue_for_output(self, i: int) -> bool:
@@ -634,26 +477,18 @@ class TritonTemplateKernel(TritonKernel):
                 buf_node = V.graph.get_buffer(output_buf)
                 if buf_node is not None:
                     return list(buf_node.get_size())
-        return list(self.output_node.get_size())
+        return list(self.output_node.get_size())  # type: ignore[attr-defined]
 
     def _get_xindex_name(self, store_idx: int) -> str:
         return "xindex"
 
-    def _setup_store_output(self, store_idx, val, val_shape, index_symbols, contiguous_index):
-        """Compute output_index and save state for _apply_template_epilogue."""
-        output_index = self.output_node.get_layout().make_indexer()(index_symbols)
-        output_index = self.rename_indexing(output_index)
-        if output_index == contiguous_index:
-            output_index = sympy.Symbol(self._get_xindex_name(store_idx), integer=True)
-        self._store_output_state[store_idx] = (val, val_shape, index_symbols, output_index)
+    def _apply_template_epilogue(self, i: int) -> None:
+        """Apply the template's fixed epilogue for output i. Default: no-op."""
+        pass
 
-    @contextlib.contextmanager
-    def _create_store_output_subgraph(self, store_idx: int, subgraph_name: str):
-        with self.create_subgraph_body(subgraph_name, clear_cse=True):
-            yield
-
-    def _register_store_output_hook(self, store_idx, subgraph_name, hook):
-        return self._register_hook(subgraph_name, hook, phase=20)
+    # ------------------------------------------------------------------ #
+    # Fusion orchestration (concrete)
+    # ------------------------------------------------------------------ #
 
     def configure_fusion_nodes(
         self,
@@ -698,7 +533,7 @@ class TritonTemplateKernel(TritonKernel):
                     if dep.name not in self._epi_extra_inputs:
                         param_name = f"_epi_input_{len(self._epi_extra_inputs)}"
                         self._epi_extra_inputs[dep.name] = param_name
-                        self.args.input_buffers[dep.name] = param_name
+                        self.args.input_buffers[dep.name] = param_name  # type: ignore[attr-defined]
 
     def _configure_fusion_extra(
         self,
@@ -707,7 +542,7 @@ class TritonTemplateKernel(TritonKernel):
         output_param_mapping: dict,
         input_param_mapping: dict,
     ) -> None:
-        """Hook for external template-specific fusion configuration. Default no-op."""
+        """Hook for template-specific fusion configuration. Default no-op."""
         pass
 
     def get_standalone_epilogues(self, epilogue_nodes: list) -> list:
@@ -724,7 +559,7 @@ class TritonTemplateKernel(TritonKernel):
         return all_epilogues
 
     def finalize_kernel_source(self, partial_code: Any, origins: Any = None) -> str:
-        """Finalize hook placeholders and return the complete Triton source string."""
+        """Finalize hook placeholders and return the complete source string."""
         with V.set_kernel_handler(self):
             self._finalize_pre(partial_code, origins)
 
@@ -742,54 +577,100 @@ class TritonTemplateKernel(TritonKernel):
             return self._finalize_post(src_code)
 
     def _finalize_pre(self, partial_code: Any, origins: Any) -> None:
-        """Pre-hook finalization. Standard: DEF_KERNEL, ARGDEFS. External: no-op."""
-        if not isinstance(partial_code, str):
-            with ir.IRNode.current_origins(origins or set()):
-                partial_code.finalize_hook("<DEF_KERNEL>")
-            partial_code.finalize_hook("<ARGDEFS>", strict=False)
+        """Pre-hook finalization. Default: no-op."""
+        pass
 
     def _finalize_post(self, src_code: str) -> str:
-        """Post-hook finalization. Standard: benchmark code. External: imports + KernelSource."""
-        if config.benchmark_kernel:
-            num_gb = self.estimate_kernel_num_bytes() / 1e9
-            src_code = (
-                f"{self.imports_for_benchmark_kernel()}\n"
-                f"{src_code}\n"
-                f"{self.codegen_kernel_benchmark(num_gb).getvalue()}"
-            )
+        """Post-hook finalization. Default: return source as-is."""
         return src_code
 
-    def input_dependent_preserved_state(self) -> str:
-        # Not adding self.args.output_buffers on purpose. But we do not need to reproduce it on a cache hit.
-        # (never accessed).
-        return repr(
-            [
-                self.args.input_buffers,
-                self.args.sizevars,
-                self.args.workspace_args,
-                self.prologue_supported_inputs,
-                self.frozen_layouts_cnt,
-            ]
-        )
+    def _register_hook(
+        self,
+        hook_name: str,
+        hook_fn: PartialRender.HookFn,
+        *,
+        allow_overwriting: bool = False,
+        phase: Optional[int] = None,
+    ) -> str:
+        """Register a hook function with a name."""
+        if not allow_overwriting:
+            assert hook_name not in self.render_hooks, (
+                f"Tried to register the hook {hook_name} multiple times. If "
+                "desired, pass allow_overwriting=True to _register_hook"
+            )
+        self.render_hooks[hook_name] = hook_fn
+        if phase is not None:
+            self._fusion_hooks.append(FusionHook(key=hook_name, phase=phase, multiline=False, strict=True))
+        return hook_name
 
-    def record_input_dependent_tracked_event(self) -> Callable[..., Any]:
-        def decorator(fn) -> Callable[..., Any]:
-            def wrapper(*args, **kwargs) -> Any:
-                pre_state = self.input_dependent_preserved_state()
-                result = fn(*args, **kwargs)
-                post_state = self.input_dependent_preserved_state()
-                if pre_state != post_state:
-                    assert self.cached_replay_events is not None
-                    self.cached_replay_events.append((fn.__name__, [*args], {**kwargs}))
-                return result
 
-            return wrapper
+class FusableTemplateKernel(TemplateFusionMixin, SIMDKernel):
+    """Shared codegen for fusable template kernels.
 
-        return decorator
+    Provides store_output (range trees + index computation), subgraph body
+    management, and prologue/epilogue injection infrastructure.
+    Uses SIMD infrastructure but does NOT inherit from TritonKernel.
+    """
 
-    def replay_cached_events(self, events: RecordedEventsType) -> None:
-        for f, args, kwargs in events:
-            getattr(self, f)(*args, **kwargs)
+    def __init__(self, tiling, features, *, input_nodes=(), output_node=None, hint_override=None):
+        # hint_override is consumed by TritonKernel when present in MRO.
+        # Build kwargs dynamically to avoid passing it to SIMDKernel (which
+        # doesn't accept it) when TritonKernel is absent from the chain.
+        kwargs: dict[str, Any] = {"features": features}
+        if hint_override is not None:
+            kwargs["hint_override"] = hint_override
+        super().__init__(tiling, **kwargs)
+        # super chain: TemplateFusionMixin → [TritonKernel if MI] → SIMDKernel
+        # Fusion state already initialized by TemplateFusionMixin.__init__
+
+        self.input_nodes = input_nodes
+        self.output_node = output_node
+        self.named_input_nodes: dict = {}
+        self.subgraph_bodies: dict[str, SubgraphInfo] = {}
+
+        # Prologue state
+        self.prologue_supported_inputs: OrderedSet[str] = OrderedSet()
+        self.prologue_fused_inputs: OrderedSet[str] = OrderedSet()
+        self.prologue_fused_inputs_preserve_zero: OrderedSet[str] = OrderedSet()
+
+        # Subgraph body attributes (swapped by set_subgraph_body)
+        self.body: IndentedBuffer = FakeIndentedBuffer()
+        self.compute: IndentedBuffer = FakeIndentedBuffer()
+        self.indexing_code: IndentedBuffer = FakeIndentedBuffer()
+        self.loads: IndentedBuffer = FakeIndentedBuffer()
+        self.stores: IndentedBuffer = FakeIndentedBuffer()
+        self.template_mask: Optional[str] = None
+        self.template_out: Optional[str] = None
+        self.template_out_shape: Optional[Union[str, tuple[str]]] = None
+        self.template_indices: Optional[list] = None
+        self.ops_handler: Optional[V.WrapperHandler] = None  # type: ignore[name-defined]
+
+        # TMA default (overridden by TritonTemplateKernel)
+        self.tma_store = False
+
+    # ------------------------------------------------------------------ #
+    # Virtual methods for store_output (overridden by subclasses)
+    # ------------------------------------------------------------------ #
+
+    def _setup_store_output(self, store_idx, val, val_shape, index_symbols, contiguous_index):
+        """Compute output_index and save state for _apply_template_epilogue."""
+        output_index = self.output_node.get_layout().make_indexer()(index_symbols)
+        output_index = self.rename_indexing(output_index)
+        if output_index == contiguous_index:
+            output_index = sympy.Symbol(self._get_xindex_name(store_idx), integer=True)
+        self._store_output_state[store_idx] = (val, val_shape, index_symbols, output_index)
+
+    @contextlib.contextmanager
+    def _create_store_output_subgraph(self, store_idx: int, subgraph_name: str):
+        with self.create_subgraph_body(subgraph_name, clear_cse=True):
+            yield
+
+    def _register_store_output_hook(self, store_idx, subgraph_name, hook):
+        return self._register_hook(subgraph_name, hook, phase=20)
+
+    # ------------------------------------------------------------------ #
+    # Subgraph body management (uses SIMDKernel infrastructure)
+    # ------------------------------------------------------------------ #
 
     @contextlib.contextmanager
     def set_subgraph_body(self, body_name: str):
@@ -838,6 +719,396 @@ class TritonTemplateKernel(TritonKernel):
 
     def need_numel_args(self):
         return False
+
+    def store_output(
+        self,
+        indices: Union[list[Any], tuple[Any]] = (),
+        val: str = "",
+        mask: Optional[str] = None,
+        indent_width: int = 4,
+        val_shape: Optional[tuple[str]] = None,
+        block_indexing: bool = False,
+    ):
+        """Stores the final output and appends any epilogue fusions."""
+        store_idx = next(self.store_output_ctr)
+        subgraph_name = self._get_store_output_subgraph_name(store_idx)
+
+        if not self._has_epilogue_for_output(store_idx):
+            self.subgraph_bodies[subgraph_name] = SubgraphInfo(body=IndentedBuffer())
+            return ""
+
+        with self._create_store_output_subgraph(store_idx, subgraph_name):
+            assert isinstance(indices, (list, tuple))
+            assert isinstance(val, str)
+            assert isinstance(mask, (str, type(None)))
+            assert isinstance(val_shape, (tuple, type(None)))
+            assert isinstance(block_indexing, bool)
+            assert self.template_mask is None
+            indices = list(map(OpOverrides.paren, indices))
+            index_symbols = [sympy.Symbol(x, integer=True) for x in indices]
+            lengths = [
+                V.graph.sizevars.simplify(s)
+                for s in self._get_output_size_for_store(store_idx)
+            ]
+            assert len(indices) == len(lengths)
+
+            self.template_out = val
+            if block_indexing:
+                output_layout = self.output_node.get_layout()
+                assert val_shape, "Blocking indexing requires passing in val_shape"
+                assert len(val_shape) == 2, (
+                    "Blocking indexing only supports 2D data at this time"
+                )
+                assert not mask, "Mask is not supported with blocking indexing"
+                intermediate_lines: list[str] = []
+                epilogue_index_symbols: list[sympy.Symbol] = []
+                if self.tma_store:
+                    val_shape_copy = list(val_shape)
+                    for i, range_tree in enumerate(self.range_trees[:-1]):
+                        name = range_tree.name
+                        symbol = range_tree.symbol()
+                        epilogue_index_symbols.append(symbol)
+                        lookup_output = range_tree.lookup(sympy.S.One, lengths[i])
+                        old_name = lookup_output.symbol()
+                        lookup_output.set_name(name)
+                        range_tree.var_list[range_tree.var_list.index(old_name)] = (
+                            symbol
+                        )
+                        range_val = range_tree.var_ranges[old_name]
+                        del range_tree.var_ranges[old_name]
+                        range_tree.var_ranges[symbol] = range_val
+                        intermediate_lines.extend(
+                            self._generate_index_from_tma_index(
+                                name,
+                                "xoffset" if name == "xindex" else "yoffset",
+                                index_symbols[i],
+                                val_shape[i],
+                                i,
+                                len(val_shape),
+                                block_name=range_tree.symt.name,
+                            )
+                        )
+                        intermediate_lines.append(
+                            self._generated_mask_for_tma(
+                                name,
+                                self.size(None, i),
+                                "xmask" if name == "xindex" else "ymask",
+                            )
+                        )
+                        val_shape_copy[i] = range_tree.symt.name
+                    # pyrefly: ignore [bad-assignment]
+                    val_shape = tuple(val_shape_copy)
+                else:
+                    mask_vars: list[str] = []
+                    for i, (index, shape) in enumerate(zip(index_symbols, val_shape)):
+                        index_name = self._gen_tmp_var()
+                        offset_name = self._gen_tmp_var()
+                        intermediate_lines.extend(
+                            self._generate_index_from_tma_index(
+                                index_name,
+                                offset_name,
+                                index,
+                                shape,
+                                i,
+                                len(index_symbols),
+                            )
+                        )
+                        epilogue_index_symbols.append(
+                            sympy.Symbol(index_name, integer=True)
+                        )
+                        mask_name = self._gen_tmp_var()
+                        intermediate_lines.append(
+                            self._generated_mask_for_tma(
+                                index_name,
+                                self.size(None, i),
+                                mask_name,
+                            )
+                        )
+                        mask_vars.append(mask_name)
+                    final_mask_var = self._gen_tmp_var()
+                    final_mask_rhs = " & ".join(
+                        f"{mask_name}" for mask_name in mask_vars
+                    )
+                    intermediate_lines.append(f"{final_mask_var} = {final_mask_rhs}")
+                    self.template_mask = final_mask_var
+                index_symbols = epilogue_index_symbols
+                contiguous_index = sympy_dot(output_layout.stride, index_symbols)
+                if not self.tma_store:
+                    contiguous_index = self.rename_indexing(contiguous_index)
+                    intermediate_lines.append(f"xindex = {texpr(contiguous_index)}")
+                    self.range_trees[0].lookup(
+                        sympy.S.One, sympy_product(lengths)
+                    ).set_name("xindex")
+                index_symbols = epilogue_index_symbols
+                output_index = contiguous_index
+                for line in intermediate_lines:
+                    self.body.writeline(line)
+
+                self.template_out_shape = val_shape if val_shape else val
+                self._store_output_state[store_idx] = (val, val_shape, index_symbols, output_index)
+            else:
+                assert not self.tma_store, "TMA store requires block indexing"
+                for name, range_tree_entry in zip(
+                    indices, self.range_trees[0].construct_entries(lengths)
+                ):
+                    range_tree_entry.set_name(name)
+                contiguous_index = sympy_dot(
+                    ir.FlexibleLayout.contiguous_strides(lengths), index_symbols
+                )
+                contiguous_index = self.rename_indexing(contiguous_index)
+                xindex_name = self._get_xindex_name(store_idx)
+                self.body.writeline(f"{xindex_name} = " + texpr(contiguous_index))
+                self.range_trees[0].lookup(
+                    sympy.S.One, sympy_product(lengths)
+                ).set_name(xindex_name)
+                self.template_mask = mask
+                self.template_indices = indices
+                self.template_out_shape = val_shape if val_shape else val
+                self._setup_store_output(store_idx, val, val_shape, index_symbols, contiguous_index)
+
+        def hook():
+            with self.set_subgraph_body(subgraph_name):
+                self.codegen_body()
+                self.cse.invalidate(OrderedSet())
+                return textwrap.indent(self.body.getvalue(), " " * indent_width).strip()
+
+        return self._register_store_output_hook(store_idx, subgraph_name, hook)
+
+    def _make_independent_subgraph(self, subgraph_name, numel, **extra_fields):
+        """Create SubgraphInfo with fresh independent range trees."""
+        groups = {"x": V.graph.sizevars.simplify(numel), "r0_": sympy.S.One}
+        self.subgraph_bodies[subgraph_name] = SubgraphInfo(
+            body=IndentedBuffer(), cse=self.cse.clone(),
+            range_trees=self.construct_range_trees(
+                pid_cache=None, inside_reduction=False,
+                is_reduction=False, numels=groups, no_x_dim=False,
+            ),
+            range_tree_nodes={},
+            numels={k: V.graph.sizevars.simplify(v) for k, v in groups.items()},
+            **extra_fields,
+        )
+
+    def _register_extra_template_env_fns(self, *fns: Callable[..., Any]):
+        """Register extra functions to expose during partial template rendering."""
+        self.extra_template_env_fns.extend(fns)  # type: ignore[attr-defined]
+
+    def codegen_range_tree(self):
+        pass  # ignore default codegen
+
+
+class TritonTemplateKernel(FusableTemplateKernel, TritonKernel):
+    """
+    A specialized kernel class for Triton templates that handles code generation
+    for templated Triton kernels.
+
+    MRO: TritonTemplateKernel → FusableTemplateKernel → TemplateFusionMixin
+         → TritonKernel → SIMDKernel → Kernel
+    """
+
+    def __init__(
+        self,
+        kernel_name,
+        input_nodes: tuple[ir.IRNode, ...],
+        output_node,
+        defines,
+        num_stages,
+        num_warps,
+        grid_fn,
+        meta,
+        call_sizes,
+        num_consumer_groups=0,
+        num_buffers_warp_spec=0,
+        use_jit=False,
+        tma_store=False,
+        transpose_discontiguous_tensor_descriptors_override=None,
+        prefix_args=0,
+        suffix_args=0,
+        epilogue_fn=identity,
+        subgraphs: Optional[list[ir.ComputedBuffer]] = None,
+        workspace_arg: Optional[WorkspaceArg] = None,
+        prologue_loads_all_inputs=False,
+        hint_override: Optional[int] = None,
+        triton_meta: Optional[dict[str, object]] = None,
+        always_freeze_layout: bool = False,
+    ) -> None:
+        if tma_store:
+            pass
+        numel = sympy_product(output_node.get_size())
+        if tma_store:
+            assert len(output_node.get_size()) == 2, (
+                "TMA store only supported for 2D with templates"
+            )
+            tiling = {
+                "x": output_node.get_size()[0],
+                "y": output_node.get_size()[1],
+                "r0_": sympy.S.One,
+            }
+        else:
+            tiling = {
+                "x": numel,
+                "r0_": sympy.S.One,
+            }
+        super().__init__(
+            tiling,
+            features=SIMDKernelFeatures([], numel),
+            input_nodes=input_nodes,
+            output_node=output_node,
+            hint_override=hint_override,
+        )
+        if tma_store:
+            # By default `construct_range_trees` will return the range_trees in the order
+            # ["z", "y", "x", "r0_", "r1_"] (see simd.py:all_prefixes)
+            # and this order defines what the kernel block shape will be.
+            prefix_to_range_tree = {rt.prefix: rt for rt in self.range_trees}
+            pw_sorted_range_trees = []
+            reduction_idx = None
+            for i, prefix in enumerate(tiling):
+                rt = prefix_to_range_tree[prefix]
+
+                if rt.is_reduction:
+                    reduction_idx = i
+                    break
+                rt.index = i
+                rt.grid_dim = i
+                rt.tensor_dim = i
+                pw_sorted_range_trees.append(rt)
+            self.range_trees = pw_sorted_range_trees + self.range_trees[reduction_idx:]
+
+        self.defines = defines
+        self.kernel_name = kernel_name
+        self.use_jit = use_jit
+        self.tma_store = tma_store
+        self.transpose_discontiguous_tensor_descriptors_override = (
+            transpose_discontiguous_tensor_descriptors_override
+        )
+        self.num_stages = num_stages
+        self.num_warps = num_warps
+        self.num_consumer_groups = num_consumer_groups
+        self.num_buffers_warp_spec = num_buffers_warp_spec
+        self.grid_fn = grid_fn
+        self.meta = meta
+        self.call_sizes = call_sizes
+        # for templates with fixed epilogues
+        self.prefix_args = prefix_args
+        self.suffix_args = suffix_args
+        # pyrefly: ignore [invalid-type-var]
+        self.epilogue_fn = epilogue_fn
+        self.triton_meta: Optional[dict[str, object]] = triton_meta
+        # For Templated Attention this can be a list of ir.Subgraph
+        self.subgraphs: Optional[list[ir.ComputedBuffer]] = subgraphs
+
+        # Some templates use extra global memory as a workspace
+        self.workspace_arg = workspace_arg
+        if workspace_arg is not None:
+            self.args.workspace_args.append(workspace_arg)
+
+        # When caching is enabled, the generated code is not dependent on the input nodes names.
+        self.cached_replay_events: Optional[RecordedEventsType] = None
+
+        # Update each time an input is marked frozen
+        self.frozen_layouts_cnt = 0
+
+        # When prologue_loads_all_inputs is true, prologue_supported_inputs is populated during def_kernel
+        self.prologue_loads_all_inputs = prologue_loads_all_inputs
+
+        # When always_freeze_layout is True, get_stride_and_maybe_freeze_layout will
+        # always freeze the layout immediately.
+        self.always_freeze_layout = always_freeze_layout
+
+        # Extra functions to be exposed during partial template rendering.
+        self.extra_template_env_fns: list[Callable[..., Any]] = []
+
+    # ------------------------------------------------------------------ #
+    # Finalization overrides for standard Triton templates
+    # ------------------------------------------------------------------ #
+
+    def _finalize_pre(self, partial_code: Any, origins: Any) -> None:
+        """Pre-hook finalization. Standard: DEF_KERNEL, ARGDEFS."""
+        if not isinstance(partial_code, str):
+            with ir.IRNode.current_origins(origins or set()):
+                partial_code.finalize_hook("<DEF_KERNEL>")
+            partial_code.finalize_hook("<ARGDEFS>", strict=False)
+
+    def _finalize_post(self, src_code: str) -> str:
+        """Post-hook finalization. Standard: benchmark code."""
+        if config.benchmark_kernel:
+            num_gb = self.estimate_kernel_num_bytes() / 1e9
+            src_code = (
+                f"{self.imports_for_benchmark_kernel()}\n"
+                f"{src_code}\n"
+                f"{self.codegen_kernel_benchmark(num_gb).getvalue()}"
+            )
+        return src_code
+
+    # ------------------------------------------------------------------ #
+    # Standard template epilogue
+    # ------------------------------------------------------------------ #
+
+    def _apply_template_epilogue(self, i: int) -> None:
+        """Apply the template's fixed epilogue for output i."""
+        if i not in self._store_output_state:
+            return
+        val, val_shape, index_symbols, output_index = self._store_output_state[i]
+        acc_dtype = (
+            triton_type_to_torch(self.meta["ACC_TYPE"])
+            if "ACC_TYPE" in self.meta
+            else torch.float32
+        )
+        epilogue_args = [
+            V.kernel.cse.namedvar(val, dtype=acc_dtype, shape=val_shape)
+        ]
+        for input_node in itertools.chain(
+            self.input_nodes[: self.prefix_args],
+            self.input_nodes[len(self.input_nodes) - self.suffix_args :],
+        ):
+            input_node.freeze_layout()
+            epilogue_arg = V.kernel.cse.generate(
+                self.compute,
+                input_node.make_loader()(index_symbols),
+                dtype=acc_dtype,
+                shape=input_node.get_size(),
+            )
+            epilogue_args.append(epilogue_arg)
+            self.frozen_layouts_cnt += 1
+
+        V.ops.store(
+            self.output_node.get_name(),
+            output_index,
+            self.epilogue_fn(*epilogue_args),
+            mode="tma" if self.tma_store else None,
+        )
+
+    def input_dependent_preserved_state(self) -> str:
+        # Not adding self.args.output_buffers on purpose. But we do not need to reproduce it on a cache hit.
+        # (never accessed).
+        return repr(
+            [
+                self.args.input_buffers,
+                self.args.sizevars,
+                self.args.workspace_args,
+                self.prologue_supported_inputs,
+                self.frozen_layouts_cnt,
+            ]
+        )
+
+    def record_input_dependent_tracked_event(self) -> Callable[..., Any]:
+        def decorator(fn) -> Callable[..., Any]:
+            def wrapper(*args, **kwargs) -> Any:
+                pre_state = self.input_dependent_preserved_state()
+                result = fn(*args, **kwargs)
+                post_state = self.input_dependent_preserved_state()
+                if pre_state != post_state:
+                    assert self.cached_replay_events is not None
+                    self.cached_replay_events.append((fn.__name__, [*args], {**kwargs}))
+                return result
+
+            return wrapper
+
+        return decorator
+
+    def replay_cached_events(self, events: RecordedEventsType) -> None:
+        for f, args, kwargs in events:
+            getattr(self, f)(*args, **kwargs)
 
     def estimate_kernel_num_bytes(self):
         """
@@ -1391,289 +1662,6 @@ class TritonTemplateKernel(TritonKernel):
         """
         return f"{output_name} = {index_name} < {shape_val}"
 
-    def store_output(
-        self,
-        indices: Union[list[Any], tuple[Any]] = (),
-        val: str = "",
-        mask: Optional[str] = None,
-        indent_width: int = 4,
-        val_shape: Optional[tuple[str]] = None,
-        block_indexing: bool = False,
-    ):
-        """Stores the final output and appends any epilogue fusions if the buffer hasn't been optimized away.
-
-        Args:
-            indices (Union[List, Tuple]): The index for each dimension of the output. The dot product of
-                these indices and output strides must match `val`.
-            val (str): The value to store.
-            mask (Optional[str]): An optional mask to use for the store operation. If provided, this mask
-                will be applied to the store.
-            indent_width (int): The number of spaces to use for indentation. This is used when the call to
-                store_output is indented in the kernel definition.
-            block_indexing (bool): Are the input indices presented as offsets for creating the block (e.g.
-                inputs to TMA) or are they tensors that should be passed in directly.
-        """
-        store_idx = next(self.store_output_ctr)
-        subgraph_name = self._get_store_output_subgraph_name(store_idx)
-
-        if not self._has_epilogue_for_output(store_idx):
-            # No epilogue for this output — create minimal SubgraphInfo so
-            # simd.py's set_subgraph_body() doesn't fail on None.
-            self.subgraph_bodies[subgraph_name] = SubgraphInfo(body=IndentedBuffer())
-            return ""
-
-        with self._create_store_output_subgraph(store_idx, subgraph_name):
-            assert isinstance(indices, (list, tuple))
-            assert isinstance(val, str)
-            assert isinstance(mask, (str, type(None)))
-            assert isinstance(val_shape, (tuple, type(None)))
-            assert isinstance(block_indexing, bool)
-            assert self.template_mask is None
-            indices = list(map(OpOverrides.paren, indices))
-            index_symbols = [sympy.Symbol(x, integer=True) for x in indices]
-            lengths = [
-                V.graph.sizevars.simplify(s)
-                for s in self._get_output_size_for_store(store_idx)
-            ]
-            assert len(indices) == len(lengths)
-
-            self.template_out = val
-            if block_indexing:
-                output_layout = self.output_node.get_layout()
-                assert val_shape, "Blocking indexing requires passing in val_shape"
-                assert len(val_shape) == 2, (
-                    "Blocking indexing only supports 2D data at this time"
-                )
-                assert not mask, "Mask is not supported with blocking indexing"
-                intermediate_lines: list[str] = []
-                epilogue_index_symbols: list[sympy.Symbol] = []
-                if self.tma_store:
-                    val_shape_copy = list(val_shape)
-                    for i, range_tree in enumerate(self.range_trees[:-1]):
-                        name = range_tree.name
-                        symbol = range_tree.symbol()
-                        epilogue_index_symbols.append(symbol)
-                        lookup_output = range_tree.lookup(sympy.S.One, lengths[i])
-                        old_name = lookup_output.symbol()
-                        lookup_output.set_name(name)
-                        # Update var_list and var_range
-                        range_tree.var_list[range_tree.var_list.index(old_name)] = (
-                            symbol
-                        )
-                        range_val = range_tree.var_ranges[old_name]
-                        del range_tree.var_ranges[old_name]
-                        range_tree.var_ranges[symbol] = range_val
-                        intermediate_lines.extend(
-                            self._generate_index_from_tma_index(
-                                name,
-                                "xoffset" if name == "xindex" else "yoffset",
-                                index_symbols[i],
-                                val_shape[i],
-                                i,
-                                len(val_shape),
-                                block_name=range_tree.symt.name,
-                            )
-                        )
-                        # Generate the xmask and ymask
-                        intermediate_lines.append(
-                            self._generated_mask_for_tma(
-                                name,
-                                self.size(None, i),
-                                "xmask" if name == "xindex" else "ymask",
-                            )
-                        )
-                        # Update the val_shape information to use consistent naming
-                        # after the remapping.
-
-                        val_shape_copy[i] = range_tree.symt.name
-                    # pyrefly: ignore [bad-assignment]
-                    val_shape = tuple(val_shape_copy)
-                else:
-                    mask_vars: list[str] = []
-                    for i, (index, shape) in enumerate(zip(index_symbols, val_shape)):
-                        index_name = self._gen_tmp_var()
-                        offset_name = self._gen_tmp_var()
-                        intermediate_lines.extend(
-                            self._generate_index_from_tma_index(
-                                index_name,
-                                offset_name,
-                                index,
-                                shape,
-                                i,
-                                len(index_symbols),
-                            )
-                        )
-                        epilogue_index_symbols.append(
-                            sympy.Symbol(index_name, integer=True)
-                        )
-                        mask_name = self._gen_tmp_var()
-                        intermediate_lines.append(
-                            self._generated_mask_for_tma(
-                                index_name,
-                                self.size(None, i),
-                                mask_name,
-                            )
-                        )
-                        mask_vars.append(mask_name)
-                    final_mask_var = self._gen_tmp_var()
-                    final_mask_rhs = " & ".join(
-                        f"{mask_name}" for mask_name in mask_vars
-                    )
-                    intermediate_lines.append(f"{final_mask_var} = {final_mask_rhs}")
-                    self.template_mask = final_mask_var
-                index_symbols = epilogue_index_symbols
-                contiguous_index = sympy_dot(output_layout.stride, index_symbols)
-                if not self.tma_store:
-                    # Convert to just use xindex.
-                    contiguous_index = self.rename_indexing(contiguous_index)
-                    intermediate_lines.append(f"xindex = {texpr(contiguous_index)}")
-                    self.range_trees[0].lookup(
-                        sympy.S.One, sympy_product(lengths)
-                    ).set_name("xindex")
-                index_symbols = epilogue_index_symbols
-                output_index = contiguous_index
-                # Write out the intermediate lines
-                for line in intermediate_lines:
-                    self.body.writeline(line)
-
-                self.template_out_shape = val_shape if val_shape else val
-                # Save state for _apply_template_epilogue (called from simd.py loop).
-                self._store_output_state[store_idx] = (val, val_shape, index_symbols, output_index)
-            else:
-                assert not self.tma_store, "TMA store requires block indexing"
-                # glue to make generated code use same indexing from template
-                for name, range_tree_entry in zip(
-                    indices, self.range_trees[0].construct_entries(lengths)
-                ):
-                    range_tree_entry.set_name(name)
-                contiguous_index = sympy_dot(
-                    ir.FlexibleLayout.contiguous_strides(lengths), index_symbols
-                )
-                contiguous_index = self.rename_indexing(contiguous_index)
-                xindex_name = self._get_xindex_name(store_idx)
-                self.body.writeline(f"{xindex_name} = " + texpr(contiguous_index))
-                self.range_trees[0].lookup(
-                    sympy.S.One, sympy_product(lengths)
-                ).set_name(xindex_name)
-                self.template_mask = mask
-                self.template_indices = indices
-                self.template_out_shape = val_shape if val_shape else val
-                # Virtual: standard saves state, external pre-populates CSE cache.
-                self._setup_store_output(store_idx, val, val_shape, index_symbols, contiguous_index)
-
-        def hook():
-            with self.set_subgraph_body(subgraph_name):
-                # more stuff might have been added since the codegen_body above
-                self.codegen_body()
-                self.cse.invalidate(OrderedSet())
-                return textwrap.indent(self.body.getvalue(), " " * indent_width).strip()
-
-        return self._register_store_output_hook(store_idx, subgraph_name, hook)
-
-    def _apply_template_epilogue(self, i: int) -> None:
-        """Apply the template's fixed epilogue for output i.
-
-        Standard templates: runs epilogue_fn and generates V.ops.store.
-        External templates: no-op (override).
-        Called from the simd.py loop inside set_subgraph_body context.
-        """
-        if i not in self._store_output_state:
-            return
-        val, val_shape, index_symbols, output_index = self._store_output_state[i]
-        acc_dtype = (
-            triton_type_to_torch(self.meta["ACC_TYPE"])
-            if "ACC_TYPE" in self.meta
-            else torch.float32
-        )
-        epilogue_args = [
-            V.kernel.cse.namedvar(val, dtype=acc_dtype, shape=val_shape)
-        ]
-        for input_node in itertools.chain(
-            self.input_nodes[: self.prefix_args],
-            self.input_nodes[len(self.input_nodes) - self.suffix_args :],
-        ):
-            input_node.freeze_layout()
-            epilogue_arg = V.kernel.cse.generate(
-                self.compute,
-                input_node.make_loader()(index_symbols),
-                dtype=acc_dtype,
-                shape=input_node.get_size(),
-            )
-            epilogue_args.append(epilogue_arg)
-            # We update frozen_layouts_cnt in order to replay this function on a cache hit.
-            self.frozen_layouts_cnt += 1
-
-        V.ops.store(
-            self.output_node.get_name(),
-            output_index,
-            self.epilogue_fn(*epilogue_args),
-            mode="tma" if self.tma_store else None,
-        )
-
-    def _register_hook(
-        self,
-        hook_name: str,
-        hook_fn: PartialRender.HookFn,
-        *,
-        allow_overwriting: bool = False,
-        phase: Optional[int] = None,
-    ) -> str:
-        """
-        Register a hook function with a name.
-
-        ``hook_name`` should match the string that will be replaced via
-        ``hook_fn``, and should not already be in use for a hook.
-
-        If ``allow_overwriting`` is ``False``, will assert that there isn't
-        currently a registered hook of the same name before registering the new
-        one.
-
-        If ``phase`` is not None, also register as a FusionHook for ordered
-        finalization.  DEF_KERNEL / ARGDEFS pass phase=None since they are
-        handled by ``_finalize_pre``.
-        """
-
-        if not allow_overwriting:
-            assert hook_name not in self.render_hooks, (
-                f"Tried to register the hook {hook_name} multiple times. If "
-                "desired, pass allow_overwriting=True to _register_hook"
-            )
-        self.render_hooks[hook_name] = hook_fn
-        if phase is not None:
-            self._fusion_hooks.append(FusionHook(key=hook_name, phase=phase, multiline=False, strict=True))
-        return hook_name
-
-    def _make_independent_subgraph(self, subgraph_name, numel, **extra_fields):
-        """Create SubgraphInfo with fresh independent range trees."""
-        groups = {"x": V.graph.sizevars.simplify(numel), "r0_": sympy.S.One}
-        self.subgraph_bodies[subgraph_name] = SubgraphInfo(
-            body=IndentedBuffer(), cse=self.cse.clone(),
-            range_trees=self.construct_range_trees(
-                pid_cache=None, inside_reduction=False,
-                is_reduction=False, numels=groups, no_x_dim=False,
-            ),
-            range_tree_nodes={},
-            numels={k: V.graph.sizevars.simplify(v) for k, v in groups.items()},
-            **extra_fields,
-        )
-
-    def _register_extra_template_env_fns(self, *fns: Callable[..., Any]):
-        """
-        Register some extra functions to expose when performing the initial
-        template render, so that they're in scope to by used by jinja
-        expressions.
-
-        These can be used to, for example, implement extra replacement hooks,
-        if the given function:
-
-        * Returns the name of their hook, which should also be the string to
-          replace via the hook function. The convention is to use the format
-          <HOOK_NAME>.
-        * Assigns the corresponding entry in ``self.render_hooks`` to a hook
-          function.
-        """
-        self.extra_template_env_fns.extend(fns)
-
     def render(self, template, kwargs, record_input_dependent_tracked_event=False):
         if record_input_dependent_tracked_event:
             self.cached_replay_events = []
@@ -1728,23 +1716,15 @@ class TritonTemplateKernel(TritonKernel):
         block_ptr=False,
         tma_compatibility_checker: Optional[TMACompatibilityChecker] = None,
     ):
-        """
-        Override the default indexing to use our custom mask and force
-        dense indexing.
-        """
+        """Override the default indexing to use template mask and shape."""
         return super().indexing(
             index,
             dense_indexing=False,
-            # We pass template_out as the shape to broadcast the indexing to as
-            # the mask might be broadcast to the output shape
             copy_shape=self.template_out_shape,
             override_mask=self.template_mask,
             block_ptr=block_ptr,
             tma_compatibility_checker=tma_compatibility_checker,
         )
-
-    def codegen_range_tree(self):
-        pass  # ignore default codegen
 
     def additional_call_args_and_types(self):
         if isinstance(self.grid_fn, SymbolicGridFn):
@@ -1850,10 +1830,39 @@ def _pro_rename(code: str, name: str) -> str:
     return code
 
 
-class ExternalTritonTemplateKernel(TritonTemplateKernel):
-    """Codegen kernel handle for external Triton template backends (e.g. Helion)."""
+class HelionTemplateKernel(FusableTemplateKernel, TritonKernel):
+    """Codegen kernel handle for external template backends (e.g. Helion).
 
-    def __init__(self, template_buffer: "ir.ExternalTritonTemplateBuffer") -> None:
+    Inherits FusableTemplateKernel (fusion protocol + shared codegen) and
+    TritonKernel (Triton codegen: store, indexing, etc.).
+    Does NOT inherit from TritonTemplateKernel (no Jinja template attributes).
+
+    MRO: HelionTemplateKernel → FusableTemplateKernel → TemplateFusionMixin
+         → TritonKernel → SIMDKernel → Kernel
+    """
+
+    def indexing(
+        self,
+        index: sympy.Expr,
+        *,
+        dense_indexing=False,
+        copy_shape=None,
+        override_mask=None,
+        block_ptr=False,
+        tma_compatibility_checker: Optional[TMACompatibilityChecker] = None,
+    ):
+        """Override default indexing to use template mask and shape."""
+        return TritonKernel.indexing(
+            self,
+            index,
+            dense_indexing=False,
+            copy_shape=self.template_out_shape,
+            override_mask=self.template_mask,
+            block_ptr=block_ptr,
+            tma_compatibility_checker=tma_compatibility_checker,
+        )
+
+    def __init__(self, template_buffer: "ir.HelionTemplateBuffer") -> None:
         class _RealOutputNode:
             """Provides real output size/layout so range trees have correct numel."""
             def get_size(self_inner) -> list:
@@ -1863,16 +1872,12 @@ class ExternalTritonTemplateKernel(TritonTemplateKernel):
             def get_name(self_inner) -> str:
                 return template_buffer.get_name()
 
+        numel = sympy_product(template_buffer.get_size()) if template_buffer.get_size() else sympy.S.One
         super().__init__(
-            kernel_name="",
+            {"x": numel, "r0_": sympy.S.One},
+            SIMDKernelFeatures([], numel),
             input_nodes=(),
             output_node=_RealOutputNode(),
-            defines={},
-            num_stages=1,
-            num_warps=4,
-            grid_fn=None,
-            meta={},
-            call_sizes=[],
         )
         self._template_buffer = template_buffer
         self._pro_extra_inputs: "dict[str, str]" = {}
@@ -1906,10 +1911,6 @@ class ExternalTritonTemplateKernel(TritonTemplateKernel):
                 continue
             result.append((epi_node, n2_node, epi_deps[0].name))
         return result
-
-    def _apply_template_epilogue(self, i: int) -> None:
-        """External: no-op — epilogue codegen is handled by AST transforms."""
-        pass
 
     def _configure_fusion_extra(
         self,
@@ -2026,7 +2027,7 @@ class ExternalTritonTemplateKernel(TritonTemplateKernel):
         def unified_hook(
             _name: str = subgraph_name,
             _input: str = input_name,
-            _self: "ExternalTritonTemplateKernel" = self,
+            _self: "HelionTemplateKernel" = self,
         ) -> str:
             with _self.set_subgraph_body(_name):
                 _self.codegen_body()
@@ -2039,9 +2040,6 @@ class ExternalTritonTemplateKernel(TritonTemplateKernel):
         self._add_fusion_hook(
             f"_LOAD_INPUT_{input_name}", unified_hook, phase=10, multiline=True, strict=False)
         return ""
-
-    def _finalize_pre(self, partial_code: Any, origins: Any) -> None:
-        pass  # no DEF_KERNEL or ARGDEFS for Helion
 
     def _finalize_post(self, src_code: str) -> str:
         imports = self._scan_imports(src_code)
