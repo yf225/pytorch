@@ -1830,15 +1830,22 @@ def _pro_rename(code: str, name: str) -> str:
     return code
 
 
-class HelionTemplateKernel(FusableTemplateKernel, TritonKernel):
-    """Codegen kernel handle for external template backends (e.g. Helion).
+class _FusionTracingKernel(FusableTemplateKernel, TritonKernel):
+    """Internal kernel for generating epilogue/prologue code snippets.
 
-    Inherits FusableTemplateKernel (fusion protocol + shared codegen) and
-    TritonKernel (Triton codegen: store, indexing, etc.).
-    Does NOT inherit from TritonTemplateKernel (no Jinja template attributes).
+    Used by _codegen_external_template to produce FusionRequest data
+    without coupling the external backend to TritonKernel internals.
 
-    MRO: HelionTemplateKernel → FusableTemplateKernel → TemplateFusionMixin
-         → TritonKernel → SIMDKernel → Kernel
+    Reuses all the tracing methods that were previously on HelionTemplateKernel:
+    - _assign_epilogues_to_outputs: MemoryDep filtering
+    - _configure_fusion_extra: store target precomputation
+    - _create_store_output_subgraph: independent range trees
+    - _setup_store_output: CapturedEpilogueExpr creation
+    - _register_store_output_hook: multiline hooks
+    - load_input: prologue subgraph + hook registration
+
+    MRO: _FusionTracingKernel -> FusableTemplateKernel -> TemplateFusionMixin
+         -> TritonKernel -> SIMDKernel -> Kernel
     """
 
     def indexing(
@@ -1862,7 +1869,7 @@ class HelionTemplateKernel(FusableTemplateKernel, TritonKernel):
             tma_compatibility_checker=tma_compatibility_checker,
         )
 
-    def __init__(self, template_buffer: "ir.HelionTemplateBuffer") -> None:
+    def __init__(self, template_buffer: "ir.TemplateBuffer") -> None:
         class _RealOutputNode:
             """Provides real output size/layout so range trees have correct numel."""
             def get_size(self_inner) -> list:
@@ -1883,10 +1890,6 @@ class HelionTemplateKernel(FusableTemplateKernel, TritonKernel):
         self._pro_extra_inputs: "dict[str, str]" = {}
         self._captured_epilogue: "list[ir.CapturedEpilogueExpr]" = []
         self._prologue_primary_sources: "dict[str, Optional[str]]" = {}
-        self._precomputed_ks_meta: "Optional[tuple]" = None
-        self.kernel_source: Optional[ir.KernelSource] = None
-        self.output_name: str = ""
-        self.multi_output_children: dict[str, Any] = {}
 
     def _assign_epilogues_to_outputs(
         self, epilogue_nodes: list, output_param_mapping: dict
@@ -1978,6 +1981,26 @@ class HelionTemplateKernel(FusableTemplateKernel, TritonKernel):
         return self._add_fusion_hook(
             f"_STORE_OUTPUT_{store_idx}", hook, phase=20, multiline=True, strict=False)
 
+    def emit_kernel_override(
+        self,
+        wrapper: Any,
+        src_code: str,
+        kernel_name: str,
+        node_schedule: Sequence[Any],
+        kernel_path: str,
+        get_kernel_metadata: Callable[..., tuple[str, str]],
+    ) -> bool:
+        """Override kernel emission: write Helion/external source directly to wrapper header."""
+        origins, detailed = get_kernel_metadata(node_schedule, wrapper)
+        wrapper.header.writeline(f"# kernel path: {kernel_path}\n{origins}\n{detailed}")
+        for line in src_code.split("\n"):
+            s = line.strip()
+            if s.startswith(("from __future__", "import ", "from ")) or not s:
+                continue
+            wrapper.header.writeline(line)
+        wrapper.header.writeline("")
+        return True
+
     def load_input(  # type: ignore[override]
         self,
         input_name: str,
@@ -1985,7 +2008,7 @@ class HelionTemplateKernel(FusableTemplateKernel, TritonKernel):
         indices: Any = (),
         **kwargs: Any,
     ) -> str:
-        """Helion override: set named_input_nodes + create SubgraphInfo + register hooks."""
+        """Set named_input_nodes + create SubgraphInfo + register hooks."""
         ir_node = self._template_buffer._named_inputs.get(input_name)
         if ir_node is None:
             return ""
@@ -2027,7 +2050,7 @@ class HelionTemplateKernel(FusableTemplateKernel, TritonKernel):
         def unified_hook(
             _name: str = subgraph_name,
             _input: str = input_name,
-            _self: "HelionTemplateKernel" = self,
+            _self: "_FusionTracingKernel" = self,
         ) -> str:
             with _self.set_subgraph_body(_name):
                 _self.codegen_body()
@@ -2041,68 +2064,99 @@ class HelionTemplateKernel(FusableTemplateKernel, TritonKernel):
             f"_LOAD_INPUT_{input_name}", unified_hook, phase=10, multiline=True, strict=False)
         return ""
 
-    def _finalize_post(self, src_code: str) -> str:
-        imports = self._scan_imports(src_code)
-        call_args, call_preamble = self._precomputed_ks_meta  # type: ignore[misc]
-        tb = self._template_buffer
-        self.kernel_source = ir.KernelSource(
-            source=src_code, imports=imports,
-            call_args=call_args, call_preamble=call_preamble,
-        )
-        self.output_name = tb.get_name()
-        self.multi_output_children = dict(tb._multi_output_children)
-        self.removed_buffers = OrderedSet(tb.removed_buffers)
-        return src_code
 
-    def _scan_imports(self, src: str) -> list:
-        from helion._compiler.output_header import library_imports  # type: ignore[import-untyped]
-        names = ("triton", "tl", "_default_launcher", *(
-            n for n in ("libdevice", "tl_math", "triton_helpers", "helion", "hl") if f"{n}." in src
+def _compute_fused_node_names(
+    template_buffer: "ir.TemplateBuffer",
+    tracing_kernel: _FusionTracingKernel,
+    scheduler: Any,
+) -> "Optional[OrderedSet[str]]":
+    """Compute the set of fused scheduler node names for buffer removability checks."""
+    if scheduler is None:
+        return None
+    all_store_names: OrderedSet[str] = OrderedSet()
+    all_store_names.add(template_buffer.get_name())
+    for name in template_buffer._multi_output_children:
+        all_store_names.add(name)
+    for cap in tracing_kernel._captured_epilogue:
+        if cap.store_target:
+            all_store_names.add(cap.store_target)
+    return OrderedSet(
+        scheduler.name_to_buf[n].defining_op_name()
+        for n in all_store_names
+        if n in scheduler.name_to_buf
+    )
+
+
+def _extract_fusion_request(
+    tracing_kernel: _FusionTracingKernel,
+    template_buffer: "ir.TemplateBuffer",
+) -> "ir.FusionRequest":
+    """Extract FusionRequest from a tracing kernel after codegen."""
+    # Epilogue hooks: the render_hooks dict has entries like "_STORE_OUTPUT_0" → callable
+    epilogue_hooks: dict[int, Callable[[], str]] = {}
+    for cap in tracing_kernel._captured_epilogue:
+        hook_key = f"_STORE_OUTPUT_{cap.epi_idx}"
+        if hook_key in tracing_kernel.render_hooks:
+            epilogue_hooks[cap.epi_idx] = tracing_kernel.render_hooks[hook_key]
+
+    # Prologue hooks: "_LOAD_INPUT_x" → callable
+    prologue_hooks: dict[str, Callable[[], str]] = {}
+    for name in tracing_kernel.named_input_nodes:
+        hook_key = f"_LOAD_INPUT_{name}"
+        if hook_key in tracing_kernel.render_hooks:
+            prologue_hooks[name] = tracing_kernel.render_hooks[hook_key]
+
+    # Buffer removability — computed here in Inductor, NOT in the backend
+    scheduler = V.graph.scheduler
+    fused_node_names = _compute_fused_node_names(template_buffer, tracing_kernel, scheduler)
+
+    epilogue_specs = []
+    for cap in tracing_kernel._captured_epilogue:
+        can_remove = (
+            cap.store_target is not None
+            and cap.store_target != cap.kernel_output_buf
+            and scheduler is not None
+            and fused_node_names is not None
+            and scheduler.can_buffer_be_removed_through_fusion(
+                cap.kernel_output_buf, fused_node_names
+            )
+        )
+        # Look up the param name the tracing kernel registered for store_target
+        store_target_param = (
+            tracing_kernel.args.output_buffers.get(cap.store_target)
+            if cap.store_target and cap.store_target != cap.kernel_output_buf
+            else None
+        )
+        epilogue_specs.append(ir.EpilogueSpec(
+            epi_idx=cap.epi_idx,
+            kernel_output_param=cap.kernel_output_param,
+            kernel_output_buf=cap.kernel_output_buf,
+            store_target=cap.store_target,
+            store_target_param=store_target_param,
+            output_dtype=V.graph.get_dtype(cap.kernel_output_buf) if cap.kernel_output_buf else torch.float32,
+            can_remove_output=can_remove,
         ))
-        imports = [library_imports[n] for n in names]
-        tb = self._template_buffer
-        if hasattr(tb, "_bound_kernel") and tb._bound_kernel.host_function is not None:
-            imports.extend(imp.codegen() for imp in tb._bound_kernel.host_function.global_imports.values())
-        return imports
 
-    def call_kernel(self, name: str, template_buffer: Any = None) -> None:
-        """Emit kernel call using the kernel_source set by finalize_kernel_source()."""
-        assert self.kernel_source is not None
-        wrapper = V.graph.wrapper_code
-        for line in self.kernel_source.call_preamble:
-            wrapper.writeline(line)
-        wrapper.writeline(
-            f"{self.output_name} = {name}({', '.join(self.kernel_source.call_args)})"
+    prologue_specs = [
+        ir.PrologueSpec(
+            input_param=name,
+            input_buf=node.get_name(),
+            primary_source=tracing_kernel._prologue_primary_sources.get(name),
         )
-        for mo_name, mo in sorted(self.multi_output_children.items()):
-            if mo_name not in self.removed_buffers:
-                idx_str = self.output_name
-                for _, idx in mo.indices:
-                    idx_str = f"{idx_str}[{idx}]"
-                wrapper.writeline(f"{mo_name} = {idx_str}")
+        for name, node in tracing_kernel.named_input_nodes.items()
+        if f"_LOAD_INPUT_{name}" in tracing_kernel.render_hooks
+    ]
 
-    def emit_kernel_override(
-        self,
-        wrapper: Any,
-        src_code: str,
-        kernel_name: str,
-        node_schedule: Sequence[Any],
-        kernel_path: str,
-        get_kernel_metadata: Callable[..., tuple[str, str]],
-    ) -> bool:
-        """Override kernel emission using the kernel_source set by finalize_kernel_source()."""
-        assert self.kernel_source is not None
-        for imp in self.kernel_source.imports:
-            wrapper.add_import_once(imp)
-        origins, detailed = get_kernel_metadata(node_schedule, wrapper)
-        wrapper.header.writeline(f"# kernel path: {kernel_path}\n{origins}\n{detailed}")
-        for line in src_code.split("\n"):
-            s = line.strip()
-            if s.startswith(("from __future__", "import ", "from ")) or not s:
-                continue
-            wrapper.header.writeline(line)
-        wrapper.header.writeline("")
-        return True
+    return ir.FusionRequest(
+        epilogue_specs=epilogue_specs,
+        epilogue_hooks=epilogue_hooks,
+        prologue_specs=prologue_specs,
+        prologue_hooks=prologue_hooks,
+        epi_extra_inputs=dict(tracing_kernel._epi_extra_inputs),
+        pro_extra_inputs=dict(tracing_kernel._pro_extra_inputs),
+        output_param_mapping=dict(template_buffer.fusable_outputs),
+        input_param_mapping=dict(template_buffer.all_inputs),
+    )
 
 
 @functools.cache

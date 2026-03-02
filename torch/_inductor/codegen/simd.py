@@ -2222,6 +2222,200 @@ class SIMDScheduling(BaseScheduling):
             for shape in shapes
         )
 
+    def _codegen_external_template(
+        self,
+        template_node,
+        epilogue_nodes,
+        prologue_nodes,
+    ) -> None:
+        """Codegen path for external backends that implement fuse().
+
+        Creates a tracing kernel, runs the standard fusion tracing loop,
+        extracts a FusionRequest, calls the backend's fuse() method, and
+        emits the result to the wrapper.
+        """
+        from ..select_algorithm import (
+            _extract_fusion_request,
+            _FusionTracingKernel,
+            PartialRender,
+        )
+
+        tb = template_node.node  # TemplateBuffer with fuse() override
+
+        # 1. Create tracing kernel from template buffer metadata
+        tracing_kernel = _FusionTracingKernel(tb)
+        n_dims = len(tb.get_size())
+
+        # -- Begin inlined fusion tracing (from _codegen_single_template) --
+        buf_name_to_prologue_group: dict = {}
+        template_reads = template_node.used_buffer_names()
+        prologue_group: list = []
+        for prologue in prologue_nodes:
+            names = prologue.get_buffer_names()
+            prologue_group.append(prologue)
+            if names & template_reads:
+                assert len(names) == 1
+                buf_name_to_prologue_group[next(iter(names))] = prologue_group
+                prologue_group = []
+        assert len(prologue_group) == 0
+
+        fusable_prologue: list[tuple] = []
+        for buf_name, pro_nodes in buf_name_to_prologue_group.items():
+            for pro_node in pro_nodes:
+                reads = [d for d in pro_node.read_writes.reads if isinstance(d, MemoryDep)]
+                source_bufs = frozenset(d.name for d in reads)
+                fusable_prologue.append((pro_node, buf_name, source_bufs))
+
+        tracing_kernel.configure_fusion_nodes(
+            epilogue_nodes,
+            fusable_prologue,
+            output_param_mapping=getattr(template_node.node, "fusable_outputs", {}),
+            input_param_mapping=getattr(template_node.node, "all_inputs", {}),
+        )
+
+        standalone_epilogues = tracing_kernel.get_standalone_epilogues(epilogue_nodes)
+        standalone_ids = {id(n) for n in standalone_epilogues}
+
+        with tracing_kernel:
+            template_node.mark_run()
+            for node in epilogue_nodes:
+                if id(node) not in standalone_ids:
+                    node.mark_run()
+            for pro_node, _, _ in fusable_prologue:
+                pro_node.mark_run()
+
+            for pro_node, buf_name, _ in fusable_prologue:
+                tracing_kernel.prologue_fused_inputs.add(buf_name)
+                tracing_kernel.store_buffer_names.add(buf_name)
+
+            # Call store_output for each fusable output
+            for epi_idx in range(len(tb.fusable_outputs)):
+                tracing_kernel.store_output(
+                    indices=[f"x_epi{epi_idx}_{d}" for d in range(n_dims)],
+                    val=f"_kernel_val_{epi_idx}",
+                    mask=f"_tile_mask_{epi_idx}",
+                    indent_width=0,
+                )
+            # Call load_input for each named input
+            for param_name in tb._named_inputs:
+                tracing_kernel.load_input(param_name)
+
+            # Epilogue: node.codegen() in each store subgraph body
+            store_output_count = sum(
+                1 for k in tracing_kernel.subgraph_bodies if k.startswith("<STORE_OUTPUT_")
+            )
+            for i in range(store_output_count):
+                subgraph_epilogues = tracing_kernel.get_epilogues_for_subgraph(
+                    i, epilogue_nodes
+                )
+                with tracing_kernel.set_subgraph_body(
+                    tracing_kernel._get_store_output_subgraph_name(i)
+                ):
+                    tracing_kernel._apply_template_epilogue(i)
+                    tracing_kernel.codegen_body()
+                    for node in subgraph_epilogues:
+                        node.codegen(
+                            tracing_kernel.split_and_set_ranges(node.get_ranges())
+                        )
+                    tracing_kernel.cse.invalidate(OrderedSet())
+
+            # Prologue: prologue_node.codegen() in load subgraph bodies
+            for input_name, buffer in tracing_kernel.named_input_nodes.items():
+                pro_group = [
+                    (pn, sb)
+                    for pn, buf, sb in fusable_prologue
+                    if buf == buffer.get_name()
+                ]
+                if not pro_group:
+                    continue
+                if len(pro_group) == 1 and prologue_preserves_zero_mask(
+                    pro_group[0][0]
+                ):
+                    tracing_kernel.prologue_fused_inputs_preserve_zero.add(
+                        buffer.get_name()
+                    )
+                can_upcast = all(
+                    n.can_codegen_without_upcasts() for n, _ in pro_group
+                )
+                with config.patch("triton.codegen_upcast_to_fp32", not can_upcast):
+                    with tracing_kernel.set_subgraph_body(f"<LOAD_INPUT_{input_name}>"):
+                        for pn, _ in pro_group:
+                            pn.codegen(
+                                tracing_kernel.split_and_set_ranges(pn.get_ranges())
+                            )
+                        tracing_kernel.cse.invalidate(OrderedSet())
+
+        # -- End inlined fusion tracing --
+
+        # 3. Extract FusionRequest from the tracing kernel
+        request = _extract_fusion_request(tracing_kernel, tb)
+
+        # 4. Call the backend's fuse() method — the ONLY call into the backend
+        result = tb.fuse(request)
+
+        # 5. Finalize: resolve hooks in the source using PartialRender
+        all_hooks = {}
+        for i, h in request.epilogue_hooks.items():
+            all_hooks[f"_STORE_OUTPUT_{i}"] = h
+        for n, h in request.prologue_hooks.items():
+            all_hooks[f"_LOAD_INPUT_{n}"] = h
+        partial = PartialRender(result.source, all_hooks)
+
+        with V.set_kernel_handler(tracing_kernel):
+            for hook in sorted(tracing_kernel._fusion_hooks, key=lambda h: h.phase):
+                if hook.multiline:
+                    partial.finalize_hook_multiline(hook.key, strict=hook.strict)
+                else:
+                    partial.finalize_hook(hook.key, strict=hook.strict)
+        final_source = partial.finalize_remaining()
+
+        # 7. Scan imports from the finalized source (after hook resolution) and emit
+        imports = result.imports
+        if hasattr(tb, '_scan_imports'):
+            imports = tb._scan_imports(final_source)
+        for imp in imports:
+            V.graph.wrapper_code.add_import_once(imp)
+
+        # Build node schedule for define_kernel
+        fusable_epilogue_nodes = [
+            n for n in epilogue_nodes if id(n) not in standalone_ids
+        ]
+        node_schedule = [
+            *[pn for pn, _, _ in fusable_prologue],
+            template_node,
+            *fusable_epilogue_nodes,
+        ]
+
+        kernel_name = self.define_kernel(final_source, node_schedule, tracing_kernel)
+
+        # Emit the kernel call
+        self.codegen_comment(node_schedule, kernel_name)
+        wrapper = V.graph.wrapper_code
+        for line in result.call_preamble:
+            wrapper.writeline(line)
+        output_name = tb.get_name()
+        wrapper.writeline(
+            f"{output_name} = {kernel_name}({', '.join(result.call_args)})"
+        )
+        # Emit multi-output children assignments
+        for mo_name, mo in sorted(tb._multi_output_children.items()):
+            if mo_name not in result.removed_buffers:
+                idx_str = output_name
+                for _, idx in mo.indices:
+                    idx_str = f"{idx_str}[{idx}]"
+                wrapper.writeline(f"{mo_name} = {idx_str}")
+
+        # Generate standalone kernels for unfusable epilogues
+        for node in standalone_epilogues:
+            self.codegen_node(node)
+
+        # 8. Handle removed buffers
+        V.graph.removed_buffers |= result.removed_buffers
+        V.graph.removed_buffers |= tracing_kernel.removed_buffers
+        V.graph.inplaced_to_remove |= tracing_kernel.inplaced_to_remove
+        self.free_buffers_in_scheduler()
+        return None
+
     def codegen_template(
         self,
         template_node,
@@ -2240,6 +2434,17 @@ class SIMDScheduling(BaseScheduling):
 
         _, (_numel, rnumel) = template_node.group
         assert rnumel == 1
+
+        # External backends (e.g. Helion) that implement fuse() use a separate
+        # codegen path that produces a FusionRequest and delegates source
+        # generation to the backend.
+        if (
+            hasattr(template_node.node, "fuse")
+            and type(template_node.node).fuse is not ir.TemplateBuffer.fuse
+        ):
+            return self._codegen_external_template(
+                template_node, epilogue_nodes, prologue_nodes,
+            )
 
         if (
             isinstance(template_node.node, MultiTemplateBuffer)

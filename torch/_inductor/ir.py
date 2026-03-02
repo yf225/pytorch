@@ -5195,6 +5195,16 @@ class TemplateBuffer(OperationBuffer):
     def get_reduction_type(self) -> Optional[str]:
         return None
 
+    def fuse(self, request: "FusionRequest") -> "FusionResult":
+        """Entry point for external template fusion.
+
+        Called by Inductor's ``_codegen_external_template`` with tracing results.
+        Override in subclasses to integrate epilogue/prologue code snippets
+        into the backend's kernel source.  Returns everything Inductor needs
+        to emit the fused kernel.  Default raises ``NotImplementedError``.
+        """
+        raise NotImplementedError
+
     def should_allocate(self) -> bool:
         return True
 
@@ -5401,213 +5411,9 @@ class TritonTemplateBuffer(TemplateBuffer):
         return out
 
 
-class HelionTemplateBuffer(TemplateBuffer):
-    """Abstract base for external template kernel backends (e.g. Helion).
-
-    Subclasses implement ``_build_partial_render()``. Use ``create()`` to construct.
-    No Triton-specific inheritance — inherits directly from ``TemplateBuffer``.
-    """
-
-    def __init__(
-        self,
-        layout: Layout,
-        inputs: "Sequence[IRNode]",
-        mutated_inputs: "Optional[Iterable[IRNode]]" = None,
-        allowed_prologue_inps: "Optional[OrderedSet[str]]" = None,
-    ) -> None:
-        self._multi_output_children: "dict[str, Any]" = {}
-        self._named_inputs: "dict[str, IRNode]" = {}  # param_name → IRNode, set by create()
-        self.removed_buffers: OrderedSet[str] = OrderedSet()
-        def _make_kernel_render(
-            tb: "HelionTemplateBuffer", hint_override: "Any" = None
-        ) -> "tuple[Any, Callable[[], Any]]":
-            from .select_algorithm import HelionTemplateKernel
-
-            kernel = HelionTemplateKernel(tb)
-
-            def render() -> Any:
-                n_dims = len(tb.get_size())
-                for epi_idx in range(len(tb.fusable_outputs)):
-                    kernel.store_output(
-                        indices=[f"x_epi{epi_idx}_{d}" for d in range(n_dims)],
-                        val=f"_kernel_val_{epi_idx}",
-                        mask=f"_tile_mask_{epi_idx}",
-                        indent_width=0,
-                    )
-                for param_name in tb._named_inputs:
-                    kernel.load_input(param_name)
-                return tb._build_partial_render(kernel)
-
-            return kernel, render
-
-        # Call TemplateBuffer.__init__ directly (no TritonTemplateBuffer in chain)
-        super().__init__(
-            layout=layout,
-            inputs=inputs,
-            make_kernel_render=_make_kernel_render,
-        )
-
-        # Set fusion attributes
-        self.mutated_inputs = mutated_inputs
-        self.outputs = [self]
-        if mutated_inputs is not None:
-            assert isinstance(self.inputs[0], IRNode), type(self.inputs[0])
-            device = self.inputs[0].get_device()
-            self.outputs += [
-                MutationOutput(NoneLayout(device=device), buf, self)
-                for buf in mutated_inputs
-            ]
-
-        self.allowed_prologue_inps = (
-            allowed_prologue_inps if allowed_prologue_inps else OrderedSet()
-        )
-
-    def _build_partial_render(self, kernel: "Any") -> "Any":
-        """Build PartialRender after store_output()/load_input() have captured fusion data."""
-        raise NotImplementedError
-
-    def _build_call_args(
-        self,
-        call_order: "list[str]",
-        constant_repr: "dict[str, str]",
-        prologue_primary_sources: "dict[str, Optional[str]]",
-        extra_params: "list[tuple[str, str]]",
-    ) -> "tuple[list[str], list[str]]":
-        """Compute ``(call_preamble, call_args)`` for the kernel invocation."""
-        preamble: "list[str]" = []
-        reinterp_count = 0
-
-        def resolve_param(param_name: str) -> "Optional[str]":
-            nonlocal reinterp_count
-            node = self._named_inputs.get(param_name)
-            if node is None:
-                return constant_repr.get(param_name)
-
-            source_buf = prologue_primary_sources.get(param_name)
-
-            if isinstance(node, ReinterpretView):
-                base = source_buf if source_buf is not None else node.data.get_name()
-                preamble.append(
-                    f"reinterp_{reinterp_count} = reinterpret_tensor("
-                    f"{base}, {tuple(node.get_size())}, {tuple(node.get_stride())}, {node.layout.offset})"
-                )
-                result = f"reinterp_{reinterp_count}"
-                reinterp_count += 1
-                return result
-
-            return source_buf if source_buf is not None else node.get_name()  # type: ignore[union-attr]
-
-        call_args: "list[str]" = []
-        for param in call_order:
-            resolved = resolve_param(param)
-            if resolved is not None:
-                call_args.append(resolved)
-        call_args.extend(buf_name for _, buf_name in extra_params)
-        return preamble, call_args
-
-    @classmethod
-    def create(
-        cls,
-        realized_inputs: "dict[str, IRNode]",
-        structured_outputs: object,
-        mutated_input_names: "list[str]",
-        direct_aliases: "dict[int, IRNode]",
-        *,
-        on_tensor_leaf: "Optional[Callable[[str, Any, list[tuple[type, int]], int], None]]" = None,
-        on_non_tensor_leaf: "Optional[Callable[[int], None]]" = None,
-        **buffer_kwargs: Any,
-    ) -> "tuple[HelionTemplateBuffer, tuple[TensorBox, ...]]":
-        """Build a HelionTemplateBuffer and return ``(buf, outputs)``."""
-        inputs = list(realized_inputs.values())
-        dev = inputs[0].get_device() if inputs else torch.device("cuda")
-
-        mutated_nodes = (
-            [realized_inputs[n] for n in mutated_input_names if n in realized_inputs]
-            or None
-        )
-        mutated_inp_names = {
-            n.get_name() for n in (mutated_nodes or []) if hasattr(n, "get_name")
-        }
-        buf = cls(
-            layout=MultiOutputLayout(device=dev),
-            inputs=inputs,
-            mutated_inputs=mutated_nodes,
-            allowed_prologue_inps=OrderedSet(
-                inp.get_name() for inp in inputs  # type: ignore[union-attr]
-                if inp.get_name() not in mutated_inp_names
-            ),
-            **buffer_kwargs,
-        )
-        buf._named_inputs = dict(realized_inputs)
-        buf.all_inputs = {
-            n.get_name(): p for p, n in buf._named_inputs.items()  # type: ignore[union-attr]
-        }
-        for inp in mutated_nodes or []:
-            if hasattr(inp, "get_name"):
-                V.graph.never_reuse_buffers.add(inp.get_name())
-
-        flat, _ = (
-            pytree.tree_flatten(structured_outputs)
-            if structured_outputs is not None
-            else ([], None)
-        )
-        if not any(isinstance(leaf, torch.Tensor) for leaf in flat):
-            buf._multi_output_children = {}
-            buf.all_output_names = set()
-            return buf, ()
-
-        multi_output_children: "dict[str, Any]" = {}
-
-        def wrapped_on_tensor_leaf(mo_name, mo, indices, leaf_idx):
-            multi_output_children[mo_name] = mo
-            if on_tensor_leaf is not None:
-                on_tensor_leaf(mo_name, mo, indices, leaf_idx)
-
-        result = cls.build_multi_outputs(
-            buf,
-            structured_outputs,
-            direct_alias_at_leaf=direct_aliases,
-            on_tensor_leaf=wrapped_on_tensor_leaf,
-            on_non_tensor_leaf=on_non_tensor_leaf,
-        )
-        buf._multi_output_children = multi_output_children
-        buf.all_output_names = set(multi_output_children.keys())
-        return buf, result
-
-    @property
-    def dtype(self) -> torch.dtype:
-        # MultiOutputLayout has no dtype; infer from the first input.
-        return self.inputs[0].get_dtype() if self.inputs else torch.float32  # type: ignore[union-attr]
-
-    def should_allocate(self) -> bool:
-        return False
-
-    def get_size(self) -> "Sequence[sympy.Expr]":
-        if self._multi_output_children:
-            first_child = next(iter(self._multi_output_children.values()))
-            return first_child.get_size()
-        return []
-
-    def set_current_node(self, node: Any) -> "AbstractContextManager[None]":
-        return nullcontext()
-
-    def __str__(self) -> str:
-        return f"{type(self).__name__}(layout={self.layout})"
-
-
-@dataclasses.dataclass
-class KernelSource:
-    """Source, imports, and call-site args for an external kernel."""
-
-    source: str  # complete Triton kernel source
-    imports: "list[str]"  # statements for wrapper.add_import_once()
-    call_args: "list[str]" = dataclasses.field(default_factory=list)  # ordered arg list for the invocation
-    call_preamble: "list[str]" = dataclasses.field(default_factory=list)  # reinterpret_tensor lines before call
-
-
 @dataclasses.dataclass
 class CapturedEpilogueExpr:
-    """Result of tracing one epilogue, consumed by ``_build_partial_render``."""
+    """Result of tracing one epilogue, used by ``_FusionTracingKernel._setup_store_output``."""
 
     fused_expr: str  # Triton expression using _kernel_val_{epi_idx} for the original output
     fusion_loads: "dict[str, tuple[str, str]]"  # var_name -> (param_name, sympy_idx_str)
@@ -5616,6 +5422,60 @@ class CapturedEpilogueExpr:
     epi_idx: int  # index for _kernel_val_{i} naming
     kernel_output_param: str  # param name of the kernel output this fuses onto
     kernel_output_buf: str  # buffer name of the kernel output
+
+
+@dataclasses.dataclass
+class EpilogueSpec:
+    """Per-output epilogue metadata produced by Inductor's tracing phase."""
+
+    epi_idx: int
+    kernel_output_param: str  # e.g. "result" — param name in kernel signature
+    kernel_output_buf: str  # e.g. "buf3" — Inductor buffer name
+    store_target: "Optional[str]"  # buffer the epilogue stores to (may differ)
+    store_target_param: "Optional[str]"  # param name registered for store_target (from tracing kernel)
+    output_dtype: torch.dtype  # for fp16/bf16 upcast decisions
+    can_remove_output: bool  # True if output buf has no external consumers
+
+
+@dataclasses.dataclass
+class PrologueSpec:
+    """Per-input prologue metadata produced by Inductor's tracing phase."""
+
+    input_param: str  # kernel parameter name
+    input_buf: str  # buffer name the prologue replaces
+    primary_source: "Optional[str]"  # primary source buffer (for call arg resolution)
+
+
+@dataclasses.dataclass
+class FusionRequest:
+    """Everything an external backend needs to produce fused source."""
+
+    # Epilogue data
+    epilogue_specs: "list[EpilogueSpec]"
+    epilogue_hooks: "dict[int, Callable[[], str]]"  # epi_idx → Triton code snippet
+
+    # Prologue data
+    prologue_specs: "list[PrologueSpec]"
+    prologue_hooks: "dict[str, Callable[[], str]]"  # param_name → Triton code snippet
+
+    # Extra parameters needed by fused ops
+    epi_extra_inputs: "dict[str, str]"  # buf_name → param_name
+    pro_extra_inputs: "dict[str, str]"  # src_buf → param_name
+
+    # Mapping metadata from the template buffer
+    output_param_mapping: "dict[str, str]"  # fusable_outputs
+    input_param_mapping: "dict[str, str]"  # all_inputs
+
+
+@dataclasses.dataclass
+class FusionResult:
+    """Everything Inductor needs after backend fusion."""
+
+    source: str  # complete kernel source (no more placeholders)
+    imports: "list[str]"  # wrapper.add_import_once() statements
+    call_args: "list[str]"  # ordered args for kernel invocation
+    call_preamble: "list[str]"  # reinterpret_tensor lines before call
+    removed_buffers: "OrderedSet[str]"  # buffers to elide from allocation
 
 
 PrimitiveInfoType = Union[int, float, bool, str, list[Union[int, str, float, bool]]]
