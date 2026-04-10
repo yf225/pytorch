@@ -6656,6 +6656,7 @@ def _make_reduction_inner(
         inner_fn=loader,
         ranges=new_size,
         reduction_ranges=reduced_sizes,
+        original_axes=tuple(reduced_idx),
     )
 
 
@@ -8491,8 +8492,9 @@ def prepare_softmax_online(x, dim):
 
     reduction_ranges = kwargs["reduction_ranges"]
     rnumel = V.graph.sizevars.simplify(sympy_product(reduction_ranges))
+    # num_splits doesn't accept original_axes, so filter it out.
     hint, num_split = ir.Reduction.num_splits(
-        **kwargs,
+        **{k: v for k, v in kwargs.items() if k != "original_axes"},
         reduction_type="online_softmax_reduce",  # type: ignore[arg-type]
         reduction_numel=rnumel,
     )

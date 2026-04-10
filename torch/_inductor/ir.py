@@ -18,6 +18,7 @@ from typing import (
     cast,
     ClassVar,
     Literal,
+    NamedTuple,
     overload,
     SupportsFloat,
     SupportsInt,
@@ -1258,6 +1259,10 @@ class Reduction(Loops):
     # self.dtype represents the dst dtype
     src_dtype: torch.dtype
     reduction_hint: ReductionHint
+    # Original tensor dimension indices being reduced (e.g., (1,) for mean(dim=1)).
+    # Set during lowering so downstream code can identify the reduction axis
+    # without matching by size (which is ambiguous for square tensors).
+    original_axes: tuple[int, ...] | None = None
 
     def __str__(self) -> str:
         return self._to_str(("ranges", "reduction_ranges", "reduction_type"))
@@ -1551,6 +1556,7 @@ class Reduction(Loops):
         reduction_type: ReductionType,
         reduction_hint: ReductionHint = ReductionHint.DEFAULT,
         input_node: IRNode | None = None,
+        original_axes: tuple[int, ...] | None = None,
     ) -> TensorBox:
         """
         Create a reduction node. May split the reduction to multiple layers to expose
@@ -1744,6 +1750,7 @@ class Reduction(Loops):
                 reduction_type=reduction_type,
                 src_dtype=src_dtype,
                 reduction_hint=reduction_hint,
+                original_axes=original_axes,
             )
         )
         return out
@@ -2095,6 +2102,7 @@ class MultiOutputReduction(Reduction):
         src_dtype: torch.dtype,
         reduction_hint: ReductionHint,
         output_index: int,
+        original_axes: tuple[int, ...] | None = None,
     ):
         if callable(inner_fns):
             inner_fns = (inner_fns,)
@@ -2118,6 +2126,7 @@ class MultiOutputReduction(Reduction):
             reduction_type=reduction_type,
             src_dtype=src_dtype,
             reduction_hint=reduction_hint,
+            original_axes=original_axes,
         )
         self.output_index = output_index
 
@@ -2152,6 +2161,7 @@ class OnlineSoftmaxReduction(MultiOutputReduction):
         num_output: int,
         reduction_hint: ReductionHint = ReductionHint.DEFAULT,
         input_node: IRNode | None = None,
+        original_axes: tuple[int, ...] | None = None,
     ) -> Sequence[TensorBox]:
         """
         Create the reduction disregarding splitting.
@@ -2168,6 +2178,7 @@ class OnlineSoftmaxReduction(MultiOutputReduction):
                     src_dtype,
                     reduction_hint,
                     output_idx,
+                    original_axes=original_axes,
                 )
             )
             for output_idx in range(num_output)
@@ -2188,6 +2199,7 @@ class WelfordReduction(MultiOutputReduction):
         reduction_ranges: list[Integer],
         reduction_type: ReductionType,
         reduction_hint: ReductionHint = ReductionHint.DEFAULT,
+        original_axes: tuple[int, ...] | None = None,
     ) -> Sequence[TensorBox]:
         assert reduction_type in ("welford_reduce", "welford_combine")
         assert not config.mtia.disable_welford_reduction, (
@@ -2294,6 +2306,7 @@ class WelfordReduction(MultiOutputReduction):
                     dtype,
                     reduction_hint,
                     output_idx,
+                    original_axes=original_axes,
                 )
             )
             for output_idx in range(3)
@@ -5232,6 +5245,13 @@ class FinalizeCodegenResult:
     call_args: list[str]
 
 
+class ReductionPlan(NamedTuple):
+    reduction_type: str
+    pw_ranges: tuple[Any, ...]
+    red_ranges: tuple[Any, ...]
+    red_block_id: int
+
+
 class TemplateBuffer(OperationBuffer):
     """
     Base class for template operators that support epilogue and prologue fusion.
@@ -5296,6 +5316,14 @@ class TemplateBuffer(OperationBuffer):
                 "Multi-output templates do not have a single dtype"
             )
         return self.get_layout().dtype
+
+    def supports_reduction_epilogue(self, node: object) -> bool:
+        """Whether this template can fuse the given reduction epilogue."""
+        return False
+
+    def get_block_sizes(self) -> list[int] | None:
+        """Return block sizes for the current config, or None if unavailable."""
+        return None
 
     def get_read_writes(self) -> dependencies.ReadWrites:
         return self.extract_read_writes(normalize=True)

@@ -696,8 +696,7 @@ class SIMDKernel(Kernel[CSEVariableType], Generic[CSEVariableType]):
 
         @contextlib.contextmanager
         def ctx():
-            if not self.features.is_reduction():
-                assert not self.inside_reduction
+            if not self.features.is_reduction() and not self.inside_reduction:
                 yield
                 return
             if should_flush:

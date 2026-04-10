@@ -72,6 +72,10 @@ from .codegen.triton import (
     TritonSymbols,
 )
 from .codegen.triton_utils import config_of, equal_1_arg_indices, signature_to_meta
+from .scheduler import (
+    _compute_red_block_id,
+    extract_reduction_epilogue_info,
+)
 from .codegen.wrapper import pexpr
 from .exc import CUDACompileError
 from .fx_utils import count_flops_fx
@@ -272,13 +276,16 @@ class PartialRender:
                 indent = line[: len(line) - len(line.lstrip())]
                 result_lines = result.strip("\n").split("\n")
                 non_empty = [rl for rl in result_lines if rl.strip()]
-                all_unindented = bool(non_empty) and all(
-                    not rl[0].isspace() for rl in non_empty
+                min_indent = (
+                    min(len(rl) - len(rl.lstrip()) for rl in non_empty)
+                    if non_empty
+                    else 0
                 )
-                if all_unindented:
-                    # Result is at uniform indent 0 (e.g.
-                    # ExternalTritonTemplateKernel hooks) — apply the
-                    # placeholder indent to every non-empty line.
+                if min_indent == 0:
+                    # Result uses relative indentation (min indent is 0).
+                    # Apply the placeholder indent to every non-empty
+                    # line, preserving internal structure (e.g. loop
+                    # bodies indented relative to the for statement).
                     indented = [
                         indent + rl if rl.strip() else rl for rl in result_lines
                     ]
@@ -617,7 +624,7 @@ class TritonTemplateKernel(TritonKernel):
         self.stores: IndentedBuffer = FakeIndentedBuffer()
         self.template_mask: str | None = None
         self.template_out_shape: str | tuple[str] | None = None
-        self.ops_handler: V.WrapperHandler | None = None  # type: ignore[name-defined]
+        self.ops_handler: WrapperHandler | None = None
         self.root_var_renames: dict[str, str] = {}
 
         # When caching is enabled, the generated code is not dependent on the input nodes names, or
@@ -787,11 +794,45 @@ class TritonTemplateKernel(TritonKernel):
     def _make_codegen_hook(
         self, subgraph_name: str, indent_width: int = 0
     ) -> Callable[[], str]:
-        """Create a hook closure that codegen's a subgraph body."""
+        """Create a hook closure that codegen's a subgraph body.
+
+        For reduction subgraphs (those with a stored node schedule),
+        delegates to ``_process_epilogue_node_schedule`` which handles
+        range tree headers, broadcast suffixes, and
+        DisableReduction/EnableReduction markers.
+        """
+        # Extract integer index from ``<STORE_OUTPUT_i>`` names.
+        prefix = "<STORE_OUTPUT_"
+        if subgraph_name.startswith(prefix) and subgraph_name.endswith(">"):
+            try:
+                subgraph_idx: int | None = int(subgraph_name[len(prefix) : -1])
+            except ValueError:
+                subgraph_idx = None
+        else:
+            subgraph_idx = None
 
         def hook():
             with self.set_subgraph_body(subgraph_name):
-                self.codegen_body()
+                schedule = (
+                    self._epilogue_node_schedules.get(subgraph_idx)
+                    if subgraph_idx is not None
+                    else None
+                )
+                if schedule is not None:
+                    old_inside = self.inside_reduction
+                    old_persistent = self.persistent_reduction
+                    self.inside_reduction = True
+                    self.persistent_reduction = self._get_epilogue_info(subgraph_idx)[2]
+                    from torch._inductor.codegen.common import CSEProxy
+
+                    with V.set_ops_handler(CSEProxy(self, self.overrides())):
+                        self._process_epilogue_node_schedule(
+                            schedule, self.persistent_reduction
+                        )
+                    self.inside_reduction = old_inside
+                    self.persistent_reduction = old_persistent
+                else:
+                    self.codegen_body()
                 self.cse.invalidate(OrderedSet())
                 result = self.body.getvalue()
                 if indent_width:
@@ -1773,6 +1814,15 @@ class TritonTemplateKernel(TritonKernel):
         )
         self._unfused_epilogues: list[Any] = []
         self._prologue_sources: dict[str, frozenset[str]] = {}
+        self._epilogue_node_schedules: dict[int, list[object]] = {}
+        self._epilogue_persistent: dict[int, bool] = {}
+
+    def _get_epilogue_info(self, subgraph_idx: int) -> tuple[list[Any], Any | None, bool]:
+        return (
+            self._epilogue_nodes_by_subgraph[subgraph_idx],
+            getattr(self, "_epilogue_reduction_info", {}).get(subgraph_idx),
+            self._epilogue_persistent.get(subgraph_idx, True),
+        )
 
     def codegen_template_body(
         self,
@@ -1788,34 +1838,86 @@ class TritonTemplateKernel(TritonKernel):
 
         Returns the final source code string.
         """
-        self._compute_fusion_metadata(
-            scheduling, epilogue_nodes, prologue_nodes, buf_name_to_prologue_group
-        )
         with self:
+            self._compute_fusion_metadata(
+                scheduling, epilogue_nodes, prologue_nodes, buf_name_to_prologue_group
+            )
             partial_code = render()
 
             num_store_subgraphs = self.get_store_output_count()
             for i in range(num_store_subgraphs):
                 subgraph_name = self._get_store_output_subgraph_name(i)
                 with self.set_subgraph_body(subgraph_name):
-                    for node in self._epilogue_nodes_by_subgraph[i]:
-                        node.codegen(self.split_and_set_ranges(node.get_ranges()))
-                    self.cse.invalidate(OrderedSet())
+                    nodes, red_info, _ = self._get_epilogue_info(i)
+                    # Expand FusedSchedulerNodes to their sub-nodes
+                    expanded = []
+                    for node in nodes:
+                        snodes = getattr(node, "snodes", None)
+                        if snodes is not None:
+                            expanded.extend(snodes)
+                        else:
+                            expanded.append(node)
+
+                    if red_info is not None:
+                        # Reduction epilogue: defer ALL codegen to the
+                        # hook via _process_epilogue_node_schedule.
+                        # Build a node schedule — for multi-node, use
+                        # generate_node_schedule with DisableReduction/
+                        # EnableReduction markers; for single-node, just
+                        # use the expanded list directly.
+                        if len(expanded) > 1:
+                            expanded = sorted(expanded, key=lambda n: n.min_order)
+                            pw_numel = sympy_product(red_info.pw_ranges)
+                            red_numel_val = sympy_product(red_info.red_ranges)
+                            from torch._inductor.codegen.simd import SIMDScheduling
+
+                            device = expanded[0].group[0]
+                            backend = V.graph.scheduler.get_backend(device)
+                            simd_sched = (
+                                backend
+                                if isinstance(backend, SIMDScheduling)
+                                else getattr(backend, "_triton_scheduling", backend)
+                            )
+                            schedule = simd_sched.generate_node_schedule(
+                                expanded, pw_numel, red_numel_val
+                            )
+                        else:
+                            schedule = list(expanded)
+                        self._epilogue_node_schedules[i] = schedule
+                        # Don't invalidate CSE — hook needs seeded
+                        # store_cache entries.
+                    else:
+                        for node in expanded:
+                            node.codegen(self.split_and_set_ranges(node.get_ranges()))
+                        self.cse.invalidate(OrderedSet())
 
             self.codegen_prologues_in_subgraphs(
                 buf_name_to_prologue_group, prologue_preserves_zero_mask_fn
             )
 
-        partial_code = self._finalize_partial_render(partial_code)
+            # Remove intermediate buffers that were registered during codegen
+            # (e.g. by ops.store calls inside FusedSchedulerNode sub-nodes).
+            # Skip buffers in must_keep_buffers (e.g. non-persistent reduction
+            # epilogues that need the buffer for real tl.load).
+            from torch._inductor.codegen.common import RemovedArg
+
+            for buf_name in self.removed_buffers:
+                if (
+                    buf_name in self.args.output_buffers
+                    and buf_name not in self.must_keep_buffers
+                    and not isinstance(self.args.output_buffers[buf_name], RemovedArg)
+                ):
+                    self.args.output_buffers[buf_name] = RemovedArg()
 
         # Template hooks must be finalised after kernel.remove_kernel_local_buffers
         # is called (this is called when the kernel context is exited above), and when
         # the kernel handler is set (as below). This is because the hooks may add
         # DeferredLine type lines, which preclude lines involving buffers that have
-        # been removed
+        # been removed.
 
         # finalize must be called after adding epilogue above
         with V.set_kernel_handler(self):
+            partial_code = self._finalize_partial_render(partial_code)
             if isinstance(partial_code, str):
                 src_code = partial_code
             else:
@@ -1871,17 +1973,89 @@ class TritonTemplateKernel(TritonKernel):
                         )
                     self.cse.invalidate(OrderedSet())
 
+    def _make_reduction_subgraph(
+        self, subgraph_name, pw_numel, red_numel, persistent, **extra_fields
+    ):
+        """Create a reduction subgraph for specialized epilogue codegen."""
+        groups = {
+            "x": V.graph.sizevars.simplify(pw_numel),
+            "r0_": V.graph.sizevars.simplify(red_numel),
+        }
+        old_persistent = self.persistent_reduction
+        self.persistent_reduction = persistent
+        range_trees = self.construct_range_trees(
+            pid_cache=None,
+            inside_reduction=True,
+            is_reduction=True,
+            numels=groups,
+            no_x_dim=False,
+        )
+        self.persistent_reduction = old_persistent
+        self.subgraph_bodies[subgraph_name] = SubgraphInfo(
+            body=IndentedBuffer(),
+            cse=self.cse.clone(),
+            range_trees=range_trees,
+            range_tree_nodes={},
+            numels=groups,
+            **extra_fields,
+        )
+
+    def _process_epilogue_node_schedule(self, node_schedule, persistent):
+        """Process a specialized reduction epilogue node schedule.
+
+        Handles both single-node and multi-node schedules, and both
+        persistent and non-persistent reductions.  The range tree's
+        ``is_loop`` flag (set by ``_make_reduction_subgraph``) controls
+        whether ``codegen_body`` generates a for-loop or inline code.
+
+        Emits reduction range tree headers, adds broadcast suffixes to
+        pointwise range tree entries (bridge variables are always 1D
+        from external templates), then processes nodes with
+        DisableReduction/EnableReduction markers.
+
+        Must be called inside ``set_subgraph_body`` with ``V.ops`` set.
+        """
+        from torch._inductor.codegen.simd import DisableReduction
+        from torch._inductor.codegen.simd import EnableReduction
+
+        for tree in self.range_trees:
+            if tree.is_reduction and not tree.is_loop:
+                self.iteration_ranges_codegen_header(tree, self.body)
+            elif tree.is_reduction and tree.is_loop:
+                self.body.writeline(
+                    f"{tree.prefix}base = {self.iteration_ranges_ranges_code(tree)}"
+                )
+        if not any(t.is_loop for t in self.range_trees if t.is_reduction):
+            self.codegen_reduction_indices(self.body)
+
+        ndim = self.triton_tensor_ndim()
+        if ndim > 1:
+            for tree in self.range_trees:
+                if not tree.is_reduction and tree.tensor_dim is not None:
+                    size_str = self.indexing_size_str(tree.tensor_dim)
+                    for entry in tree.nodes.values():
+                        self.body.writeline(f"{entry.name} = {entry.name}{size_str}")
+                    mask_name = f"{tree.prefix}mask"
+                    self.body.writeline(f"{mask_name} = {mask_name}{size_str}")
+                    break
+
+        stack = contextlib.ExitStack()
+        for item in node_schedule:
+            if item is DisableReduction:
+                stack.enter_context(self.disable_reduction())
+            elif item is EnableReduction:
+                stack.close()
+                stack = contextlib.ExitStack()
+            else:
+                item.codegen(self.split_and_set_ranges(item.get_ranges()))
+        stack.close()
+
+        self.codegen_body()
+
     def _finalize_partial_render(
         self, partial_code: str | PartialRender
     ) -> str | PartialRender:
-        """Hook to intercept or replace the PartialRender before hook finalization.
-
-        Called after Inductor has populated subgraph buffers (epilogue stores,
-        prologue loads) but before ``finalize_hook`` resolves placeholders.
-        Subclasses may return a replacement ``PartialRender`` — e.g. to capture
-        the rendered hook outputs and supply entirely new source code (as
-        ``ExternalTritonTemplateKernel`` does for fusion-aware autotuning).
-        """
+        """Hook to intercept or replace the PartialRender before hook finalization."""
         return partial_code
 
 
@@ -1949,15 +2123,24 @@ class ExternalTritonTemplateKernel(TritonTemplateKernel):
         # Reference to the scheduler, set by _compute_fusion_metadata;
         # used in call_kernel() to codegen unfused epilogue nodes
         self._scheduling_ref: Any = None
+        # Reduction metadata per epilogue (set by _compute_fusion_metadata)
+        self._epilogue_reduction_info: dict[int, Any] = {}
 
     def _finalize_partial_render(
         self, partial_code: str | PartialRender
     ) -> str | PartialRender:
+        """Capture hook outputs and delegate to template buffer for code generation.
+
+        Called inside ``V.set_kernel_handler(self)`` context set up by
+        the parent's ``codegen_template_body``.
+        """
         # Capture hook outputs.
         hook_outputs: dict[str, str] = {}
-        with V.set_kernel_handler(self):
-            for key, hook in self.render_hooks.items():
-                hook_outputs[key] = hook()
+        for key, hook in self.render_hooks.items():
+            hook_outputs[key] = hook()
+
+        # Expose sizevars for template buffer to read.
+        self._sizevars = tuple(self.args.sizevars.items())
 
         # Delegate to template buffer.
         result = self._template_buffer._finalize_codegen(hook_outputs)
@@ -1991,13 +2174,15 @@ class ExternalTritonTemplateKernel(TritonTemplateKernel):
         """Compute fusion metadata for external backends.
 
         Determines eligible epilogues/prologues, builds epilogue specs,
-        and computes prologue sources — all before render().
+        and computes prologue sources -- all before render().
 
         Hook setup (_setup_epilogue_hook / _setup_prologue_hook) cannot
         happen here because it requires V.kernel context, which is only
-        active during codegen_template_body → render().
+        active during codegen_template_body -> render().
         """
         self._scheduling_ref = scheduling
+        self._epilogue_node_schedules: dict[int, list[object]] = {}
+        self._epilogue_persistent: dict[int, bool] = {}
         from torch._inductor.dependencies import MemoryDep
 
         tb = self._template_buffer
@@ -2009,10 +2194,52 @@ class ExternalTritonTemplateKernel(TritonTemplateKernel):
             {i: [sn] for i, (sn, _, _, _) in enumerate(self._eligible_epilogues)},
         )
         fused_ids = OrderedSet(id(sn) for sn, _, _, _ in self._eligible_epilogues)
+
+        # Transitive fusion absorption: nodes that read from a fused
+        # epilogue's writes get absorbed into the same subgraph.
+        # This handles multi-node reduction chains (e.g. mean = sum + div).
+        buf_to_subgraph: dict[str, int] = {}
+        for idx, (snode, _, _, _) in enumerate(self._eligible_epilogues):
+            for w in snode.read_writes.writes:
+                if isinstance(w, MemoryDep):
+                    buf_to_subgraph[w.name] = idx
+        absorbed_ids: OrderedSet[int] = OrderedSet()
+        for node in epilogue_nodes:
+            if id(node) in fused_ids or isinstance(
+                getattr(node, "node", None), ir.MultiOutput
+            ):
+                continue
+            node_reads = {
+                d.name for d in node.read_writes.reads if isinstance(d, MemoryDep)
+            }
+            matching = {
+                buf_to_subgraph[n] for n in node_reads if n in buf_to_subgraph
+            }
+            if matching:
+                target_sg = min(matching)
+                self._epilogue_nodes_by_subgraph[target_sg].append(node)
+                absorbed_ids.add(id(node))
+                for w in node.read_writes.writes:
+                    if isinstance(w, MemoryDep):
+                        buf_to_subgraph[w.name] = target_sg
+                # Register extra inputs for the absorbed node.
+                for dep in node.read_writes.reads:
+                    if (
+                        isinstance(dep, MemoryDep)
+                        and dep.name not in tb.epilogue_fusable_outputs
+                        and dep.name not in buf_to_subgraph
+                    ):
+                        if dep.name not in self._extra_inputs:
+                            param = f"_extra_input_{len(self._extra_inputs)}"
+                            self._extra_inputs[dep.name] = param
+                            self.args.input_buffers[dep.name] = param
+
         self._unfused_epilogues = [
             n
             for n in epilogue_nodes
-            if id(n) not in fused_ids and not isinstance(n.node, ir.MultiOutput)
+            if id(n) not in fused_ids
+            and id(n) not in absorbed_ids
+            and not isinstance(getattr(n, "node", None), ir.MultiOutput)
         ]
         self._prologue_sources = {
             buf_name: frozenset(
@@ -2021,6 +2248,83 @@ class ExternalTritonTemplateKernel(TritonTemplateKernel):
             for buf_name, pro_nodes in buf_name_to_prologue_group.items()
             for pro_node in pro_nodes
         }
+
+        # Merge cross-dependent epilogues: when an eligible epilogue reads
+        # from another eligible epilogue's output, combine them into a
+        # single subgraph.  This handles multi-output reductions like
+        # softmax (max + sum_exp + pointwise) and layer_norm (mean + var +
+        # normalize) where all nodes must be in one subgraph for
+        # generate_node_schedule to produce correct codegen.
+        if len(self._eligible_epilogues) > 1:
+            epi_buf_to_sg: dict[str, int] = {}
+            for idx, (snode, _, _, _) in enumerate(self._eligible_epilogues):
+                for w in snode.read_writes.writes:
+                    if isinstance(w, MemoryDep):
+                        epi_buf_to_sg[w.name] = idx
+
+            connected: OrderedSet[int] = OrderedSet()
+            for idx, (snode, _, _, _) in enumerate(self._eligible_epilogues):
+                for dep in snode.read_writes.reads:
+                    if isinstance(dep, MemoryDep) and dep.name in epi_buf_to_sg:
+                        src = epi_buf_to_sg[dep.name]
+                        if src != idx:
+                            connected.add(idx)
+                            connected.add(src)
+
+            if connected:
+                target = min(connected)
+                to_merge = sorted(connected - {target})
+
+                # Move merged nodes into target subgraph
+                for idx in to_merge:
+                    nodes = self._epilogue_nodes_by_subgraph.pop(idx, [])
+                    self._epilogue_nodes_by_subgraph[target].extend(nodes)
+                    self._epilogue_reduction_info.pop(idx, None)
+
+                # Remove extra inputs that are now produced internally
+                internal_bufs: set[str] = set()
+                for node in self._epilogue_nodes_by_subgraph[target]:
+                    for w in node.read_writes.writes:
+                        if isinstance(w, MemoryDep):
+                            internal_bufs.add(w.name)
+                for buf_name in internal_bufs:
+                    if buf_name in self._extra_inputs:
+                        self._extra_inputs.pop(buf_name)
+                        self.args.input_buffers.pop(buf_name, None)
+
+                # Remove merged entries from _eligible_epilogues (reverse)
+                for idx in reversed(to_merge):
+                    self._eligible_epilogues.pop(idx)
+
+                # Renumber to contiguous indices
+                old_sg = dict(self._epilogue_nodes_by_subgraph)
+                old_red = dict(self._epilogue_reduction_info)
+                self._epilogue_nodes_by_subgraph = defaultdict(list)
+                self._epilogue_reduction_info = {}
+                for new_idx, old_idx in enumerate(sorted(old_sg.keys())):
+                    self._epilogue_nodes_by_subgraph[new_idx] = old_sg[old_idx]
+                    if old_idx in old_red:
+                        self._epilogue_reduction_info[new_idx] = old_red[old_idx]
+
+        # Update store targets for transitively absorbed nodes: the last
+        # absorbed node's write becomes the new store target.
+        # Also mark intermediate buffers as removed so codegen doesn't
+        # register them as output parameters during hook rendering.
+        for idx in list(self._epilogue_nodes_by_subgraph):
+            nodes = self._epilogue_nodes_by_subgraph[idx]
+            if len(nodes) > 1:
+                # Mark intermediate buffers (all but last) as removed
+                for node in nodes[:-1]:
+                    for w in node.read_writes.writes:
+                        if isinstance(w, MemoryDep):
+                            self.removed_buffers.add(w.name)
+                last_node = nodes[-1]
+                last_writes = last_node.read_writes.writes
+                if last_writes:
+                    new_st = next(iter(last_writes)).name
+                    snode, ob, op, old_st = self._eligible_epilogues[idx]
+                    if new_st != ob:
+                        self._eligible_epilogues[idx] = (snode, ob, op, new_st)
 
         # Build simplified epilogue interface: _epilogue_idx_by_param,
         # _epilogue_keep_store, and _extra_store_targets.
@@ -2035,6 +2339,12 @@ class ExternalTritonTemplateKernel(TritonTemplateKernel):
             all_store_names = OrderedSet([tb.get_name()])
             all_store_names.update(tb._multi_output_children)
             all_store_names.update(st for _, _, _, st in epilogues if st)
+            # Include absorbed nodes' writes in fused_node_names
+            for nodes in self._epilogue_nodes_by_subgraph.values():
+                for node in nodes:
+                    for w in node.read_writes.writes:
+                        if isinstance(w, MemoryDep):
+                            all_store_names.add(w.name)
             fused_node_names = OrderedSet(
                 scheduler.name_to_buf[n].defining_op_name()
                 for n in all_store_names
@@ -2095,12 +2405,27 @@ class ExternalTritonTemplateKernel(TritonTemplateKernel):
 
         # Set up epilogue hooks.
         epilogues = self._eligible_epilogues
-        for epilogue_idx in range(len(tb.epilogue_fusable_outputs)):
+        n_dims = len(tb.get_size())
+        n_epilogues = max(len(tb.epilogue_fusable_outputs), len(epilogues))
+        for epilogue_idx in range(n_epilogues):
             epi = epilogues[epilogue_idx] if epilogue_idx < len(epilogues) else None
-            self._setup_epilogue_hook(
-                output_buf=epi[1] if epi else None,
-                output_param=epi[2] if epi else None,
-            )
+            reduction = self._epilogue_reduction_info.get(epilogue_idx)
+            if epi is not None and reduction is not None:
+                block_sizes = tb.get_block_sizes()
+                persistent = (
+                    _is_persistent_reduction(block_sizes, n_dims, reduction)
+                    if block_sizes is not None
+                    else False
+                )
+                self._epilogue_persistent[epilogue_idx] = persistent
+                self._setup_reduction_epilogue_hook(
+                    epilogue_idx, reduction, epi[1], epi[2], persistent
+                )
+            else:
+                self._setup_epilogue_hook(
+                    output_buf=epi[1] if epi else None,
+                    output_param=epi[2] if epi else None,
+                )
 
         # Set up prologue hooks.
         for param_name in tb._named_inputs:
@@ -2151,6 +2476,22 @@ class ExternalTritonTemplateKernel(TritonTemplateKernel):
                         param = f"_extra_input_{len(self._extra_inputs)}"
                         self._extra_inputs[dep.name] = param
                         self.args.input_buffers[dep.name] = param
+
+        # Detect reduction epilogues and populate _epilogue_reduction_info
+        for idx, (snode, _, _, _) in enumerate(epilogues):
+            red_info = extract_reduction_epilogue_info(snode)
+            if red_info is not None:
+                inner_node, pw_ranges, red_ranges = red_info
+                data = getattr(inner_node, "data", inner_node)
+                reduction_type = getattr(data, "reduction_type", "sum")
+                self._epilogue_reduction_info[idx] = ir.ReductionPlan(
+                    reduction_type=reduction_type,
+                    pw_ranges=tuple(pw_ranges),
+                    red_ranges=tuple(red_ranges),
+                    red_block_id=_compute_red_block_id(
+                        list(self._template_buffer.get_size()), inner_node
+                    ),
+                )
 
         return epilogues
 
@@ -2203,6 +2544,95 @@ class ExternalTritonTemplateKernel(TritonTemplateKernel):
             )
             assert output_param is not None
             self.args.output_buffers[buf] = output_param
+
+        self.render_hooks[subgraph_name] = self._make_codegen_hook(subgraph_name)
+
+    def _setup_reduction_epilogue_hook(
+        self, epi_idx, reduction, output_buf, output_param, persistent
+    ):
+        """Set up a reduction epilogue subgraph with range trees and bridge variables."""
+        store_idx = next(self.store_output_ctr)
+        subgraph_name = self._get_store_output_subgraph_name(store_idx)
+
+        pw_lengths = [V.graph.sizevars.simplify(s) for s in reduction.pw_ranges]
+        red_lengths = [V.graph.sizevars.simplify(s) for s in reduction.red_ranges]
+        self._make_reduction_subgraph(
+            subgraph_name,
+            sympy_product(pw_lengths),
+            sympy_product(red_lengths),
+            persistent=persistent,
+        )
+        with self.set_subgraph_body(subgraph_name):
+            if pw_lengths:
+                kernel_val = f"_kernel_val_{epi_idx}"
+                n_dims = len(pw_lengths)
+                indices = [f"x_epilogue{epi_idx}_{d}" for d in range(n_dims)]
+                mask_name = "xmask"
+                indices = list(map(OpOverrides.paren, indices))
+                index_symbols = [sympy.Symbol(n, integer=True) for n in indices]
+                self.template_out = kernel_val
+                self._setup_contiguous_index_state(
+                    indices,
+                    index_symbols,
+                    pw_lengths,
+                    mask_name,
+                    xindex_name=f"x_epilogue{epi_idx}_index",
+                )
+            else:
+                kernel_val = f"_kernel_val_{epi_idx}"
+            self.args.output_buffers[output_buf] = output_param
+            if persistent:
+                block_shape = tuple(
+                    f"{rt.prefix.upper()}BLOCK"
+                    for rt in self.range_trees
+                    if not rt.is_reduction
+                )
+                if not block_shape:
+                    block_shape = ("XBLOCK",)
+                self.cse.store_cache[output_buf] = self.cse.namedvar(
+                    kernel_val, dtype=torch.float32, shape=block_shape
+                )
+            else:
+                self.must_keep_buffers.add(output_buf)
+            # Compute and emit bridge variable constexprs.
+            block_sizes = self._template_buffer.get_block_sizes() or []
+            n_dims = len(self.output_node.get_size())
+            red_size = int(reduction.red_ranges[0])
+            if len(block_sizes) >= n_dims:
+                xblock = math.prod(
+                    (
+                        bs
+                        for dim, bs in enumerate(block_sizes[:n_dims])
+                        if dim != reduction.red_block_id
+                    ),
+                    start=1,
+                )
+            else:
+                xblock = math.prod(block_sizes, start=1)
+            if persistent:
+                r0_block = red_size
+            elif reduction.red_block_id < len(block_sizes):
+                r0_block = block_sizes[reduction.red_block_id]
+            else:
+                r0_block = red_size
+            self.body.writeline(f"XBLOCK: tl.constexpr = {xblock}")
+            self.body.writeline(f"R0_BLOCK: tl.constexpr = {r0_block}")
+            self.body.writeline(f"r0_numel: tl.constexpr = {red_size}")
+            output_dtype = V.graph.get_buffer(output_buf).get_dtype()
+            if (
+                persistent
+                and output_dtype.is_floating_point
+                and output_dtype.itemsize < 4
+            ):
+                self.body.writeline(
+                    f"{kernel_val} = {kernel_val}.to(tl.float32)"
+                )
+            if (
+                persistent
+                and reduction.red_block_id == 0
+                and len(self.output_node.get_size()) == 2
+            ):
+                self.body.writeline(f"{kernel_val} = tl.trans({kernel_val})")
 
         self.render_hooks[subgraph_name] = self._make_codegen_hook(subgraph_name)
 
@@ -2311,6 +2741,8 @@ class ExternalTritonTemplateKernel(TritonTemplateKernel):
         wrapper.header.splice(src_code, strip=True)
         wrapper.header.writeline("")
         return True
+
+
 
 
 @functools.cache
@@ -5856,6 +6288,19 @@ def _log_autotune_exceptions(
     except Exception:
         # Silently ignore logging errors to avoid breaking autotune
         pass
+
+
+def _is_persistent_reduction(
+    block_sizes: list[int],
+    n_dims: int,
+    reduction: ir.ReductionPlan,
+) -> bool:
+    """Check if a reduction epilogue is persistent for the given block sizes."""
+    red_size = int(reduction.red_ranges[0])
+    if reduction.red_block_id < len(block_sizes):
+        bs = block_sizes[reduction.red_block_id]
+        return isinstance(bs, int) and bs >= red_size
+    return True
 
 
 # ensure lowering is imported so that `extern_kernels.*` is populated

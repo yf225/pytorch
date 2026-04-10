@@ -5645,7 +5645,29 @@ class Scheduler:
         # allowing gathers by allowing increasing write_bytes by small factor
         # TODO - make configurable per input, for instance, bias can fuse fp32 -> fp16 profitably
 
-        BYTES_THRESHOLD_MULTIPLIER = 1.1
+        # A prologue combining N distinct external inputs naturally has
+        # read_bytes ≈ N * write_bytes.  Scale the threshold by the number
+        # of external read buffers so we don't reject profitable multi-input
+        # fusions (e.g. y*2 + z*2 reads 2 buffers but writes 1).
+        # The per-input 1.1 factor still guards against gathers/downcasts.
+        read_accesses = prologue_node.get_read_write_buffer_accesses(
+            include_reads=True, include_writes=False
+        )
+        num_external_reads = max(len(read_accesses), 1)
+
+        # When a prologue output feeds N>1 template inputs, NOT fusing costs
+        # write + N*read = (1+N)*write_bytes of intermediate buffer traffic.
+        prologue_buf_names = prologue_node.get_buffer_names()
+        template_buf = template_node.get_template_node_or_throw()
+        num_template_uses = sum(
+            1
+            for inp in template_buf.inputs  # type: ignore[union-attr]
+            if inp.get_name() in prologue_buf_names
+        )
+        BYTES_THRESHOLD_MULTIPLIER = max(
+            num_external_reads * 1.1,
+            (1 + num_template_uses) if num_template_uses > 1 else 1.1,
+        )
         if read_bytes > (write_bytes * BYTES_THRESHOLD_MULTIPLIER):
             why("prologue fusion will not increase amount of bytes read in kernel")
             return False
@@ -5923,13 +5945,8 @@ class Scheduler:
                 return False
 
             prologue_nodes = node1.get_nodes()
-            for node in prologue_nodes[:-1]:
-                node_outs = node.get_outputs()
-                for out in node_outs:
-                    if not all(user.node in prologue_nodes for user in out.users):
-                        why("template prologue can only fuse nodes with a single use")
-                        return False
 
+            # Compute template_snode first — needed by the chain check below.
             template_snodes = (
                 [node2]
                 if not isinstance(node2, FusedSchedulerNode)
@@ -5938,10 +5955,25 @@ class Scheduler:
             assert len(template_snodes) == 1
             template_snode = template_snodes[0]
 
-            if not (
-                len(prologue_nodes[-1].outputs) == 1
-                and len(prologue_nodes[-1].outputs[0].users) == 1
-                and prologue_nodes[-1].outputs[0].users[0].node is template_snode
+            # Non-last prologue nodes: outputs must go to other prologue
+            # nodes OR the template.  This handles parallel prologues
+            # (e.g. two independent sigmoid ops fused into one node, each
+            # feeding a different template input).
+            for node in prologue_nodes[:-1]:
+                for out in node.get_outputs():
+                    if not all(
+                        user.node in prologue_nodes
+                        or user.node is template_snode
+                        for user in out.users
+                    ):
+                        why("template prologue can only fuse nodes with a single use")
+                        return False
+
+            # Last prologue node: ALL outputs must feed the template.
+            if not all(
+                len(out.users) >= 1
+                and all(u.node is template_snode for u in out.users)
+                for out in prologue_nodes[-1].get_outputs()
             ):
                 why(
                     "template prologue can only fuse nodes with a single use into template"
@@ -5954,18 +5986,41 @@ class Scheduler:
         if node1.is_template():
             if (
                 node2.has_aliasing_or_mutation()
-                or node2.is_reduction()
                 or not _is_epilogue_fusion_enabled(node1)
             ):
                 why("template epilogue not satisfied")
                 return False
             template_buf = node1.get_template_node()
             assert template_buf is not None
-            if template_buf.is_multi_outputs_template() and not isinstance(
-                node2.node, ir.ComputedBuffer
+            if (
+                node2.is_reduction()
+                and not template_buf.supports_reduction_epilogue(node2)
             ):
-                why("multi-output template epilogue requires ComputedBuffer")
+                why("template does not support this reduction epilogue")
                 return False
+            if template_buf.is_multi_outputs_template():
+                # Check that all leaf nodes in node2 are ComputedBuffers.
+                # FusedSchedulerNodes (e.g., reduction+pointwise for mean)
+                # are allowed only when node2 is a reduction and all their
+                # sub-nodes are ComputedBuffers.  Non-reduction fused nodes
+                # (e.g., two pointwise epilogues on the same output) must be
+                # rejected — the template's epilogue hook setup cannot handle
+                # multiple epilogues mapping to the same output parameter.
+                node2_ir_node = getattr(node2, 'node', None)
+                if node2_ir_node is not None:
+                    if not isinstance(node2_ir_node, ir.ComputedBuffer):
+                        why("multi-output template epilogue requires ComputedBuffer")
+                        return False
+                elif hasattr(node2, 'snodes') and node2.is_reduction():
+                    if not all(
+                        isinstance(getattr(sn, 'node', None), ir.ComputedBuffer)
+                        for sn in node2.snodes
+                    ):
+                        why("multi-output template epilogue requires ComputedBuffer")
+                        return False
+                else:
+                    why("multi-output template epilogue requires ComputedBuffer")
+                    return False
 
         if (node1.get_buffer_names() & V.graph.no_fuse_buffer_names) or (
             node2.get_buffer_names() & V.graph.no_fuse_buffer_names
@@ -6083,8 +6138,25 @@ class Scheduler:
             # Examples here include:
             #   - MemoryDep("foo", x) != MemoryDep("foo", x + 1)
             #   - MemoryDep("foo", x) != StarDep("foo")
-            why("memory deps did not match")
-            return False
+            #
+            # Exception: template + reduction epilogue fusion.
+            # When a template supports reduction epilogue, the reduction reads the
+            # template output with potentially different loop ordering (e.g. sum(dim=0)
+            # transposes the index). This is safe because the template produces the
+            # reduced value inline — the buffer read never actually occurs in the
+            # fused kernel.
+            if (
+                node1.is_template()
+                and node2.is_reduction()
+            ):
+                template_buf = node1.get_template_node()
+                assert template_buf is not None
+                if template_buf.supports_reduction_epilogue(node2):
+                    # Clear the remaining deps that overlap with template outputs
+                    remaining_deps = remaining_deps - node1_buf_names
+            if remaining_deps & node1_buf_names:
+                why("memory deps did not match")
+                return False
 
         node1_op_names = node1.get_operation_names()
         for name in remaining_deps:
@@ -8020,3 +8092,55 @@ class BaseScheduling:  # noqa: docstring_linter
             V.graph.wrapper_code.write_provenance_debug_handle(
                 kernel_name, debug_handle
             )
+
+
+def _compute_red_block_id(template_size: list[Any], inner_node: Any) -> int:
+    """Compute which template output dimension is the reduction axis."""
+    data = getattr(inner_node, "data", None)
+    original_axes = getattr(data, "original_axes", None)
+    if original_axes is not None:
+        return original_axes[0]
+    return len(template_size) - 1
+
+
+def extract_reduction_epilogue_info(
+    node: Any,
+) -> tuple[Any, list[Any], list[Any]] | None:
+    """Extract ``(inner_node, pw_ranges, red_ranges)`` if *node* is a fusable reduction.
+
+    Returns ``None`` if the node is not a single-axis reduction, is a Sort, or
+    has no pointwise dimensions.  Works for both single ``SchedulerNode`` and
+    ``FusedSchedulerNode`` (multiple snodes).
+    """
+    inner = getattr(node, "node", None)
+    if inner is not None:
+        # Single SchedulerNode path.
+        pw_ranges, red_ranges = node.get_ranges()
+    else:
+        # FusedSchedulerNode path — find the first reduction snode.
+        snodes = getattr(node, "snodes", None)
+        if snodes is None:
+            return None
+        red_snodes = [
+            sn for sn in snodes
+            if hasattr(sn, "is_reduction") and sn.is_reduction()
+        ]
+        if not red_snodes:
+            return None
+        red_snode = red_snodes[0]
+        inner = getattr(red_snode, "node", None)
+        if inner is None:
+            return None
+        pw_ranges, red_ranges = red_snode.get_ranges()
+        if any(
+            list(rsn.get_ranges()[1]) != list(red_ranges)
+            for rsn in red_snodes[1:]
+        ):
+            return None
+
+    data = getattr(inner, "data", None)
+    if isinstance(data, ir.Sort):
+        return None
+    if len(red_ranges) != 1 or len(pw_ranges) == 0:
+        return None
+    return (inner, pw_ranges, red_ranges)
